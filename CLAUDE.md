@@ -1,0 +1,390 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project
+
+Gestor de Crédito — a Windows desktop application for a Dominican financiera (lending company)
+that only grants credit to employees ("colaboradores") of partner companies ("empresas convenio").
+The app's job is to track each credit case from presolicitud through disbursement, using a case
+log ("bitácora") exported periodically from an external system (MIDESA) as an Excel file, plus
+day-to-day manual follow-up done directly in the app.
+
+Primary design constraint: the UI must be fully usable with the NVDA screen reader and must meet
+WCAG 2.2. This is not incidental — it is the reason wxPython was chosen over other GUI toolkits,
+and it should inform every UI decision (see Accessibility section below). Two hard UI rules that
+follow from this:
+- **No popups, ever** — with one explicit, narrow exception (added after real NVDA testing, see
+  below): all views live as tabs inside the single main window. Notifications, confirmations,
+  forms — everything is a tab/panel, never a separate modal window, to keep NVDA navigation
+  predictable. **Exception**: `wx.MessageBox` *is* used for a small number of transient outcomes
+  that need immediate screen-reader attention and have no other reliable way to get it:
+  - Casos search (`casos_panel.py`, `_cargar_casos`): invalid search term, zero results.
+  - Configuración (`configuracion_panel.py`): empty agent name on save, import errors, and
+    import-completed. The import-completed popup deliberately shows only the 4 headline counts
+    (clientes/casos nuevos, casos actualizados, filas omitidas), not the full per-row detail —
+    a real import had 59 omitted rows, and dumping all of that into a modal would be a long,
+    blocking wall of text; the popup instead points to `resultado_texto` (the existing read-only
+    text box) for the row-by-row detail, which the user can review with NVDA at their own pace.
+  The reasoning: status bar text (`SetStatusText`) and `wx.StaticText.SetLabel` changes are
+  **not** proactively announced by NVDA — the user has to manually go check them, which for a
+  failed/empty search (or a silent validation error) means no indication anything happened. A
+  native `wx.MessageBox` reliably grabs focus and gets announced immediately, which is exactly
+  why it's normally reserved for dialogs — here it's the pragmatic fix for a real reported gap,
+  confirmed directly by the user (who is blind and tests with NVDA). Don't generalize this to
+  "add a MessageBox whenever something changes" — success/count feedback that isn't the sole
+  indication of an otherwise-silent outcome (e.g. "N caso(s) encontrados", "Cambios guardados",
+  "Agente configurado: X") stays on the status bar/inline label, popup-free — a dialog on every
+  successful action would be far more disruptive than helpful. When adding a new user-facing
+  outcome anywhere in the app, ask "would NVDA hear anything at all if this weren't a popup?"
+  before defaulting to one.
+- **The Franklin Accesible logo appears on every tab**, unobtrusively (e.g. small, in a corner —
+  not a banner), with this exact alt text / accessible name: "Logo de Franklin Accesible: figura
+  humana azul en movimiento, atravesando una barrera fragmentada de color naranja y amarillo."
+
+## Domain model
+
+Two entities, both driven by the MIDESA Excel bitácora import:
+
+- **Cliente** — a person, identified by `cedula` (national ID), which is the only durable natural
+  key. A cliente can have many casos over their lifetime (e.g. an old credit fully paid off, then
+  a new one requested months later) — this is legitimate history, never a duplicate to be merged
+  or overwritten.
+- **Caso** (a credit application/case) — belongs to one cliente. Identity is the combination of
+  `cliente` + a case reference number from the Excel (`No. Presolicitud`, falling back to
+  `ID Caso` when the former is blank) — this combination is what decides "already imported" vs.
+  "new row" during import.
+
+Schema (`gestor_credito/db/database.py`, `SCHEMA` constant):
+
+```sql
+cliente(id, cedula UNIQUE, nombre, telefono,
+        documentos_completos_fecha,   -- NULL = Alerta 1 still active for this cliente
+        fecha_creacion, fecha_actualizacion)
+
+caso(id, cliente_id -> cliente.id,
+     id_caso, no_presolicitud, clave_caso,   -- clave_caso = COALESCE(no_presolicitud, id_caso)
+     fecha_registro, canal_origen, ejecutivo, empresa_convenio, monto_solicitado,
+     destino_credito, microseguro, estado_solicitud, etapa_proceso, responsable_actual,
+     fecha_ultima_gestion, proxima_gestion, dias_en_gestion, alerta_seguimiento,
+     requiere_siaf, fecha_envio_siaf, fecha_decision, decision, motivo_no_aplica, observaciones,
+     constancia_solicitada,               -- informational only, raw value from Excel (not a date)
+     estado_solicitud_fecha_cambio,      -- since when estado_solicitud holds its current value
+     constancia_recibida_fecha,          -- set by the importer, not the user — see below
+     origen_ultima_modificacion, fecha_creacion_registro, fecha_actualizacion_registro,
+     UNIQUE(cliente_id, clave_caso))
+
+configuracion(clave PRIMARY KEY, valor)   -- key/value settings, e.g. ('ejecutivo_actual', 'fmartinez')
+```
+
+Design notes / assumptions baked into this schema (flag to the user if any of these turn out to
+be wrong — they're inferred from the business description, not explicitly spelled out column by
+column):
+
+- `nombre`/`telefono` live only on `cliente`, not duplicated per `caso` — the Excel repeats them
+  on every row, but the import just updates `cliente` from the latest row it sees.
+- `dias_en_gestion` is stored as imported (historical), but any "live" days-pending shown in the
+  UI should be computed from `fecha_ultima_gestion` at query time, not trusted as always current.
+- A general dating rule that resolves an apparent tension in the spec: **business dates that the
+  Excel actually provides** (fecha_registro, fecha_ultima_gestion, etc.) always come from the
+  Excel's own columns, never from import time. But **system-detected transition timestamps** —
+  things the Excel doesn't tell us directly, like "since when has this case been in its current
+  estado_solicitud" (`estado_solicitud_fecha_cambio`) or "when did the importer notice the
+  constancia arrived" (`constancia_recibida_fecha`) — are stamped with the system time at the
+  moment the app detects them, because there is no Excel column for either. Flag if this reading
+  is wrong.
+- `estado_solicitud_fecha_cambio` is initialized to "now" on first insert and reset to "now" on
+  every value change (import-detected or manual). This means a case that was already sitting in
+  "En espera de constancia" for days before its first import into this app will under-count how
+  long it's actually been waiting. Confirmed acceptable with the user: there is no "fecha de
+  cambio de estado" column in the Excel, so the app has no way to know that prior history — the
+  count intentionally starts from first import.
+
+## Reference template: MachoteBaseDeDatos.xlsx
+
+The user keeps a reference/template workbook at the project root, **`MachoteBaseDeDatos.xlsx`**
+(git-ignored — it's real pilot data with real names/cédulas, not a fixture), used to learn the
+real column structure. It is *not* a fixed filename the importer looks for — `import_bitacora()`
+accepts any `.xlsx` the user picks; the file only serves as a reference for what real MIDESA
+exports look like. Two sheets are worth knowing about if this comes up again:
+
+- **`01_Bitacora_Piloto`** — the actual case log, whose real headers are messier than a first
+  guess would produce: each is like `"ID Caso\n(Auto)"` or `"Estado Solicitud\n(Manual)"` — an
+  embedded newline plus a `"(Manual)"`/`"(Auto)"` suffix baked into the header text itself. Also,
+  `"No. PRESOLICITUD"` can come through as a raw number (e.g. `2877`), not a string.
+- **`02_Catalogos`** — lists the actual fixed/allowed values per field. Confirmed real values:
+  - **Estado Solicitud**: En espera de constancia, En proceso, Desembolsada, No aplica, Cliente
+    desistió, Pendiente de información, Devuelta para corrección. (`ESTADO_DESEMBOLSADA =
+    "Desembolsada"` and `ESTADO_EN_ESPERA_CONSTANCIA` are both defined in `database.py`.)
+  - **Etapa Proceso**: Pre-solicitud, Completar expediente / requisitos, Solicitud formal,
+    Aprobación, Formalización, Desembolso, Cierre.
+  - Also has fixed catalogs for Responsable Actual, Microseguro, Decisión, Requiere SIAF, and
+    Canal/Origen — not modeled in `catalogos.py` yet since nothing consumes them, but the same
+    "add a list + wx.Choice" pattern used for Estado Solicitud/Etapa Proceso (see "UI implemented
+    so far" below) applies if/when those fields get similar closed-dropdown editing.
+
+## Import behavior (Excel bitácora)
+
+Implemented in `gestor_credito/importer/excel_importer.py` (`import_bitacora(file_path)`).
+`_normalize_header()` strips the real-world header noise described above (embedded newlines,
+the `(Manual)`/`(Auto)` suffix, inconsistent spacing around `/`) before matching against
+`COLUMN_ALIASES` — this is deliberately more aggressive than simple case/accent tolerance because
+the reference template proved headers aren't clean. Cell *values* (e.g. `estado_solicitud`
+strings) are taken verbatim and never normalized — confirmed with the user that MIDESA's
+`estado_solicitud` text, including accents/capitalization, is exact and stable, so
+`ESTADO_EN_ESPERA_CONSTANCIA` matching by plain string equality is safe. Every non-date/int/float
+field is coerced to `str` in `_row_to_dict()` regardless of the type Excel/openpyxl handed back
+(guards against exactly the `No. Presolicitud`-as-int case above blowing up `.strip()` calls).
+
+The uploaded file is always supplied manually by the user; its filename is irrelevant. For every
+row, match on (`cliente.cedula`, `caso.clave_caso`):
+- No match → insert a new cliente (if the cédula is new — this is what makes Alerta 1 eligible)
+  and a new caso. `estado_solicitud_fecha_cambio` is set to "now".
+- Match found → **update** the existing caso's fields from the row (Excel is the source of truth
+  for its own columns on every reimport, including `estado_solicitud`/`etapa_proceso`). Before
+  overwriting `estado_solicitud`, compare old vs. new value:
+  - If it changed at all, reset `estado_solicitud_fecha_cambio` to "now".
+  - If the old value was `ESTADO_EN_ESPERA_CONSTANCIA` ("En espera de constancia") and the new
+    value is different, additionally stamp `constancia_recibida_fecha` = now — this is the *only*
+    way constancia-received is detected (no manual step), and it starts the 48h response clock.
+
+All case dates that the Excel actually provides (`fecha_registro`, `fecha_ultima_gestion`, etc.)
+come from the Excel's own date columns — never from the moment the file happens to be imported.
+
+## Manual editing vs. reimport
+
+The user edits `estado_solicitud` and `etapa_proceso` directly in the app during daily follow-up,
+without touching Excel. Because reimporting later overwrites these same columns from the Excel
+(see above), the expected behavior is: manual edits are authoritative until the next reimport
+brings a newer value from MIDESA, at which point Excel wins. `origen_ultima_modificacion` records
+which side made the last change, for troubleshooting. A manual edit to `estado_solicitud` also
+resets `estado_solicitud_fecha_cambio` to "now", same as an import-detected change.
+
+## Configuración (agente actual)
+
+The **Configuración** tab (`gestor_credito/ui/configuracion_panel.py`) lets the user set their own
+agent name (e.g. "fmartinez") into `configuracion('ejecutivo_actual', ...)` via
+`gestor_credito/db/configuracion.py` (`obtener_valor`/`guardar_valor`, keyed by
+`CLAVE_EJECUTIVO_ACTUAL`). This is a single global setting, not per-session.
+
+Once set, it scopes two independent things (don't conflate them):
+- **Casos tab default view**: with no search term typed, only casos whose `ejecutivo` matches
+  `ejecutivo_actual` are shown. A specific search (by cédula or nombre — see Filters below)
+  *overrides* this and searches across all agents, on the theory that the user is explicitly
+  looking for a specific person regardless of who's handling their case.
+- **Alerta 1 and Alerta 2** (not yet implemented) will only ever surface cases/clientes whose
+  associated `caso.ejecutivo` matches this value — cases for other agents in the same imported
+  Excel are filtered out of alerts entirely (not deleted, just not alerted on). For Alerta 1
+  (client-level), match via the ejecutivo of the caso that introduced that cliente.
+
+The **Excel import UI also lives on this tab now** (moved from a former standalone "Importar" tab
+— see "UI implemented so far" below for why), since importing and configuring your agent are both
+one-time/infrequent setup actions, unlike the Casos tab which is the daily-use screen.
+
+## Alerts / workflow (not yet implemented — planned)
+
+Two independent alerts, both scoped to the configured `ejecutivo_actual` and both computed live
+from `cliente`/`caso` state rather than stored as separate alert rows. A client or case can have
+both active at once — they don't suppress each other.
+
+1. **Alerta 1 — documentación de cliente nuevo** (per `cliente`, regardless of `estado_solicitud`):
+   active while `documentos_completos_fecha IS NULL`. Fires at 24h and 48h after
+   `cliente.fecha_creacion`, then keeps repeating every 24h indefinitely (72h, 96h, ...) until the
+   user marks `documentos_completos_fecha`, which turns it off permanently for that cliente.
+2. **Alerta 2 — constancia pendiente** (per `caso`, independent of Alerta 1): active while
+   `estado_solicitud == ESTADO_EN_ESPERA_CONSTANCIA` and ≥7 days have passed since
+   `estado_solicitud_fecha_cambio`. Checked/sounded twice daily at 09:00 and 16:00, and keeps
+   firing every day the Excel keeps reporting that same estado for that case. Turns off only when
+   a reimport shows a different `estado_solicitud` for that case (see Import behavior above),
+   which simultaneously stamps `constancia_recibida_fecha` and starts the 48h response clock:
+   `estado_solicitud != ESTADO_DESEMBOLSADA` ("Desembolsada") ≥48h after `constancia_recibida_fecha`
+   is its own condition worth surfacing (not necessarily a third recurring alert — TBD when this
+   gets built).
+
+Both alerts play a WAV sound and surface only inside a dedicated **Notificaciones** tab (grouped
+list, never individual popups) — consistent with the no-popups UI rule above.
+
+## Filters and reporting
+
+The Casos tab has **one combined search box** (cédula or nombre — not separate fields, and no
+ejecutivo/fecha filters anymore; those were removed once `ejecutivo_actual` in Configuración took
+over as the default scope). Implemented by `gestor_credito/db/casos.py`'s `buscar_casos()`, with
+term classification in `clasificar_termino_busqueda()`:
+
+- Empty search box → filter by `ejecutivo_actual` (or show everything if no agent is configured
+  yet).
+- Term contains a digit → treated as a **cédula** search (partial/substring match). Real cédulas
+  can end in a letter (e.g. `"2011307810010Q"`), so the rule is "has at least one digit", not
+  "only digits" — a plain digit-only cédula still matches this branch fine.
+- Term is letters only (including Spanish accented vowels and ñ) → treated as a **nombre** search
+  (partial/substring, case-insensitive via Python's `str.upper()` — deliberately *not* using
+  SQLite's `UPPER()`, which is ASCII-only and would silently fail to case-fold `ñ`/accented
+  vowels). Accents are matched exactly, not folded: searching `"pena"` will *not* find `"PEÑA"` —
+  confirmed with the user this is intentional (no fuzzy/guessing behavior on accents).
+- Any other content (symbols, mixed garbage) → `clasificar_termino_busqueda()` raises `ValueError`
+  with a user-facing message; `CasosPanel` catches it and shows it via the status bar instead of
+  running a query.
+- A cédula/nombre search **ignores `ejecutivo_actual` entirely** — it searches across every
+  agent's casos, by design (see Configuración above).
+- Zero results (search or default view) shows "No se encontraron resultados." on the status bar
+  rather than silently leaving the list empty.
+
+Monthly reporting (not yet implemented) will export to Excel via
+`gestor_credito/export/excel_export.py`, with its own "Todos los agentes" vs. one-specific-agente
+selector — independent of `ejecutivo_actual`, which only scopes the Casos tab's default view and
+alerts, not reports.
+
+## UI implemented so far
+
+`MainFrame` hosts a `wx.Notebook` with two tabs, in this order (`gestor_credito/ui/main_frame.py`):
+**Casos** (the daily-use screen) and **Configuración** (one-time/infrequent setup — agent name +
+Excel import). There used to be a third, standalone "Importar" tab; it was folded into
+Configuración because importing and setting your agent are both setup actions, not something
+you do while working a case, and the user wanted fewer top-level tabs.
+
+- **Casos** (`casos_panel.py`): a single combined search box above a `wx.ListCtrl` showing
+  16 columns, in this exact order (user-specified, matches `buscar_casos()`'s internal `SELECT`
+  order in `gestor_credito/db/casos.py` — keep the two in sync if either changes): Fecha Registro, No.
+  Presolicitud, Ejecutivo, Empresa Convenio, Nombre del Cliente, Identificación, Teléfono, Monto
+  Solicitado, Destino del Crédito, Microseguro, Estado Solicitud, Etapa Proceso, Responsable
+  Actual, Decisión, Motivo No Aplica / Desistimiento, Observaciones. **NVDA note**: an earlier
+  version showed only 3 columns because a 7-column row was read by NVDA as one run-on concatenated
+  string when arrowing through the list — confirmed with the user this was actually fine once the
+  column count didn't include unnecessary noise and they knew about NVDA's `Ctrl+Alt+Arrow`
+  per-cell table navigation; the user then explicitly asked for the full 16-column view back, so
+  this row-reading behavior is accepted/expected now, not a bug.
+- **Empty cells show the literal text `"Celda vacía"`** (`CasosPanel.CELDA_VACIA`), not a true
+  blank string. This reverses an earlier decision (blank with no placeholder) — in practice, for
+  sparse fields like Motivo No Aplica/Desistimiento (only ~13 of 135 real casos have a value,
+  since it only applies when Estado Solicitud is "No aplica" or "Cliente desistió"), NVDA reading
+  a truly empty cell just repeats the column header with no value read after it, which the user
+  experienced as confusing noise ("sounds like it's saying the same thing for every row"). The
+  fix is applied uniformly to every column in `_fila_a_columnas()`, not just the one that
+  triggered the report, so the same class of confusion doesn't recur elsewhere (Decisión,
+  Teléfono, Observaciones, etc. can all legitimately be blank too).
+
+  Selecting a row loads it for editing: a one-line confirmation ("Editando: {nombre} — Cédula {x}
+  — No. Presolicitud {y}") plus Estado Solicitud and Etapa Proceso as closed `wx.Choice` dropdowns
+  populated from `gestor_credito/catalogos.py` (`ESTADOS_SOLICITUD`/`ETAPAS_PROCESO` — the real
+  fixed lists from `02_Catalogos`), not free text — this is what keeps `estado_solicitud`
+  guaranteed to exactly match `ESTADO_EN_ESPERA_CONSTANCIA`/`ESTADO_DESEMBOLSADA` after a manual
+  edit. If a caso's current value isn't in the catalog (bad/legacy data), the dropdown just shows
+  no selection rather than crashing (`_seleccionar_en_choice` uses `FindString`, which returns
+  `wx.NOT_FOUND` safely). "Guardar cambios" calls `actualizar_edicion_manual()`, which never
+  touches `constancia_recibida_fecha` (only the importer sets that).
+- **Configuración** (`configuracion_panel.py`): a plain `wx.TextCtrl` (`agente_texto`, with
+  `TE_PROCESS_ENTER` + `EVT_TEXT_ENTER` wired the same way as the Casos search box) to set
+  `ejecutivo_actual`, persisted via `gestor_credito/db/configuracion.py`; and the Excel import UI
+  (file picker + "Importar" + read-only result text area) that used to be its own tab. This field
+  used to be an editable `wx.ComboBox` pre-populated with `obtener_ejecutivos()` as suggestions —
+  changed to a plain text field after the user reported being unable to switch to a different
+  agent once one was saved (editable combo boxes are a known trouble spot for screen readers:
+  ambiguous whether you're typing free text or navigating the dropdown history). If a similar
+  "can't type over this field" report comes up elsewhere, suspect the widget choice first — prefer
+  plain `wx.TextCtrl` over `wx.ComboBox` unless a closed, fixed-choice list is genuinely correct
+  (like the `wx.Choice` dropdowns for Estado Solicitud/Etapa Proceso, which aren't free text).
+  Losing the combo's suggestion dropdown also lost discoverability of which ejecutivos already
+  exist — restored as a separate **read-only** `agentes_existentes_texto` `wx.StaticText` below
+  the input ("Agentes ya vistos en casos importados: X, Y, Z"), refreshed on load and after every
+  import. Deliberately not interactive/clickable: the point of the earlier bug was that mixing
+  "pick from a list" and "type free text" into one control is what broke it, so the fix keeps
+  them as two separate controls — an editable field plus an informational label — instead of
+  reintroducing that ambiguity.
+  **Not implemented yet**: marking a cliente's `documentos_completos_fecha` (the manual action that
+  permanently silences Alerta 1) — that belongs here too per the user's stated structure, but it's
+  part of the alerts module work that's explicitly deferred; don't assume it exists.
+
+Judgment calls made while building this that are worth the user's attention:
+
+- **File selection uses `wx.FileDialog`** (a native, OS-level, already-screen-reader-accessible
+  modal) despite the "no popups" rule. That rule is read as targeting *in-app* modals (confirmations,
+  message boxes, notification popups) that would otherwise duplicate/disrupt tab navigation — not
+  the standard OS file-open dialog, since there's no in-app alternative for browsing the filesystem
+  that would be more accessible. Flag if this reading is wrong.
+- **The logo's accessible name must be inaudible/invisible to sighted users.** `AppLogo` exposes
+  the required alt text only via `SetName()` (the MSAA/UIA accessible name NVDA reads) — it must
+  **never** also be set via `SetToolTip()`, which draws a large visible balloon on hover. That was
+  a real bug found during NVDA testing and is now fixed; don't reintroduce it. The real logo file
+  (`gestor_credito/assets/logo.png`) is 2048x2048px, so `AppLogo` scales it down to `DISPLAY_SIZE`
+  (32px) before rendering — never show the source bitmap unscaled, it would dominate the window.
+
+## Commands
+
+```
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+
+python main.py          # run the app
+pytest                  # run tests
+pytest tests/test_database.py::test_init_db_creates_file   # run a single test
+```
+
+Note: on this machine, wxPython, openpyxl, and python-docx are already available in the global
+Python install; `pytest` is not, so `pip install -r requirements.txt` (or `pip install pytest`)
+is needed before running tests.
+
+## Architecture
+
+```
+main.py                        # entry point, calls gestor_credito.app.main()
+gestor_credito/
+  app.py                       # wx.App subclass, creates the main frame
+  catalogos.py                  # fixed value lists from 02_Catalogos (Estado Solicitud, Etapa Proceso)
+  assets/
+    logo.png                     # real logo, 2048x2048px — AppLogo scales it down for display
+  ui/
+    main_frame.py                # wx.Frame with the wx.Notebook that hosts every tab
+    logo.py                       # AppLogo — the accessible logo shown on every tab
+    fechas.py                     # ISO <-> DD/MM/AAAA date formatting for the UI boundary
+    accesibilidad.py               # activar_con_enter() — apply to every wx.Button, see below
+    casos_panel.py                 # "Casos" tab (search/list/manually edit)
+    configuracion_panel.py          # "Configuración" tab (agente actual + importar Excel)
+  db/
+    database.py                  # sqlite3 connection + schema management
+    casos.py                      # queries/updates for the caso entity (search, filter, edit)
+    configuracion.py              # get/set for the configuracion key-value table
+  importer/
+    excel_importer.py             # reads the MIDESA bitácora, upserts cliente/caso
+  export/
+    excel_export.py              # openpyxl-based report export
+    word_export.py                # python-docx-based document export
+data/
+  gestor_credito.db              # SQLite file, created on first run, git-ignored
+tests/                            # pytest, mirrors the gestor_credito/ package layout
+```
+
+- `gestor_credito/db/database.py` holds `DB_PATH`, `get_connection()`/`init_db()`, and the schema.
+  Entity-specific queries/commands (e.g. `casos.py`) live in their own module in `db/` rather than
+  growing `database.py` into a catch-all.
+- `gestor_credito/ui/` has one wx.Frame/wx.Panel per file; `MainFrame` only wires the `wx.Notebook`
+  together, it doesn't hold page-specific logic.
+- `gestor_credito/export/` holds one module per output format. Export functions take plain data
+  (rows/headers, or title/paragraphs) and an output path — they should not reach back into the
+  database or UI layer directly, so they stay independently testable.
+
+## Accessibility (NVDA)
+
+Since screen-reader support is the core requirement driving the choice of wxPython, keep these in
+mind for any UI work:
+
+- Every input control needs a real, associated label (`wx.StaticText` + control, or the control's
+  accessible name set explicitly) — NVDA announces controls by their label, not by placeholder
+  text or visual proximity.
+- Preserve a logical tab order matching visual/reading order; don't rely on mouse-only
+  interactions for anything.
+- Prefer standard wx widgets (wx.TextCtrl, wx.ListCtrl, wx.Choice, etc.) over custom-drawn
+  controls — standard widgets get MSAA/UIA support for free, custom-drawn ones generally don't.
+- Default to `SetStatusText` / the status bar, or an in-panel message area, for feedback — not a
+  dialog, per the no-popups rule above. But be aware `SetStatusText`/`SetLabel` changes are *not*
+  proactively announced by NVDA (the user has to go check them manually); for an outcome that
+  genuinely needs immediate screen-reader attention and has no focus change to piggyback on (e.g.
+  a failed/empty search), `wx.MessageBox` is the confirmed, deliberate exception — see the
+  Project section above before reaching for it elsewhere. Don't convey state through color or
+  icon changes alone.
+- Any `wx.Button` created must be passed through `activar_con_enter()`
+  (`gestor_credito/ui/accesibilidad.py`). Space already activates a focused button by default in a
+  plain `wx.Frame`/`wx.Panel`, but Enter does not — that binding only exists in `wx.Dialog`'s
+  default-button handling, which this app's `wx.Notebook`-in-a-`wx.Frame` layout doesn't get for
+  free. Confirmed as a real keyboard-accessibility bug during NVDA testing; every button must get
+  this, not just the one that got reported.

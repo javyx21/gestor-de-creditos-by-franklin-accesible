@@ -1,0 +1,4 @@
+wxPython
+openpyxl
+python-docx
+pytest
