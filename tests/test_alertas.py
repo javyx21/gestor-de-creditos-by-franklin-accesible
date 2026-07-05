@@ -149,7 +149,7 @@ def test_constancia_en_mano_activa_a_las_48h(conn):
     cliente_id = _crear_cliente(conn)
     caso_id = _crear_caso(
         conn, cliente_id, estado_solicitud="En proceso",
-        constancia_recibida_fecha=_hace(horas=49),
+        estado_solicitud_fecha_cambio=_hace(horas=49),
     )
 
     activas = alertas_constancia_en_mano(conn)
@@ -162,24 +162,35 @@ def test_constancia_en_mano_no_activa_antes_de_48h(conn):
     cliente_id = _crear_cliente(conn)
     _crear_caso(
         conn, cliente_id, estado_solicitud="En proceso",
-        constancia_recibida_fecha=_hace(horas=10),
+        estado_solicitud_fecha_cambio=_hace(horas=10),
     )
 
     assert alertas_constancia_en_mano(conn) == []
 
 
-def test_constancia_en_mano_no_activa_sin_constancia_recibida_fecha(conn):
+def test_constancia_en_mano_activa_aunque_nunca_se_detecto_la_transicion(conn):
+    """Bug real reportado por el usuario: un caso importado por primera vez ya
+    en "En proceso" (constancia_recibida_fecha nunca se estampa, porque no hubo
+    ninguna transición "En espera de constancia" -> "En proceso" que el
+    importador pudiera ver en vivo) debe activar esta alerta igual, usando
+    estado_solicitud_fecha_cambio en vez de constancia_recibida_fecha."""
     cliente_id = _crear_cliente(conn)
-    _crear_caso(conn, cliente_id, estado_solicitud="En proceso", constancia_recibida_fecha=None)
+    caso_id = _crear_caso(
+        conn, cliente_id, estado_solicitud="En proceso",
+        estado_solicitud_fecha_cambio=_hace(horas=49), constancia_recibida_fecha=None,
+    )
 
-    assert alertas_constancia_en_mano(conn) == []
+    activas = alertas_constancia_en_mano(conn)
+
+    assert len(activas) == 1
+    assert activas[0]["caso_id"] == caso_id
 
 
-def test_constancia_en_mano_se_apaga_al_llegar_a_desembolsada(conn):
+def test_constancia_en_mano_se_apaga_al_salir_de_en_proceso(conn):
     cliente_id = _crear_cliente(conn)
     _crear_caso(
         conn, cliente_id, estado_solicitud="Desembolsada",
-        constancia_recibida_fecha=_hace(horas=100),
+        estado_solicitud_fecha_cambio=_hace(horas=100),
     )
 
     assert alertas_constancia_en_mano(conn) == []

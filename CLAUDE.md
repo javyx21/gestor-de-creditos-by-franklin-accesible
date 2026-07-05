@@ -195,26 +195,56 @@ thresholds are computed with SQLite's `julianday('now')` (always UTC), not Pytho
 `datetime.now()`, to avoid mixing UTC-stamped columns (`datetime('now')` defaults) with local time
 and silently shifting every threshold by the local UTC offset.
 
+**General rule for all three, confirmed with the user after a real bug report**: the start-of-count
+timestamp is set the FIRST TIME the system detects the cliente/caso entering the relevant state —
+whether it witnessed a live transition during an import, or the record already arrived in that
+state the very first time it was imported — and that timestamp is NEVER recalculated by a later
+reimport that doesn't actually change anything; it only resets when the state genuinely changes.
+If every daily reimport reset the clock for unchanged cases, no alert would ever fire. This is why
+alerts 1 and 2 use `cliente.fecha_creacion` / `caso.estado_solicitud_fecha_cambio` respectively —
+both are stamped once at INSERT and only touched again on a real value change (see Import behavior
+above and `actualizar_edicion_manual` in `db/casos.py`) — never anything importer/transition-specific.
+
 1. **Documentos pendientes** (`alertas_documentos_pendientes`, per `cliente`, regardless of
    `estado_solicitud`): active while `documentos_completos_fecha IS NULL` and ≥24h have passed
    since `cliente.fecha_creacion`. Does **not** turn off by itself after 48h or any later point —
    it keeps firing every time the alert list is recomputed, indefinitely, until the user marks
    `documentos_completos_fecha` via `marcar_documentos_completos()` (button "Marcar documentos
-   completados" in Notificaciones, enabled only when a row of this type is selected), which turns
-   it off permanently for that cliente. The `ejecutivo` used to scope this alert is read from the
-   *first* caso that introduced that cliente (`MIN(fecha_creacion_registro)`, tie-broken by
-   `MIN(id)`), since `documentos_completos_fecha` lives on `cliente`, not `caso`.
+   completados" in Notificaciones and Casos, enabled only when a row/caso of this type is
+   selected), which turns it off permanently for that cliente — or reactivates it again via
+   `marcar_documentos_pendientes()` (Casos context menu only, see UI section below). The `ejecutivo`
+   used to scope this alert is read from the *first* caso that introduced that cliente
+   (`MIN(fecha_creacion_registro)`, tie-broken by `MIN(id)`), since `documentos_completos_fecha`
+   lives on `cliente`, not `caso`. **Known gap, not yet fixed**: `marcar_documentos_pendientes()`
+   only clears `documentos_completos_fecha`; it doesn't touch `cliente.fecha_creacion`, so after a
+   revert-to-pendiente the alert reuses the ORIGINAL creation date as "since when pending" (likely
+   already far in the past) instead of the revert moment — the alert still fires correctly (arguably
+   immediately, which is probably fine), but the "Desde" time shown in Notificaciones would read
+   e.g. "hace 45 días" instead of reflecting the actual revert. Would need a dedicated
+   `documentos_pendientes_desde` column (schema migration) to fix properly — flag to the user if it
+   comes up before fixing.
 2. **Constancia pendiente** (`alertas_constancia_pendiente`, per `caso`): active while
    `estado_solicitud == ESTADO_EN_ESPERA_CONSTANCIA` and ≥7 days have passed since
    `estado_solicitud_fecha_cambio`. Turns off as soon as a reimport (or manual edit) changes
    `estado_solicitud` away from "En espera de constancia" (which resets
    `estado_solicitud_fecha_cambio`, see Import behavior above).
 3. **Constancia en mano** (`alertas_constancia_en_mano`, per `caso`): active while
-   `constancia_recibida_fecha IS NOT NULL`, `estado_solicitud != ESTADO_DESEMBOLSADA`, and ≥48h
-   have passed since `constancia_recibida_fecha` (stamped by the importer specifically on the
-   "En espera de constancia" → "En proceso" transition — see Import behavior above). **Assumption,
-   not yet explicitly confirmed with the user**: reaching `ESTADO_DESEMBOLSADA` turns this alert
-   off for good, on the theory that a disbursed case no longer needs nagging — flag if wrong.
+   `estado_solicitud == ESTADO_EN_PROCESO` and ≥48h have passed since `estado_solicitud_fecha_cambio`
+   — same mechanism as Alerta 2, just a different target state/threshold. **Previously** used a
+   separate `constancia_recibida_fecha` column, stamped only when the importer *witnessed* the "En
+   espera de constancia" → "En proceso" transition live within one import; a caso imported for the
+   first time already at "En proceso" (constancia already in hand before it ever reached this app)
+   never got that column stamped, so it silently never alerted no matter how long it sat unanswered
+   — a real bug the user hit and reported. Fixed by reusing `estado_solicitud_fecha_cambio` (which
+   already satisfies the general rule above) instead. Being scoped strictly to
+   `estado_solicitud == ESTADO_EN_PROCESO` also means the previous "assumption, not confirmed" about
+   `ESTADO_DESEMBOLSADA` turning this off is moot now — the alert stops the moment `estado_solicitud`
+   changes to ANYTHING else, not just Desembolsada. The `constancia_recibida_fecha` column still
+   exists in the schema and the importer still stamps it on that specific transition (informational/
+   historical only) — nothing queries it for alerting anymore. The Casos tab's "Filtrar por alerta"
+   combobox (`FILTRO_ALERTA_CONSTANCIA_EN_MANO` in `db/casos.py`) had the identical bug and got the
+   identical fix (checks `estado_solicitud == ESTADO_EN_PROCESO` directly, still with no time
+   threshold, per its own by-design difference from the Notificaciones alert).
 
 All three play a WAV sound via `gestor_credito/ui/sonido.py` (`reproducir_sonido()`, using
 `wx.adv.Sound` — silently does nothing if the file isn't present yet, so a missing sound never

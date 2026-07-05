@@ -51,11 +51,10 @@ def _texto_alerta(tipo, alerta):
         desde = _formatear_transcurrido(alerta["fecha_creacion"])
         return f"{nombre} — Cédula {cedula} — Desde {desde}"
 
+    # Constancia pendiente y Constancia en mano comparten el mismo campo de
+    # referencia (estado_solicitud_fecha_cambio) — ver alertas.py.
     caso = alerta["clave_caso"] or "(sin número)"
-    if tipo == TIPO_CONSTANCIA_PENDIENTE:
-        desde = _formatear_transcurrido(alerta["estado_solicitud_fecha_cambio"])
-    else:
-        desde = _formatear_transcurrido(alerta["constancia_recibida_fecha"])
+    desde = _formatear_transcurrido(alerta["estado_solicitud_fecha_cambio"])
     return f"{nombre} — Cédula {cedula} — Caso {caso} — Desde {desde}"
 
 

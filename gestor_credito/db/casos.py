@@ -1,6 +1,6 @@
 import re
 
-from gestor_credito.catalogos import ESTADO_EN_ESPERA_CONSTANCIA, ESTADOS_CERRADOS
+from gestor_credito.catalogos import ESTADO_EN_ESPERA_CONSTANCIA, ESTADO_EN_PROCESO, ESTADOS_CERRADOS
 
 # Índices de columna dentro de las tuplas que devuelve _seleccionar_casos().
 _INDICE_CASO_ID = 0
@@ -10,7 +10,6 @@ _INDICE_CEDULA = 6
 _INDICE_ESTADO_SOLICITUD = 11
 _INDICE_CLIENTE_ID = 17
 _INDICE_DOCUMENTOS_COMPLETOS_FECHA = 18
-_INDICE_CONSTANCIA_RECIBIDA_FECHA = 19
 
 _PATRON_NOMBRE = re.compile(r"^[A-Za-zÁÉÍÓÚÑÜáéíóúñü ]+$")
 _PATRON_CEDULA = re.compile(r"^[0-9A-Za-z-]+$")
@@ -105,7 +104,13 @@ def _filtrar_por_alerta(filas, filtro_alerta):
         return [f for f in filas if f[_INDICE_ESTADO_SOLICITUD] == ESTADO_EN_ESPERA_CONSTANCIA]
 
     if filtro_alerta == FILTRO_ALERTA_CONSTANCIA_EN_MANO:
-        return [f for f in filas if f[_INDICE_CONSTANCIA_RECIBIDA_FECHA] is not None]
+        # Antes chequeaba constancia_recibida_fecha (solo se estampaba si el
+        # importador VEÍA la transición en vivo dentro de un mismo import) —
+        # un caso importado por primera vez ya en "En proceso" nunca
+        # calificaba, aunque la constancia ya estuviera en mano. Bug real
+        # reportado por el usuario, mismo fix que alertas_constancia_en_mano()
+        # en db/alertas.py: usar el estado actual directamente.
+        return [f for f in filas if f[_INDICE_ESTADO_SOLICITUD] == ESTADO_EN_PROCESO]
 
     return filas
 

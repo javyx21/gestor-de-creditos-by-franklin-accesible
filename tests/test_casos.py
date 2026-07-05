@@ -207,14 +207,18 @@ def test_filtro_constancia_pendiente_muestra_estado_actual_sin_umbral(conn):
 
 
 def test_filtro_constancia_en_mano_muestra_estado_actual_sin_umbral(conn):
-    caso_en_mano = _crear_cliente_y_caso(
+    """Se basa directamente en estado_solicitud == "En proceso", sin importar
+    constancia_recibida_fecha (bug real reportado por el usuario: un caso
+    importado directo en "En proceso", sin que el importador viera nunca la
+    transición, antes no aparecía en este filtro aunque debiera)."""
+    caso_en_mano_detectado = _crear_cliente_y_caso(
         conn, cedula="001-0000001-1", no_presolicitud="P-1", estado="En proceso"
     )
     conn.execute(
         "UPDATE caso SET constancia_recibida_fecha = datetime('now') WHERE id = ?",
-        (caso_en_mano,),
+        (caso_en_mano_detectado,),
     )
-    caso_sin_constancia = _crear_cliente_y_caso(
+    caso_en_mano_sin_transicion_vista = _crear_cliente_y_caso(
         conn, cedula="001-0000002-2", no_presolicitud="P-2", estado="En proceso"
     )
     caso_desembolsado = _crear_cliente_y_caso(
@@ -228,8 +232,9 @@ def test_filtro_constancia_en_mano_muestra_estado_actual_sin_umbral(conn):
 
     resultado = buscar_casos(conn, filtro_alerta=FILTRO_ALERTA_CONSTANCIA_EN_MANO)
 
-    assert [f[0] for f in resultado] == [caso_en_mano]
-    assert caso_sin_constancia not in [f[0] for f in resultado]
+    ids_resultado = [f[0] for f in resultado]
+    assert set(ids_resultado) == {caso_en_mano_detectado, caso_en_mano_sin_transicion_vista}
+    assert caso_desembolsado not in ids_resultado
 
 
 @pytest.mark.parametrize(
