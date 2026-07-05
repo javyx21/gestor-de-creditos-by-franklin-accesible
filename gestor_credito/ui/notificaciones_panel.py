@@ -19,8 +19,6 @@ from gestor_credito.ui.sonido import (
     reproducir_sonido,
 )
 
-COLUMNAS = ["Tipo de alerta", "Nombre", "Identificación", "Caso", "Desde"]
-
 TIPO_DOCUMENTOS = "Documentos pendientes"
 TIPO_CONSTANCIA_PENDIENTE = "Constancia pendiente"
 TIPO_CONSTANCIA_EN_MANO = "Constancia en mano"
@@ -45,13 +43,25 @@ def _formatear_transcurrido(fecha_utc_texto):
     return f"hace {int(horas // 24)} día(s)"
 
 
-class NotificacionesPanel(wx.Panel):
-    CELDA_VACIA = "Celda vacía"
+def _texto_alerta(tipo, alerta):
+    nombre = alerta["nombre"] or "(sin nombre)"
+    cedula = alerta["cedula"] or "(sin cédula)"
 
+    if tipo == TIPO_DOCUMENTOS:
+        desde = _formatear_transcurrido(alerta["fecha_creacion"])
+        return f"{nombre} — Cédula {cedula} — Desde {desde}"
+
+    caso = alerta["clave_caso"] or "(sin número)"
+    if tipo == TIPO_CONSTANCIA_PENDIENTE:
+        desde = _formatear_transcurrido(alerta["estado_solicitud_fecha_cambio"])
+    else:
+        desde = _formatear_transcurrido(alerta["constancia_recibida_fecha"])
+    return f"{nombre} — Cédula {cedula} — Caso {caso} — Desde {desde}"
+
+
+class NotificacionesPanel(wx.Panel):
     def __init__(self, parent):
         super().__init__(parent)
-
-        self._alertas = []  # lista paralela a las filas de self.lista: [(tipo, dict), ...]
 
         sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(AppLogo(self), 0, wx.ALIGN_LEFT | wx.ALL, 4)
@@ -65,13 +75,16 @@ class NotificacionesPanel(wx.Panel):
         activar_con_enter(actualizar_btn)
         sizer.Add(actualizar_btn, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
-        self.lista = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
-        self.lista.SetName("Lista de alertas activas")
-        for indice, columna in enumerate(COLUMNAS):
-            self.lista.InsertColumn(indice, columna)
-        self.lista.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_seleccionar)
-        self.lista.Bind(wx.EVT_LIST_ITEM_DESELECTED, self._on_deseleccionar)
-        sizer.Add(self.lista, 1, wx.EXPAND | wx.ALL, 8)
+        # Árbol en vez de una lista plana: 3 nodos de categoría (uno por tipo
+        # de alerta) que agrupan sus alertas activas como hijos, para que no
+        # se mezclen visualmente ni al leer con NVDA (reporte del usuario:
+        # con todo en una sola lista "se iba a mezclar y va a ser errores").
+        # wx.TreeCtrl es un control nativo de Windows con soporte MSAA/UIA de
+        # fábrica, igual que el resto de los widgets estándar de la app.
+        self.arbol = wx.TreeCtrl(self, style=wx.TR_DEFAULT_STYLE | wx.TR_HIDE_ROOT)
+        self.arbol.SetName("Árbol de alertas activas")
+        self.arbol.Bind(wx.EVT_TREE_SEL_CHANGED, self._on_seleccionar)
+        sizer.Add(self.arbol, 1, wx.EXPAND | wx.ALL, 8)
 
         self.marcar_btn = wx.Button(self, label="&Marcar documentos completados")
         self.marcar_btn.Disable()
@@ -86,10 +99,11 @@ class NotificacionesPanel(wx.Panel):
         self.recargar(sonido=False)
 
     def recargar(self, sonido=True):
-        """Vuelve a calcular las alertas activas. Se llama al entrar a esta
-        pestaña (ver MainFrame), con "Actualizar", y tras marcar documentos
-        completados. sonido=False se usa en el primer load y después de marcar
-        (para no repetir el sonido de algo que el usuario ya está resolviendo).
+        """Vuelve a calcular las alertas activas y reconstruye el árbol. Se
+        llama al entrar a esta pestaña (ver MainFrame), con "Actualizar", y
+        tras marcar documentos completados (desde acá o desde Casos).
+        sonido=False se usa en el primer load y después de marcar (para no
+        repetir el sonido de algo que el usuario ya está resolviendo).
         """
         conn = get_connection()
         try:
@@ -100,12 +114,13 @@ class NotificacionesPanel(wx.Panel):
         finally:
             conn.close()
 
-        self._alertas = (
-            [(TIPO_DOCUMENTOS, alerta) for alerta in documentos]
-            + [(TIPO_CONSTANCIA_PENDIENTE, alerta) for alerta in constancia_pendiente]
-            + [(TIPO_CONSTANCIA_EN_MANO, alerta) for alerta in constancia_en_mano]
+        self._reconstruir_arbol(
+            (
+                (TIPO_DOCUMENTOS, documentos),
+                (TIPO_CONSTANCIA_PENDIENTE, constancia_pendiente),
+                (TIPO_CONSTANCIA_EN_MANO, constancia_en_mano),
+            )
         )
-        self._refrescar_lista()
 
         if sonido:
             if documentos:
@@ -115,55 +130,39 @@ class NotificacionesPanel(wx.Panel):
             if constancia_en_mano:
                 reproducir_sonido(SONIDO_CONSTANCIA_EN_MANO)
 
-        total = len(self._alertas)
+        total = len(documentos) + len(constancia_pendiente) + len(constancia_en_mano)
         mensaje = f"{total} alerta(s) activa(s)." if total else "Sin alertas activas."
         self.mensaje_texto.SetLabel(mensaje)
         self.GetTopLevelParent().SetStatusText(mensaje)
 
-    def _refrescar_lista(self):
-        self.lista.DeleteAllItems()
-        for tipo, alerta in self._alertas:
-            valores = self._alerta_a_columnas(tipo, alerta)
-            indice = self.lista.InsertItem(self.lista.GetItemCount(), valores[0])
-            for columna, valor in enumerate(valores[1:], start=1):
-                self.lista.SetItem(indice, columna, valor)
+    def _reconstruir_arbol(self, grupos):
+        self.arbol.DeleteAllItems()
+        raiz = self.arbol.AddRoot("Alertas")
 
-        for columna in range(len(COLUMNAS)):
-            self.lista.SetColumnWidth(columna, wx.LIST_AUTOSIZE_USEHEADER)
+        for tipo, alertas in grupos:
+            nodo_categoria = self.arbol.AppendItem(raiz, f"{tipo} ({len(alertas)})")
+            for alerta in alertas:
+                hijo = self.arbol.AppendItem(nodo_categoria, _texto_alerta(tipo, alerta))
+                self.arbol.SetItemData(hijo, (tipo, alerta))
 
+        self.arbol.ExpandAll()
         self.marcar_btn.Disable()
-
-    @classmethod
-    def _alerta_a_columnas(cls, tipo, alerta):
-        if tipo == TIPO_DOCUMENTOS:
-            caso = ""
-            desde = _formatear_transcurrido(alerta["fecha_creacion"])
-        elif tipo == TIPO_CONSTANCIA_PENDIENTE:
-            caso = alerta["clave_caso"]
-            desde = _formatear_transcurrido(alerta["estado_solicitud_fecha_cambio"])
-        else:
-            caso = alerta["clave_caso"]
-            desde = _formatear_transcurrido(alerta["constancia_recibida_fecha"])
-
-        valores = [tipo, alerta["nombre"], alerta["cedula"], caso, desde]
-        return [valor if valor else cls.CELDA_VACIA for valor in valores]
 
     def _on_seleccionar(self, event):
-        tipo, _alerta = self._alertas[event.GetIndex()]
-        self.marcar_btn.Enable(tipo == TIPO_DOCUMENTOS)
-
-    def _on_deseleccionar(self, event):
-        self.marcar_btn.Disable()
+        item = event.GetItem()
+        datos = self.arbol.GetItemData(item) if item.IsOk() else None
+        self.marcar_btn.Enable(bool(datos) and datos[0] == TIPO_DOCUMENTOS)
 
     def _on_marcar_completo(self, event):
-        seleccion = self.lista.GetFirstSelected()
-        if seleccion == wx.NOT_FOUND:
+        item = self.arbol.GetSelection()
+        if not item.IsOk():
             return
 
-        tipo, alerta = self._alertas[seleccion]
-        if tipo != TIPO_DOCUMENTOS:
+        datos = self.arbol.GetItemData(item)
+        if not datos or datos[0] != TIPO_DOCUMENTOS:
             return
 
+        _tipo, alerta = datos
         conn = get_connection()
         try:
             marcar_documentos_completos(conn, alerta["cliente_id"])

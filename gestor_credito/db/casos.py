@@ -64,8 +64,12 @@ def buscar_casos(conn, ejecutivo_actual=None, termino=None):
 
 
 def _seleccionar_casos(conn):
-    # El orden de columnas de este SELECT es el orden exacto en que deben
-    # mostrarse en la lista de la pestaña Casos (ver COLUMNAS en casos_panel.py).
+    # El orden de las primeras 17 columnas de este SELECT (hasta observaciones)
+    # es el orden exacto en que deben mostrarse en la lista de la pestaña Casos
+    # (ver COLUMNAS en casos_panel.py). cliente_id y documentos_completos_fecha
+    # se agregan al final, sin alterar ese orden: no se muestran como columna
+    # de la lista, solo se usan para precargar/editar el checkbox "Documentos
+    # completados" del panel de edición cuando se selecciona un caso.
     query = """
         SELECT caso.id,
                caso.fecha_registro,
@@ -83,7 +87,9 @@ def _seleccionar_casos(conn):
                caso.responsable_actual,
                caso.decision,
                caso.motivo_no_aplica,
-               caso.observaciones
+               caso.observaciones,
+               caso.cliente_id,
+               cliente.documentos_completos_fecha
         FROM caso
         JOIN cliente ON cliente.id = caso.cliente_id
         ORDER BY caso.fecha_registro DESC, caso.id DESC

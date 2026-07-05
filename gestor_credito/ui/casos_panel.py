@@ -1,6 +1,12 @@
 import wx
 
-from gestor_credito.catalogos import ETAPAS_PROCESO, ESTADOS_SOLICITUD, formatear_microseguro
+from gestor_credito.catalogos import (
+    ESTADO_DESEMBOLSADA,
+    ETAPAS_PROCESO,
+    ESTADOS_SOLICITUD,
+    formatear_microseguro,
+)
+from gestor_credito.db.alertas import marcar_documentos_completos
 from gestor_credito.db.casos import actualizar_edicion_manual, buscar_casos
 from gestor_credito.db.configuracion import CLAVE_EJECUTIVO_ACTUAL, obtener_valor
 from gestor_credito.db.database import get_connection
@@ -26,6 +32,7 @@ class CasosPanel(wx.Panel):
 
         self._filas = []
         self._caso_seleccionado_id = None
+        self._cliente_seleccionado_id = None
 
         sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(AppLogo(self), 0, wx.ALIGN_LEFT | wx.ALL, 4)
@@ -76,6 +83,23 @@ class CasosPanel(wx.Panel):
 
         self.caso_seleccionado_texto = wx.StaticText(contenedor, label="Ningún caso seleccionado")
         box.Add(self.caso_seleccionado_texto, 0, wx.BOTTOM, 8)
+
+        # Es del cliente, no del caso (documentos_completos_fecha vive en
+        # cliente — ver CLAUDE.md), por eso el label lo aclara: marcar acá
+        # apaga la Alerta "Documentos pendientes" para todos los casos de ese
+        # cliente, no solo el seleccionado. Se marca al tildar el checkbox
+        # (acción inmediata, sin depender de "Guardar cambios" ni de esperar a
+        # que la alerta ya esté activa en Notificaciones — pedido explícito
+        # del usuario: poder decir "ya completó, ignoralo" apenas ve el caso).
+        # Es de una sola vía: una vez marcado (documentos_completos_fecha ya
+        # tiene valor) el checkbox queda tildado y deshabilitado, no se puede
+        # desmarcar desde acá.
+        self.documentos_completos_check = wx.CheckBox(
+            contenedor, label="Documentos completados (cliente)"
+        )
+        self.documentos_completos_check.Bind(wx.EVT_CHECKBOX, self._on_documentos_completos_check)
+        self.documentos_completos_check.Disable()
+        box.Add(self.documentos_completos_check, 0, wx.BOTTOM, 8)
 
         fila = wx.BoxSizer(wx.HORIZONTAL)
 
@@ -153,7 +177,12 @@ class CasosPanel(wx.Panel):
             self.lista.SetColumnWidth(columna, wx.LIST_AUTOSIZE_USEHEADER)
 
         self._caso_seleccionado_id = None
+        self._cliente_seleccionado_id = None
         self.guardar_btn.Disable()
+        self.documentos_completos_check.SetValue(False)
+        self.documentos_completos_check.Disable()
+        self.documentos_completos_check.Show(True)
+        self.Layout()
         self.caso_seleccionado_texto.SetLabel("Ningún caso seleccionado")
 
     @classmethod
@@ -162,6 +191,7 @@ class CasosPanel(wx.Panel):
             _caso_id, fecha_registro, no_presolicitud, ejecutivo, empresa_convenio,
             nombre, cedula, telefono, monto_solicitado, destino_credito, microseguro,
             estado, etapa, responsable_actual, decision, motivo_no_aplica, observaciones,
+            _cliente_id, _documentos_completos_fecha,
         ) = fila
 
         monto_texto = f"{monto_solicitado:,.2f}" if monto_solicitado is not None else ""
@@ -185,16 +215,44 @@ class CasosPanel(wx.Panel):
             caso_id, _fecha_registro, no_presolicitud, _ejecutivo, _empresa_convenio,
             nombre, cedula, _telefono, _monto_solicitado, _destino_credito, _microseguro,
             estado, etapa, _responsable_actual, _decision, _motivo_no_aplica, _observaciones,
+            cliente_id, documentos_completos_fecha,
         ) = fila
 
         self._caso_seleccionado_id = caso_id
+        self._cliente_seleccionado_id = cliente_id
         self.caso_seleccionado_texto.SetLabel(
             f"Editando: {nombre} — Cédula {cedula} — No. Presolicitud {no_presolicitud or '(sin número)'}"
         )
         self._seleccionar_en_choice(self.estado_choice, estado)
         self._seleccionar_en_choice(self.etapa_choice, etapa)
         self.guardar_btn.Enable()
+
+        # Un caso ya Desembolsada está cerrado: no tiene sentido seguir
+        # pidiendo/permitiendo marcar documentos para él (confirmado por el
+        # usuario). Se oculta el control entero, no solo se deshabilita, para
+        # no dejar un checkbox "muerto" en pantalla en un caso ya cerrado.
+        caso_cerrado = estado == ESTADO_DESEMBOLSADA
+        self.documentos_completos_check.Show(not caso_cerrado)
+        if not caso_cerrado:
+            ya_completos = documentos_completos_fecha is not None
+            self.documentos_completos_check.SetValue(ya_completos)
+            self.documentos_completos_check.Enable(not ya_completos)
+        self.Layout()
+
         self.mensaje_texto.SetLabel("")
+
+    def _on_documentos_completos_check(self, event):
+        if not event.IsChecked() or self._cliente_seleccionado_id is None:
+            return
+
+        conn = get_connection()
+        try:
+            marcar_documentos_completos(conn, self._cliente_seleccionado_id)
+        finally:
+            conn.close()
+
+        self.documentos_completos_check.Disable()
+        self.mensaje_texto.SetLabel("Documentos completados marcados. Se apagó la alerta para este cliente.")
 
     @staticmethod
     def _seleccionar_en_choice(choice_ctrl, valor):
