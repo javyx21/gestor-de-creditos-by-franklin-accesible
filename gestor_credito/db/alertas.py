@@ -120,3 +120,18 @@ def marcar_documentos_completos(conn, cliente_id):
         (cliente_id,),
     )
     conn.commit()
+
+
+def marcar_documentos_pendientes(conn, cliente_id):
+    """Reversa manual de marcar_documentos_completos: reactiva la Alerta
+    'Documentos pendientes' para este cliente. Solo se ofrece desde el menú
+    contextual de Casos, no desde el panel de edición principal (que solo
+    permite marcar como completo) — pedido explícito del usuario para poder
+    corregir un cliente marcado por error o al que después le faltó un
+    documento."""
+    conn.execute(
+        "UPDATE cliente SET documentos_completos_fecha = NULL, "
+        "fecha_actualizacion = datetime('now') WHERE id = ?",
+        (cliente_id,),
+    )
+    conn.commit()

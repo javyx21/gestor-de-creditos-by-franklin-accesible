@@ -1,6 +1,7 @@
 import wx
 
 from gestor_credito.db.casos import obtener_ejecutivos
+from gestor_credito.db.clientes import vaciar_base_datos
 from gestor_credito.db.configuracion import CLAVE_EJECUTIVO_ACTUAL, guardar_valor, obtener_valor
 from gestor_credito.db.database import get_connection
 from gestor_credito.importer.excel_importer import import_bitacora
@@ -23,6 +24,7 @@ class ConfiguracionPanel(wx.Panel):
 
         sizer.Add(self._crear_seccion_agente(), 0, wx.EXPAND | wx.ALL, 8)
         sizer.Add(self._crear_seccion_importar(), 1, wx.EXPAND | wx.ALL, 8)
+        sizer.Add(self._crear_seccion_peligro(), 0, wx.EXPAND | wx.ALL, 8)
 
         self.SetSizer(sizer)
         self._cargar_agente_actual()
@@ -101,6 +103,57 @@ class ConfiguracionPanel(wx.Panel):
         box.Add(self.resultado_texto, 1, wx.EXPAND)
 
         return box
+
+    def _crear_seccion_peligro(self):
+        box = wx.StaticBoxSizer(wx.VERTICAL, self, "Mantenimiento de datos")
+        contenedor = box.GetStaticBox()
+
+        descripcion = wx.StaticText(
+            contenedor,
+            label="Borra TODOS los clientes y casos guardados (se conserva el agente configurado). "
+            "Esta acción no se puede deshacer.",
+        )
+        box.Add(descripcion, 0, wx.BOTTOM, 8)
+
+        vaciar_btn = wx.Button(contenedor, label="&Eliminar toda la base de datos")
+        vaciar_btn.Bind(wx.EVT_BUTTON, self._on_vaciar_base_datos)
+        activar_con_enter(vaciar_btn)
+        box.Add(vaciar_btn, 0, wx.BOTTOM, 4)
+
+        self.peligro_mensaje = wx.StaticText(contenedor, label="")
+        box.Add(self.peligro_mensaje, 0)
+
+        return box
+
+    def _on_vaciar_base_datos(self, event):
+        mensaje = (
+            "¿Eliminar TODOS los clientes y casos guardados?\n\n"
+            "El agente configurado se conserva. Esta acción no se puede deshacer."
+        )
+        confirmacion = wx.MessageBox(
+            mensaje, "Eliminar toda la base de datos", wx.YES_NO | wx.ICON_WARNING, self
+        )
+        if confirmacion != wx.YES:
+            return
+
+        conn = get_connection()
+        try:
+            vaciar_base_datos(conn)
+            actual = obtener_valor(conn, CLAVE_EJECUTIVO_ACTUAL)
+            ejecutivos = obtener_ejecutivos(conn)
+        finally:
+            conn.close()
+
+        # Vaciar la base puede dejar sin agentes la lista (obtener_ejecutivos()
+        # sale de caso.ejecutivo, que ya no tiene filas) — se refresca igual
+        # que después de un import, con el mismo fallback seguro si el agente
+        # configurado ya no aparece en la lista.
+        self._mostrar_agentes_existentes(ejecutivos)
+        self._seleccionar_agente_actual(actual)
+
+        mensaje_ok = "Base de datos vaciada. Se eliminaron todos los clientes y casos."
+        self.peligro_mensaje.SetLabel(mensaje_ok)
+        self.GetTopLevelParent().SetStatusText(mensaje_ok)
 
     def _cargar_agente_actual(self):
         conn = get_connection()

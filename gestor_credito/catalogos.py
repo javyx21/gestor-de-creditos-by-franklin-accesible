@@ -22,11 +22,25 @@ ETAPAS_PROCESO = [
     "Cierre",
 ]
 
+# Responsable Actual: quién tiene el caso en su poder en este momento. Tomado
+# de 02_Catalogos de MachoteBaseDeDatos.xlsx (ver CLAUDE.md) — hasta ahora
+# nada lo consumía; lo usa el menú contextual de Casos (ver casos_panel.py).
+RESPONSABLES_ACTUALES = [
+    "Ejecutivo",
+    "Auxiliar de Negocios",
+    "Jefatura / Responsable de Negocios",
+    "Responsable de Aprobación",
+    "Operaciones",
+    "Administración y Finanzas",
+    "Gerencia General",
+]
+
 ESTADO_EN_ESPERA_CONSTANCIA = ESTADOS_SOLICITUD[0]
 ESTADO_EN_PROCESO = ESTADOS_SOLICITUD[1]
 ESTADO_DESEMBOLSADA = ESTADOS_SOLICITUD[2]
 ESTADO_NO_APLICA = ESTADOS_SOLICITUD[3]
 ESTADO_CLIENTE_DESISTIO = ESTADOS_SOLICITUD[4]
+ETAPA_DESEMBOLSO = ETAPAS_PROCESO[5]
 
 # Estados "cerrados": el caso ya no tiene nada pendiente con el cliente, así
 # que no debe aparecer bajo ningún filtro de alerta (Casos) ni alerta activa

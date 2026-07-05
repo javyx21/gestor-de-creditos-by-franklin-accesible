@@ -10,10 +10,12 @@ SONIDO_DOCUMENTOS_PENDIENTES = "datosPendientes.wav"
 SONIDO_CONSTANCIA_PENDIENTE = "alerta.wav"
 SONIDO_CONSTANCIA_EN_MANO = "alertaMaxima.wav"
 
-# Confirmación audible de "Limpiar búsqueda" en Casos: el usuario pidió un
-# sonido al vaciar el cuadro de búsqueda/filtro para saber que sí se borró,
-# sin depender de leer la barra de estado a mano.
-SONIDO_LIMPIAR_BUSQUEDA = "borrar.wav"
+# Confirmación audible de cualquier acción de borrado en Casos: "Limpiar
+# búsqueda" (vaciar el cuadro de búsqueda/filtro) y "Eliminar cliente" (borrar
+# un cliente y sus casos) comparten este mismo sonido — el usuario pidió un
+# aviso audible para saber que sí se borró, sin depender de leer la barra de
+# estado a mano.
+SONIDO_BORRAR = "borrar.wav"
 
 
 def reproducir_sonido(nombre_archivo):

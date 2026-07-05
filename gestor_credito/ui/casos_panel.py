@@ -2,25 +2,30 @@ import wx
 
 from gestor_credito.catalogos import (
     ESTADO_DESEMBOLSADA,
+    ETAPA_DESEMBOLSO,
     ETAPAS_PROCESO,
     ESTADOS_SOLICITUD,
+    RESPONSABLES_ACTUALES,
     formatear_microseguro,
 )
-from gestor_credito.db.alertas import marcar_documentos_completos
+from gestor_credito.db.alertas import marcar_documentos_completos, marcar_documentos_pendientes
 from gestor_credito.db.casos import (
     FILTRO_ALERTA_CONSTANCIA_EN_MANO,
     FILTRO_ALERTA_CONSTANCIA_PENDIENTE,
     FILTRO_ALERTA_DOCUMENTOS_PENDIENTES,
     FILTRO_ALERTA_TODOS,
     actualizar_edicion_manual,
+    actualizar_responsable_actual,
     buscar_casos,
+    eliminar_caso,
 )
+from gestor_credito.db.clientes import contar_casos, eliminar_cliente
 from gestor_credito.db.configuracion import CLAVE_EJECUTIVO_ACTUAL, obtener_valor
 from gestor_credito.db.database import get_connection
 from gestor_credito.ui.accesibilidad import activar_con_enter
 from gestor_credito.ui.fechas import formatear_fecha
 from gestor_credito.ui.logo import AppLogo
-from gestor_credito.ui.sonido import SONIDO_LIMPIAR_BUSQUEDA, reproducir_sonido
+from gestor_credito.ui.sonido import SONIDO_BORRAR, reproducir_sonido
 
 # Orden y set de columnas pedido por el usuario para la lista de Casos. Debe
 # coincidir en orden con el SELECT interno de buscar_casos() en gestor_credito/db/casos.py.
@@ -50,7 +55,10 @@ class CasosPanel(wx.Panel):
 
         self._filas = []
         self._caso_seleccionado_id = None
+        self._caso_seleccionado_no_presolicitud = None
         self._cliente_seleccionado_id = None
+        self._cliente_seleccionado_nombre = None
+        self._cliente_seleccionado_cedula = None
 
         sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(AppLogo(self), 0, wx.ALIGN_LEFT | wx.ALL, 4)
@@ -66,6 +74,7 @@ class CasosPanel(wx.Panel):
         for indice, columna in enumerate(COLUMNAS):
             self.lista.InsertColumn(indice, columna)
         self.lista.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_seleccionar_caso)
+        self.lista.Bind(wx.EVT_CONTEXT_MENU, self._on_menu_contextual)
         sizer.Add(self.lista, 1, wx.EXPAND | wx.ALL, 8)
 
         sizer.Add(self._crear_panel_edicion(), 0, wx.EXPAND | wx.ALL, 8)
@@ -144,7 +153,24 @@ class CasosPanel(wx.Panel):
         self.guardar_btn.Disable()
         activar_con_enter(self.guardar_btn)
 
-        for control in (estado_label, self.estado_choice, etapa_label, self.etapa_choice, self.guardar_btn):
+        # Borra SOLO este caso (cliente y demás casos intactos) — mismo
+        # botón/acción que "Eliminar caso" del menú contextual (ver
+        # _eliminar_caso_seleccionado). Borrar el cliente completo con todo su
+        # historial es una operación más rara/peligrosa que se dejó solo en
+        # el menú contextual ("Eliminar cliente y todo su historial"), para
+        # que no sea la opción a mano en el flujo normal de trabajo —
+        # confirmado con el usuario tras un susto real probando esto: pensó
+        # que borraba solo el caso seleccionado y el mensaje le avisó que iba
+        # a borrar también el resto del historial del cliente.
+        self.eliminar_btn = wx.Button(contenedor, label="Elimina&r caso")
+        self.eliminar_btn.Bind(wx.EVT_BUTTON, self._on_eliminar_caso)
+        self.eliminar_btn.Disable()
+        activar_con_enter(self.eliminar_btn)
+
+        for control in (
+            estado_label, self.estado_choice, etapa_label, self.etapa_choice,
+            self.guardar_btn, self.eliminar_btn,
+        ):
             fila.Add(control, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
 
         box.Add(fila, 0)
@@ -167,7 +193,7 @@ class CasosPanel(wx.Panel):
         self.busqueda_texto.SetValue("")
         self.filtro_alerta_choice.SetSelection(0)
         self._cargar_casos(avisar_sin_resultados=False)
-        reproducir_sonido(SONIDO_LIMPIAR_BUSQUEDA)
+        reproducir_sonido(SONIDO_BORRAR)
 
     def enfocar_busqueda(self):
         """Atajo Ctrl+F: lleva el foco directo al cuadro de búsqueda sin
@@ -188,6 +214,226 @@ class CasosPanel(wx.Panel):
             self.lista.SetItemState(0, estado, estado)
 
         self.lista.SetFocus()
+
+    def _on_menu_contextual(self, event):
+        """Menú contextual (click derecho o tecla de menú del teclado) con
+        todas las acciones posibles sobre el caso/cliente bajo el cursor (o el
+        ya seleccionado, si se invoca desde el teclado). La navegación por
+        flechas/Enter/Esc dentro del menú y sus submenús es el comportamiento
+        nativo de wx.Menu en Windows — no hace falta cablearla a mano."""
+        posicion_pantalla = event.GetPosition()
+
+        if posicion_pantalla != wx.DefaultPosition:
+            # Click derecho sobre una fila distinta a la seleccionada: la
+            # selecciona primero (dispara _on_seleccionar_caso), igual que el
+            # comportamiento estándar de un wx.ListCtrl/Explorador de Windows.
+            posicion_lista = self.lista.ScreenToClient(posicion_pantalla)
+            indice, _bandera = self.lista.HitTest(posicion_lista)
+            if indice != wx.NOT_FOUND:
+                estado = wx.LIST_STATE_SELECTED | wx.LIST_STATE_FOCUSED
+                self.lista.SetItemState(indice, estado, estado)
+
+        if self._caso_seleccionado_id is None:
+            self.GetTopLevelParent().SetStatusText("Seleccioná un caso para ver sus acciones.")
+            return
+
+        if posicion_pantalla == wx.DefaultPosition:
+            # Invocado con la tecla de menú del teclado, sin coordenadas de
+            # mouse: mostrar el menú junto a la fila seleccionada.
+            rect = self.lista.GetItemRect(self.lista.GetFirstSelected())
+            posicion = (rect.x, rect.y + rect.height)
+        else:
+            posicion = self.lista.ScreenToClient(posicion_pantalla)
+
+        menu = self._construir_menu_contextual()
+        self.lista.PopupMenu(menu, posicion)
+        menu.Destroy()
+
+    def _construir_menu_contextual(self):
+        menu = wx.Menu()
+
+        submenu_estado = wx.Menu()
+        for valor in ESTADOS_SOLICITUD:
+            item = submenu_estado.Append(wx.ID_ANY, valor)
+            self.Bind(wx.EVT_MENU, self._crear_manejador_cambiar_estado(valor), item)
+        menu.AppendSubMenu(submenu_estado, "Cambiar estatus de solicitud")
+
+        item_desembolso = menu.Append(wx.ID_ANY, "Cambiar estado a desembolso")
+        self.Bind(wx.EVT_MENU, self._on_cambiar_a_desembolso, item_desembolso)
+
+        submenu_responsable = wx.Menu()
+        for valor in RESPONSABLES_ACTUALES:
+            item = submenu_responsable.Append(wx.ID_ANY, valor)
+            self.Bind(wx.EVT_MENU, self._crear_manejador_cambiar_responsable(valor), item)
+        menu.AppendSubMenu(submenu_responsable, "Cambiar quién tiene el caso en su poder")
+
+        menu.AppendSeparator()
+
+        # Exclusivo del menú contextual (no está en el panel principal, que
+        # solo permite marcar como completo, nunca desmarcar) — pedido
+        # explícito del usuario para poder revertir un cliente marcado por
+        # error o al que después le faltó un documento.
+        item_pendiente = menu.Append(wx.ID_ANY, "Marcar como pendiente de completar documentos")
+        self.Bind(wx.EVT_MENU, self._on_marcar_documentos_pendientes, item_pendiente)
+
+        menu.AppendSeparator()
+
+        # Dos acciones distintas y deliberadamente separadas: "Eliminar caso"
+        # (la común, borra solo este caso) y "Eliminar cliente y todo su
+        # historial" (rara/peligrosa, borra el cliente y TODOS sus casos) —
+        # ver _eliminar_caso_seleccionado() y _eliminar_cliente_seleccionado().
+        item_eliminar_caso = menu.Append(wx.ID_ANY, "Eliminar caso")
+        self.Bind(wx.EVT_MENU, self._on_eliminar_caso, item_eliminar_caso)
+
+        item_eliminar_cliente = menu.Append(wx.ID_ANY, "Eliminar cliente y todo su historial")
+        self.Bind(wx.EVT_MENU, self._on_eliminar_cliente_completo, item_eliminar_cliente)
+
+        return menu
+
+    def _crear_manejador_cambiar_estado(self, valor):
+        return lambda event: self._cambiar_estado_solicitud(valor)
+
+    def _crear_manejador_cambiar_responsable(self, valor):
+        return lambda event: self._cambiar_responsable_actual(valor)
+
+    def _cambiar_estado_solicitud(self, nuevo_estado):
+        """Cambia solo Estado Solicitud, sin tocar Etapa Proceso — misma
+        lógica que "Guardar cambios" (actualizar_edicion_manual), reutilizando
+        la Etapa Proceso ya cargada en el panel de edición para el caso
+        seleccionado."""
+        if self._caso_seleccionado_id is None:
+            return
+
+        etapa_actual = self.etapa_choice.GetStringSelection() or None
+        conn = get_connection()
+        try:
+            actualizar_edicion_manual(conn, self._caso_seleccionado_id, nuevo_estado, etapa_actual)
+        finally:
+            conn.close()
+
+        self.GetTopLevelParent().SetStatusText(f"Estado Solicitud cambiado a «{nuevo_estado}».")
+        self._cargar_casos()
+
+    def _on_cambiar_a_desembolso(self, event):
+        if self._caso_seleccionado_id is None:
+            return
+
+        conn = get_connection()
+        try:
+            actualizar_edicion_manual(
+                conn, self._caso_seleccionado_id, ESTADO_DESEMBOLSADA, ETAPA_DESEMBOLSO
+            )
+        finally:
+            conn.close()
+
+        self.GetTopLevelParent().SetStatusText("Caso marcado como Desembolsada / Desembolso.")
+        self._cargar_casos()
+
+    def _cambiar_responsable_actual(self, valor):
+        if self._caso_seleccionado_id is None:
+            return
+
+        conn = get_connection()
+        try:
+            actualizar_responsable_actual(conn, self._caso_seleccionado_id, valor)
+        finally:
+            conn.close()
+
+        self.GetTopLevelParent().SetStatusText(f"Responsable Actual cambiado a «{valor}».")
+        self._cargar_casos()
+
+    def _on_marcar_documentos_pendientes(self, event):
+        if self._cliente_seleccionado_id is None:
+            return
+
+        conn = get_connection()
+        try:
+            marcar_documentos_pendientes(conn, self._cliente_seleccionado_id)
+        finally:
+            conn.close()
+
+        self.GetTopLevelParent().SetStatusText("Documentos marcados como pendientes nuevamente.")
+        self._cargar_casos()
+
+    def _on_eliminar_caso(self, event):
+        self._eliminar_caso_seleccionado()
+
+    def _eliminar_caso_seleccionado(self):
+        """Handler compartido por el botón "Elimina&r caso" del panel de
+        edición y el ítem "Eliminar caso" del menú contextual. Borra SOLO el
+        caso seleccionado (eliminar_caso() en db/casos.py) — el cliente y sus
+        demás casos quedan intactos, por eso el mensaje de confirmación lo
+        aclara explícitamente (ver _eliminar_cliente_seleccionado() más abajo
+        para la operación en cascada, que sí borra todo el historial)."""
+        if self._caso_seleccionado_id is None:
+            return
+
+        no_presolicitud = self._caso_seleccionado_no_presolicitud or "(sin número)"
+        mensaje = (
+            f"¿Eliminar el caso No. Presolicitud {no_presolicitud}?\n\n"
+            "El cliente y sus demás casos no se ven afectados. "
+            "Esta acción no se puede deshacer."
+        )
+        confirmacion = wx.MessageBox(
+            mensaje, "Eliminar caso", wx.YES_NO | wx.ICON_WARNING, self
+        )
+        if confirmacion != wx.YES:
+            return
+
+        conn = get_connection()
+        try:
+            eliminar_caso(conn, self._caso_seleccionado_id)
+        finally:
+            conn.close()
+
+        reproducir_sonido(SONIDO_BORRAR)
+        self.GetTopLevelParent().SetStatusText(f"Caso {no_presolicitud} eliminado.")
+        self._cargar_casos()
+
+    def _on_eliminar_cliente_completo(self, event):
+        self._eliminar_cliente_seleccionado()
+
+    def _eliminar_cliente_seleccionado(self):
+        """Solo disponible desde "Eliminar cliente y todo su historial" del
+        menú contextual (no hay botón equivalente en el panel principal —
+        confirmado con el usuario tras un susto real: pensó que "Eliminar
+        caso" iba a borrar todo el historial y no era así). Borra el CLIENTE
+        completo y TODOS sus casos (no solo el seleccionado, ver
+        eliminar_cliente() en db/clientes.py); el mensaje de confirmación
+        muestra cuántos casos se van a perder para que quede claro el
+        alcance antes de confirmar."""
+        if self._cliente_seleccionado_id is None:
+            return
+
+        nombre = self._cliente_seleccionado_nombre or "(sin nombre)"
+        cedula = self._cliente_seleccionado_cedula or "(sin cédula)"
+
+        conn = get_connection()
+        try:
+            total_casos = contar_casos(conn, self._cliente_seleccionado_id)
+        finally:
+            conn.close()
+
+        mensaje = (
+            f"¿Eliminar a {nombre} (Cédula {cedula}) y TODO su historial "
+            f"({total_casos} caso(s))?\n\n"
+            "Esta acción no se puede deshacer."
+        )
+        confirmacion = wx.MessageBox(
+            mensaje, "Eliminar cliente y todo su historial", wx.YES_NO | wx.ICON_WARNING, self
+        )
+        if confirmacion != wx.YES:
+            return
+
+        conn = get_connection()
+        try:
+            eliminar_cliente(conn, self._cliente_seleccionado_id)
+        finally:
+            conn.close()
+
+        reproducir_sonido(SONIDO_BORRAR)
+        self.GetTopLevelParent().SetStatusText(f"Cliente {nombre} y todo su historial eliminados.")
+        self._cargar_casos()
 
     def recargar(self):
         """Vuelve a consultar la base de datos con la búsqueda/agente actuales.
@@ -249,8 +495,12 @@ class CasosPanel(wx.Panel):
             self.lista.SetColumnWidth(columna, wx.LIST_AUTOSIZE_USEHEADER)
 
         self._caso_seleccionado_id = None
+        self._caso_seleccionado_no_presolicitud = None
         self._cliente_seleccionado_id = None
+        self._cliente_seleccionado_nombre = None
+        self._cliente_seleccionado_cedula = None
         self.guardar_btn.Disable()
+        self.eliminar_btn.Disable()
         self.documentos_completos_check.SetValue(False)
         self.documentos_completos_check.Disable()
         self.documentos_completos_check.Show(True)
@@ -291,13 +541,17 @@ class CasosPanel(wx.Panel):
         ) = fila
 
         self._caso_seleccionado_id = caso_id
+        self._caso_seleccionado_no_presolicitud = no_presolicitud
         self._cliente_seleccionado_id = cliente_id
+        self._cliente_seleccionado_nombre = nombre
+        self._cliente_seleccionado_cedula = cedula
         self.caso_seleccionado_texto.SetLabel(
             f"Editando: {nombre} — Cédula {cedula} — No. Presolicitud {no_presolicitud or '(sin número)'}"
         )
         self._seleccionar_en_choice(self.estado_choice, estado)
         self._seleccionar_en_choice(self.etapa_choice, etapa)
         self.guardar_btn.Enable()
+        self.eliminar_btn.Enable()
 
         # Un caso ya Desembolsada está cerrado: no tiene sentido seguir
         # pidiendo/permitiendo marcar documentos para él (confirmado por el

@@ -178,3 +178,22 @@ def actualizar_edicion_manual(conn, caso_id, estado_solicitud, etapa_proceso):
     params.append(caso_id)
     conn.execute(f"UPDATE caso SET {', '.join(set_sql)} WHERE id = ?", params)
     conn.commit()
+
+
+def actualizar_responsable_actual(conn, caso_id, responsable_actual):
+    """Cambia quién tiene el caso en su poder, desde el menú contextual de
+    Casos (ver casos_panel.py)."""
+    conn.execute(
+        "UPDATE caso SET responsable_actual = ?, origen_ultima_modificacion = 'manual', "
+        "fecha_actualizacion_registro = datetime('now') WHERE id = ?",
+        (responsable_actual, caso_id),
+    )
+    conn.commit()
+
+
+def eliminar_caso(conn, caso_id):
+    """Borra solo este caso. El cliente y sus demás casos no se ven afectados
+    (a diferencia de eliminar_cliente() en db/clientes.py, que borra todo el
+    historial) — ver menú contextual y botón de Casos."""
+    conn.execute("DELETE FROM caso WHERE id = ?", (caso_id,))
+    conn.commit()
