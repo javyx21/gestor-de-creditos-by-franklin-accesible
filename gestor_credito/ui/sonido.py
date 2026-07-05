@@ -24,4 +24,4 @@ def reproducir_sonido(nombre_archivo):
 
     sonido = wx.adv.Sound(str(ruta))
     if sonido.IsOk():
-        sonido.Play(wx.adv.Sound.Async)
+        sonido.Play(wx.adv.SOUND_ASYNC)
