@@ -1,12 +1,32 @@
 import re
 
+from gestor_credito.catalogos import ESTADO_EN_ESPERA_CONSTANCIA, ESTADOS_CERRADOS
+
 # Índices de columna dentro de las tuplas que devuelve _seleccionar_casos().
+_INDICE_CASO_ID = 0
 _INDICE_EJECUTIVO = 3
 _INDICE_NOMBRE = 5
 _INDICE_CEDULA = 6
+_INDICE_ESTADO_SOLICITUD = 11
+_INDICE_CLIENTE_ID = 17
+_INDICE_DOCUMENTOS_COMPLETOS_FECHA = 18
+_INDICE_CONSTANCIA_RECIBIDA_FECHA = 19
 
 _PATRON_NOMBRE = re.compile(r"^[A-Za-zÁÉÍÓÚÑÜáéíóúñü ]+$")
 _PATRON_CEDULA = re.compile(r"^[0-9A-Za-z-]+$")
+
+# Valores del combobox "Filtrar por alerta" de la pestaña Casos. A diferencia
+# de las alertas de Notificaciones (ver gestor_credito/db/alertas.py), acá NO
+# se aplica ningún umbral de tiempo (7 días / 24h / 48h) — es un filtro de
+# ESTADO actual, no de alerta vencida. Con la primera versión (reusando los
+# umbrales de Notificaciones) el combobox mostraba 0 filas para cualquier
+# opción específica apenas se importaba la bitácora, porque nada llevaba
+# todavía 7 días/24h/48h en ese estado — reporte real del usuario, confirmado
+# contra la base real (19 casos en "En espera de constancia", 0 con >=7 días).
+FILTRO_ALERTA_TODOS = "todos"
+FILTRO_ALERTA_DOCUMENTOS_PENDIENTES = "documentos_pendientes"
+FILTRO_ALERTA_CONSTANCIA_PENDIENTE = "constancia_pendiente"
+FILTRO_ALERTA_CONSTANCIA_EN_MANO = "constancia_en_mano"
 
 
 def clasificar_termino_busqueda(termino):
@@ -36,16 +56,18 @@ def clasificar_termino_busqueda(termino):
     )
 
 
-def buscar_casos(conn, ejecutivo_actual=None, termino=None):
+def buscar_casos(conn, ejecutivo_actual=None, termino=None, filtro_alerta=None):
     """Búsqueda de la pestaña Casos.
 
-    Sin término: filtra por ejecutivo_actual (el agente configurado), o trae
-    todo si todavía no hay agente configurado.
+    Sin término: filtra por ejecutivo_actual (el agente configurado, o trae
+    todo si todavía no hay agente configurado) y, además, por filtro_alerta si
+    no es None/FILTRO_ALERTA_TODOS.
 
     Con término: busca por cédula (si el término trae algún dígito) o por
-    nombre (si es solo letras), e IGNORA ejecutivo_actual — una búsqueda
-    específica por cédula/nombre tiene prioridad sobre el filtro de agente,
-    aunque el resultado sea de otro agente.
+    nombre (si es solo letras), e IGNORA tanto ejecutivo_actual como
+    filtro_alerta — una búsqueda específica por cédula/nombre tiene prioridad
+    sobre ambos filtros, aunque el resultado sea de otro agente o no cumpla el
+    filtro de alerta seleccionado.
     """
     filas = _seleccionar_casos(conn)
     termino = (termino or "").strip()
@@ -57,8 +79,33 @@ def buscar_casos(conn, ejecutivo_actual=None, termino=None):
         else:
             termino_mayus = termino.upper()
             filas = [f for f in filas if termino_mayus in (f[_INDICE_NOMBRE] or "").upper()]
-    elif ejecutivo_actual:
+        return filas
+
+    if ejecutivo_actual:
         filas = [f for f in filas if f[_INDICE_EJECUTIVO] == ejecutivo_actual]
+
+    if filtro_alerta and filtro_alerta != FILTRO_ALERTA_TODOS:
+        filas = _filtrar_por_alerta(filas, filtro_alerta)
+
+    return filas
+
+
+def _filtrar_por_alerta(filas, filtro_alerta):
+    # Un caso en estado cerrado (Desembolsada, No aplica, Cliente desistió) ya
+    # no tiene nada pendiente con el cliente, así que se excluye de los 3
+    # filtros por igual, sin importar si técnicamente cumpliría la condición
+    # de cada uno (p. ej. documentos_completos_fecha todavía NULL en un caso
+    # ya Desembolsada) — reporte real del usuario.
+    filas = [f for f in filas if f[_INDICE_ESTADO_SOLICITUD] not in ESTADOS_CERRADOS]
+
+    if filtro_alerta == FILTRO_ALERTA_DOCUMENTOS_PENDIENTES:
+        return [f for f in filas if f[_INDICE_DOCUMENTOS_COMPLETOS_FECHA] is None]
+
+    if filtro_alerta == FILTRO_ALERTA_CONSTANCIA_PENDIENTE:
+        return [f for f in filas if f[_INDICE_ESTADO_SOLICITUD] == ESTADO_EN_ESPERA_CONSTANCIA]
+
+    if filtro_alerta == FILTRO_ALERTA_CONSTANCIA_EN_MANO:
+        return [f for f in filas if f[_INDICE_CONSTANCIA_RECIBIDA_FECHA] is not None]
 
     return filas
 
@@ -66,10 +113,11 @@ def buscar_casos(conn, ejecutivo_actual=None, termino=None):
 def _seleccionar_casos(conn):
     # El orden de las primeras 17 columnas de este SELECT (hasta observaciones)
     # es el orden exacto en que deben mostrarse en la lista de la pestaña Casos
-    # (ver COLUMNAS en casos_panel.py). cliente_id y documentos_completos_fecha
-    # se agregan al final, sin alterar ese orden: no se muestran como columna
-    # de la lista, solo se usan para precargar/editar el checkbox "Documentos
-    # completados" del panel de edición cuando se selecciona un caso.
+    # (ver COLUMNAS en casos_panel.py). cliente_id, documentos_completos_fecha y
+    # constancia_recibida_fecha se agregan al final, sin alterar ese orden: no
+    # se muestran como columna de la lista, solo se usan para precargar/editar
+    # el checkbox "Documentos completados" del panel de edición y para el
+    # filtro "Filtrar por alerta" (ver _filtrar_por_alerta más arriba).
     query = """
         SELECT caso.id,
                caso.fecha_registro,
@@ -89,7 +137,8 @@ def _seleccionar_casos(conn):
                caso.motivo_no_aplica,
                caso.observaciones,
                caso.cliente_id,
-               cliente.documentos_completos_fecha
+               cliente.documentos_completos_fecha,
+               caso.constancia_recibida_fecha
         FROM caso
         JOIN cliente ON cliente.id = caso.cliente_id
         ORDER BY caso.fecha_registro DESC, caso.id DESC

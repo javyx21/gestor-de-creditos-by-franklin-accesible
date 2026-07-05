@@ -2,6 +2,10 @@ import pytest
 
 from gestor_credito.db import database
 from gestor_credito.db.casos import (
+    FILTRO_ALERTA_CONSTANCIA_EN_MANO,
+    FILTRO_ALERTA_CONSTANCIA_PENDIENTE,
+    FILTRO_ALERTA_DOCUMENTOS_PENDIENTES,
+    FILTRO_ALERTA_TODOS,
     actualizar_edicion_manual,
     buscar_casos,
     clasificar_termino_busqueda,
@@ -166,3 +170,130 @@ def test_edicion_manual_resetea_fecha_cambio_solo_si_estado_cambia(conn):
     ).fetchone()[0]
 
     assert fecha_sin_cambio_estado == fecha_original
+
+
+# --- filtro_alerta de buscar_casos -------------------------------------------
+# A diferencia de las alertas de Notificaciones (gestor_credito/db/alertas.py),
+# este filtro es de ESTADO actual, sin umbral de tiempo — un caso recién
+# importado ya debe aparecer, sin esperar 7 días/24h/48h (ver comentario junto
+# a FILTRO_ALERTA_TODOS en casos.py).
+
+def test_filtro_documentos_pendientes_muestra_estado_actual_sin_umbral(conn):
+    caso_pendiente = _crear_cliente_y_caso(conn, cedula="001-0000001-1", no_presolicitud="P-1")
+    caso_completo = _crear_cliente_y_caso(conn, cedula="001-0000002-2", no_presolicitud="P-2")
+    conn.execute(
+        "UPDATE cliente SET documentos_completos_fecha = datetime('now') WHERE id = "
+        "(SELECT cliente_id FROM caso WHERE id = ?)",
+        (caso_completo,),
+    )
+    conn.commit()
+
+    resultado = buscar_casos(conn, filtro_alerta=FILTRO_ALERTA_DOCUMENTOS_PENDIENTES)
+
+    assert [f[0] for f in resultado] == [caso_pendiente]
+
+
+def test_filtro_constancia_pendiente_muestra_estado_actual_sin_umbral(conn):
+    caso_en_espera = _crear_cliente_y_caso(
+        conn, cedula="001-0000001-1", no_presolicitud="P-1", estado="En espera de constancia"
+    )
+    _crear_cliente_y_caso(
+        conn, cedula="001-0000002-2", no_presolicitud="P-2", estado="En proceso"
+    )
+
+    resultado = buscar_casos(conn, filtro_alerta=FILTRO_ALERTA_CONSTANCIA_PENDIENTE)
+
+    assert [f[0] for f in resultado] == [caso_en_espera]
+
+
+def test_filtro_constancia_en_mano_muestra_estado_actual_sin_umbral(conn):
+    caso_en_mano = _crear_cliente_y_caso(
+        conn, cedula="001-0000001-1", no_presolicitud="P-1", estado="En proceso"
+    )
+    conn.execute(
+        "UPDATE caso SET constancia_recibida_fecha = datetime('now') WHERE id = ?",
+        (caso_en_mano,),
+    )
+    caso_sin_constancia = _crear_cliente_y_caso(
+        conn, cedula="001-0000002-2", no_presolicitud="P-2", estado="En proceso"
+    )
+    caso_desembolsado = _crear_cliente_y_caso(
+        conn, cedula="001-0000003-3", no_presolicitud="P-3", estado="Desembolsada"
+    )
+    conn.execute(
+        "UPDATE caso SET constancia_recibida_fecha = datetime('now') WHERE id = ?",
+        (caso_desembolsado,),
+    )
+    conn.commit()
+
+    resultado = buscar_casos(conn, filtro_alerta=FILTRO_ALERTA_CONSTANCIA_EN_MANO)
+
+    assert [f[0] for f in resultado] == [caso_en_mano]
+    assert caso_sin_constancia not in [f[0] for f in resultado]
+
+
+@pytest.mark.parametrize(
+    "filtro_alerta",
+    [
+        FILTRO_ALERTA_DOCUMENTOS_PENDIENTES,
+        FILTRO_ALERTA_CONSTANCIA_PENDIENTE,
+        FILTRO_ALERTA_CONSTANCIA_EN_MANO,
+    ],
+)
+@pytest.mark.parametrize("estado_cerrado", ["Desembolsada", "No aplica", "Cliente desistió"])
+def test_filtro_excluye_casos_en_estado_cerrado(conn, filtro_alerta, estado_cerrado):
+    # Un caso cerrado no debe aparecer bajo NINGÚN filtro de alerta, aunque
+    # técnicamente cumpla la condición de ese filtro (documentos_completos_fecha
+    # NULL, constancia_recibida_fecha marcada, etc.) — el caso ya no tiene nada
+    # pendiente con el cliente.
+    caso_cerrado = _crear_cliente_y_caso(
+        conn, cedula="001-0000001-1", no_presolicitud="P-1", estado=estado_cerrado
+    )
+    conn.execute(
+        "UPDATE caso SET constancia_recibida_fecha = datetime('now') WHERE id = ?",
+        (caso_cerrado,),
+    )
+    conn.commit()
+
+    resultado = buscar_casos(conn, filtro_alerta=filtro_alerta)
+
+    assert resultado == []
+
+
+def test_filtro_todos_no_filtra(conn):
+    _crear_cliente_y_caso(conn, cedula="001-0000001-1", no_presolicitud="P-1")
+    _crear_cliente_y_caso(conn, cedula="001-0000002-2", no_presolicitud="P-2")
+
+    resultado = buscar_casos(conn, filtro_alerta=FILTRO_ALERTA_TODOS)
+
+    assert len(resultado) == 2
+
+
+def test_termino_de_busqueda_ignora_filtro_de_alerta(conn):
+    # El caso no cumple el filtro de alerta seleccionado (estado "En proceso",
+    # no "En espera de constancia"), pero como hay término de búsqueda, el
+    # filtro de alerta se ignora igual que ejecutivo_actual.
+    _crear_cliente_y_caso(
+        conn, cedula="001-0000001-1", nombre="Armando Pena", estado="En proceso"
+    )
+
+    resultado = buscar_casos(
+        conn, termino="Armando", filtro_alerta=FILTRO_ALERTA_CONSTANCIA_PENDIENTE
+    )
+
+    assert len(resultado) == 1
+
+
+def test_filtro_combina_con_ejecutivo_actual(conn):
+    caso_agente_1 = _crear_cliente_y_caso(
+        conn, cedula="001-0000001-1", no_presolicitud="P-1", ejecutivo="Maria Gomez"
+    )
+    _crear_cliente_y_caso(
+        conn, cedula="001-0000002-2", no_presolicitud="P-2", ejecutivo="Pedro Diaz"
+    )
+
+    resultado = buscar_casos(
+        conn, ejecutivo_actual="Maria Gomez", filtro_alerta=FILTRO_ALERTA_DOCUMENTOS_PENDIENTES
+    )
+
+    assert [f[0] for f in resultado] == [caso_agente_1]

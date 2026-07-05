@@ -96,12 +96,17 @@ class NotificacionesPanel(wx.Panel):
         sizer.Add(self.mensaje_texto, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
         self.SetSizer(sizer)
-        self.recargar(sonido=False)
+        # sonido=True (default): este panel solo se crea cuando el usuario abre
+        # "Herramientas > Notificaciones..." desde el menú (ver MainFrame), así
+        # que abrirlo es el mismo momento en que antes "entrar a la pestaña"
+        # sonaba si había algo activo.
+        self.recargar()
 
     def recargar(self, sonido=True):
         """Vuelve a calcular las alertas activas y reconstruye el árbol. Se
-        llama al entrar a esta pestaña (ver MainFrame), con "Actualizar", y
-        tras marcar documentos completados (desde acá o desde Casos).
+        llama al construir este panel (al abrir el menú, ver MainFrame), con
+        "Actualizar", y tras marcar documentos completados (desde acá o desde
+        Casos).
         sonido=False se usa en el primer load y después de marcar (para no
         repetir el sonido de algo que el usuario ya está resolviendo).
         """

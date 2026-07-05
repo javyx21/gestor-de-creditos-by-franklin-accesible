@@ -25,6 +25,14 @@ ETAPAS_PROCESO = [
 ESTADO_EN_ESPERA_CONSTANCIA = ESTADOS_SOLICITUD[0]
 ESTADO_EN_PROCESO = ESTADOS_SOLICITUD[1]
 ESTADO_DESEMBOLSADA = ESTADOS_SOLICITUD[2]
+ESTADO_NO_APLICA = ESTADOS_SOLICITUD[3]
+ESTADO_CLIENTE_DESISTIO = ESTADOS_SOLICITUD[4]
+
+# Estados "cerrados": el caso ya no tiene nada pendiente con el cliente, así
+# que no debe aparecer bajo ningún filtro de alerta (Casos) ni alerta activa
+# (Notificaciones) sin importar si técnicamente cumpliría la condición de
+# tiempo/estado de esa alerta — confirmado con el usuario.
+ESTADOS_CERRADOS = frozenset({ESTADO_DESEMBOLSADA, ESTADO_NO_APLICA, ESTADO_CLIENTE_DESISTIO})
 
 # El catálogo oficial de Microseguro usa palabras completas (Sí/No/No aplica/Por
 # confirmar), pero la bitácora real trae abreviaturas de una letra ("S"/"N") para

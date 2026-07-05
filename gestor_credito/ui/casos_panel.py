@@ -7,7 +7,14 @@ from gestor_credito.catalogos import (
     formatear_microseguro,
 )
 from gestor_credito.db.alertas import marcar_documentos_completos
-from gestor_credito.db.casos import actualizar_edicion_manual, buscar_casos
+from gestor_credito.db.casos import (
+    FILTRO_ALERTA_CONSTANCIA_EN_MANO,
+    FILTRO_ALERTA_CONSTANCIA_PENDIENTE,
+    FILTRO_ALERTA_DOCUMENTOS_PENDIENTES,
+    FILTRO_ALERTA_TODOS,
+    actualizar_edicion_manual,
+    buscar_casos,
+)
 from gestor_credito.db.configuracion import CLAVE_EJECUTIVO_ACTUAL, obtener_valor
 from gestor_credito.db.database import get_connection
 from gestor_credito.ui.accesibilidad import activar_con_enter
@@ -21,6 +28,16 @@ COLUMNAS = [
     "Nombre del Cliente", "Identificación", "Teléfono", "Monto Solicitado",
     "Destino del Crédito", "Microseguro", "Estado Solicitud", "Etapa Proceso",
     "Responsable Actual", "Decisión", "Motivo No Aplica / Desistimiento", "Observaciones",
+]
+
+# Opciones del combobox "Filtrar por alerta": (texto mostrado, valor interno
+# de gestor_credito/db/casos.py). Solo aplica con la búsqueda vacía — con un
+# término de cédula/nombre escrito, se ignora igual que ejecutivo_actual.
+FILTRO_ALERTA_OPCIONES = [
+    ("Todos", FILTRO_ALERTA_TODOS),
+    ("Documentos pendientes", FILTRO_ALERTA_DOCUMENTOS_PENDIENTES),
+    ("En espera de constancia", FILTRO_ALERTA_CONSTANCIA_PENDIENTE),
+    ("Constancia en mano sin respuesta", FILTRO_ALERTA_CONSTANCIA_EN_MANO),
 ]
 
 
@@ -53,7 +70,7 @@ class CasosPanel(wx.Panel):
         sizer.Add(self._crear_panel_edicion(), 0, wx.EXPAND | wx.ALL, 8)
 
         self.SetSizer(sizer)
-        self._cargar_casos()
+        self._cargar_casos(avisar_sin_resultados=False)
 
     def _crear_busqueda(self):
         box = wx.StaticBoxSizer(wx.HORIZONTAL, self, "Buscar")
@@ -72,7 +89,17 @@ class CasosPanel(wx.Panel):
         limpiar_btn.Bind(wx.EVT_BUTTON, self._on_limpiar_busqueda)
         activar_con_enter(limpiar_btn)
 
-        for control in (label, self.busqueda_texto, buscar_btn, limpiar_btn):
+        filtro_label = wx.StaticText(contenedor, label="Filtrar por alerta:")
+        self.filtro_alerta_choice = wx.Choice(
+            contenedor, choices=[texto for texto, _valor in FILTRO_ALERTA_OPCIONES]
+        )
+        self.filtro_alerta_choice.SetName("Filtrar por alerta")
+        self.filtro_alerta_choice.SetSelection(0)
+        self.filtro_alerta_choice.Bind(
+            wx.EVT_CHOICE, lambda event: self._cargar_casos(avisar_sin_resultados=False)
+        )
+
+        for control in (label, self.busqueda_texto, buscar_btn, limpiar_btn, filtro_label, self.filtro_alerta_choice):
             box.Add(control, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
 
         return box
@@ -128,7 +155,8 @@ class CasosPanel(wx.Panel):
 
     def _on_limpiar_busqueda(self, event):
         self.busqueda_texto.SetValue("")
-        self._cargar_casos()
+        self.filtro_alerta_choice.SetSelection(0)
+        self._cargar_casos(avisar_sin_resultados=False)
 
     def recargar(self):
         """Vuelve a consultar la base de datos con la búsqueda/agente actuales.
@@ -137,16 +165,28 @@ class CasosPanel(wx.Panel):
         ejecutivo_actual hecho en Configuración se refleje sin que el usuario
         tenga que volver a apretar "Buscar" a mano.
         """
-        self._cargar_casos()
+        self._cargar_casos(avisar_sin_resultados=False)
 
-    def _cargar_casos(self):
+    def _cargar_casos(self, avisar_sin_resultados=True):
+        """avisar_sin_resultados controla el wx.MessageBox de "Sin resultados":
+        solo debe dispararse ante una búsqueda EXPLÍCITA (Enter/"Buscar"), no
+        ante un refresco silencioso (carga inicial, recargar(), "Limpiar
+        búsqueda") ni, sobre todo, ante cada cambio del combobox "Filtrar por
+        alerta" — este último se dispara con cada flecha arriba/abajo mientras
+        se navega el combobox, y abrir un diálogo modal en cada tecla dejaba
+        el filtro inusable (reporte real del usuario). El estado siempre
+        queda igual reflejado en la barra de estado, con o sin el popup.
+        """
         termino = self.busqueda_texto.GetValue().strip() or None
+        _texto, filtro_alerta = FILTRO_ALERTA_OPCIONES[self.filtro_alerta_choice.GetSelection()]
 
         conn = get_connection()
         try:
             ejecutivo_actual = obtener_valor(conn, CLAVE_EJECUTIVO_ACTUAL)
             try:
-                self._filas = buscar_casos(conn, ejecutivo_actual=ejecutivo_actual, termino=termino)
+                self._filas = buscar_casos(
+                    conn, ejecutivo_actual=ejecutivo_actual, termino=termino, filtro_alerta=filtro_alerta
+                )
             except ValueError as exc:
                 self._filas = []
                 self._refrescar_lista()
@@ -163,7 +203,8 @@ class CasosPanel(wx.Panel):
         else:
             mensaje = "No se encontraron resultados."
             self.GetTopLevelParent().SetStatusText(mensaje)
-            wx.MessageBox(mensaje, "Sin resultados", wx.OK | wx.ICON_INFORMATION, self)
+            if avisar_sin_resultados:
+                wx.MessageBox(mensaje, "Sin resultados", wx.OK | wx.ICON_INFORMATION, self)
 
     def _refrescar_lista(self):
         self.lista.DeleteAllItems()
@@ -191,7 +232,7 @@ class CasosPanel(wx.Panel):
             _caso_id, fecha_registro, no_presolicitud, ejecutivo, empresa_convenio,
             nombre, cedula, telefono, monto_solicitado, destino_credito, microseguro,
             estado, etapa, responsable_actual, decision, motivo_no_aplica, observaciones,
-            _cliente_id, _documentos_completos_fecha,
+            _cliente_id, _documentos_completos_fecha, _constancia_recibida_fecha,
         ) = fila
 
         monto_texto = f"{monto_solicitado:,.2f}" if monto_solicitado is not None else ""
@@ -215,7 +256,7 @@ class CasosPanel(wx.Panel):
             caso_id, _fecha_registro, no_presolicitud, _ejecutivo, _empresa_convenio,
             nombre, cedula, _telefono, _monto_solicitado, _destino_credito, _microseguro,
             estado, etapa, _responsable_actual, _decision, _motivo_no_aplica, _observaciones,
-            cliente_id, documentos_completos_fecha,
+            cliente_id, documentos_completos_fecha, _constancia_recibida_fecha,
         ) = fila
 
         self._caso_seleccionado_id = caso_id
