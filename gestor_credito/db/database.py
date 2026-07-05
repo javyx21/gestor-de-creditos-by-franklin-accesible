@@ -1,11 +1,14 @@
 import sqlite3
 from pathlib import Path
 
-from gestor_credito.catalogos import ESTADO_DESEMBOLSADA, ESTADO_EN_ESPERA_CONSTANCIA
+from gestor_credito.catalogos import ESTADO_DESEMBOLSADA, ESTADO_EN_ESPERA_CONSTANCIA, ESTADO_EN_PROCESO
 
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "gestor_credito.db"
 
-__all__ = ["DB_PATH", "ESTADO_EN_ESPERA_CONSTANCIA", "ESTADO_DESEMBOLSADA", "get_connection", "init_db"]
+__all__ = [
+    "DB_PATH", "ESTADO_EN_ESPERA_CONSTANCIA", "ESTADO_EN_PROCESO", "ESTADO_DESEMBOLSADA",
+    "get_connection", "init_db",
+]
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS cliente (
@@ -67,8 +70,9 @@ CREATE TABLE IF NOT EXISTS caso (
     estado_solicitud_fecha_cambio TEXT NOT NULL DEFAULT (datetime('now')),
 
     -- NO viene del Excel. La pone el IMPORTADOR automáticamente (fecha del sistema en el
-    -- momento de importar) al detectar que estado_solicitud pasó de 'En espera de
-    -- constancia' a cualquier otro valor. Dispara el plazo de 48h para dar respuesta.
+    -- momento de importar) al detectar que estado_solicitud pasó específicamente de
+    -- 'En espera de constancia' a 'En proceso' (no cualquier otro valor). Dispara la
+    -- Alerta "Constancia en mano" (48h para dar respuesta, ver gestor_credito/alertas.py).
     constancia_recibida_fecha TEXT,
 
     -- Auditoría interna, no viene del Excel.

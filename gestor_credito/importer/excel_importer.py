@@ -3,7 +3,7 @@ from datetime import date, datetime
 
 import openpyxl
 
-from gestor_credito.db.database import ESTADO_EN_ESPERA_CONSTANCIA, get_connection
+from gestor_credito.db.database import ESTADO_EN_ESPERA_CONSTANCIA, ESTADO_EN_PROCESO, get_connection
 
 # Columnas de la bitácora de MIDESA cuyo valor es una fecha y debe normalizarse a
 # texto ISO (YYYY-MM-DD) sin importar si openpyxl las entrega como datetime o texto.
@@ -243,7 +243,10 @@ def _upsert_caso(conn, cliente_id, clave_caso, data):
 
     if estado_nuevo != estado_anterior:
         set_sql.append("estado_solicitud_fecha_cambio = datetime('now')")
-        if estado_anterior == ESTADO_EN_ESPERA_CONSTANCIA:
+        # Solo esta transición puntual arranca el reloj de 48h de la Alerta
+        # "Constancia en mano": no cualquier salida de "En espera de
+        # constancia" (p. ej. a "No aplica" o "Cliente desistió" no cuenta).
+        if estado_anterior == ESTADO_EN_ESPERA_CONSTANCIA and estado_nuevo == ESTADO_EN_PROCESO:
             set_sql.append("constancia_recibida_fecha = datetime('now')")
 
     params.append(caso_id)

@@ -5,6 +5,8 @@ venv/
 data/
 *.egg-info/
 .pytest_cache/
+desktop.ini
+Thumbs.db
 
 # Datos reales de clientes (nombres, cédulas) — nunca deben ir al repositorio.
 MachoteBaseDeDatos.xlsx

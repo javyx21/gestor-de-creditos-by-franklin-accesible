@@ -141,13 +141,13 @@ def test_reimportar_mismo_caso_no_duplica(db, tmp_path):
     assert total_clientes == 1
 
 
-def test_cambio_de_estado_marca_constancia_recibida(db, tmp_path):
+def test_cambio_a_en_proceso_marca_constancia_recibida(db, tmp_path):
     excel_path = tmp_path / "bitacora.xlsx"
     _escribir_excel(excel_path, [_fila(**{"Estado Solicitud": "En espera de constancia"})])
     import_bitacora(excel_path)
 
     excel_path_2 = tmp_path / "bitacora_2.xlsx"
-    _escribir_excel(excel_path_2, [_fila(**{"Estado Solicitud": "Aprobado"})])
+    _escribir_excel(excel_path_2, [_fila(**{"Estado Solicitud": "En proceso"})])
     import_bitacora(excel_path_2)
 
     conn = db.get_connection()
@@ -156,8 +156,29 @@ def test_cambio_de_estado_marca_constancia_recibida(db, tmp_path):
     ).fetchone()
     conn.close()
 
-    assert caso[0] == "Aprobado"
+    assert caso[0] == "En proceso"
     assert caso[1] is not None
+
+
+def test_cambio_a_otro_estado_no_marca_constancia_recibida(db, tmp_path):
+    # Solo la transición puntual "En espera de constancia" -> "En proceso" marca
+    # constancia_recibida_fecha; salir hacia cualquier otro estado no cuenta.
+    excel_path = tmp_path / "bitacora.xlsx"
+    _escribir_excel(excel_path, [_fila(**{"Estado Solicitud": "En espera de constancia"})])
+    import_bitacora(excel_path)
+
+    excel_path_2 = tmp_path / "bitacora_2.xlsx"
+    _escribir_excel(excel_path_2, [_fila(**{"Estado Solicitud": "No aplica"})])
+    import_bitacora(excel_path_2)
+
+    conn = db.get_connection()
+    caso = conn.execute(
+        "SELECT estado_solicitud, constancia_recibida_fecha FROM caso"
+    ).fetchone()
+    conn.close()
+
+    assert caso[0] == "No aplica"
+    assert caso[1] is None
 
 
 def test_fila_sin_cedula_se_omite(db, tmp_path):

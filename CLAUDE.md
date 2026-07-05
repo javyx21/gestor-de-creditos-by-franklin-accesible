@@ -144,9 +144,12 @@ row, match on (`cliente.cedula`, `caso.clave_caso`):
   for its own columns on every reimport, including `estado_solicitud`/`etapa_proceso`). Before
   overwriting `estado_solicitud`, compare old vs. new value:
   - If it changed at all, reset `estado_solicitud_fecha_cambio` to "now".
-  - If the old value was `ESTADO_EN_ESPERA_CONSTANCIA` ("En espera de constancia") and the new
-    value is different, additionally stamp `constancia_recibida_fecha` = now — this is the *only*
-    way constancia-received is detected (no manual step), and it starts the 48h response clock.
+  - If the old value was `ESTADO_EN_ESPERA_CONSTANCIA` ("En espera de constancia") **and** the new
+    value is specifically `ESTADO_EN_PROCESO` ("En proceso") — not just "any different value" —
+    additionally stamp `constancia_recibida_fecha` = now. Confirmed with the user: transitioning
+    to any other state (e.g. "No aplica", "Cliente desistió") does not start this clock. This is
+    the *only* way constancia-received is detected (no manual step), and it starts the 48h
+    response clock for the "Constancia en mano" alert (see Alerts section below).
 
 All case dates that the Excel actually provides (`fecha_registro`, `fecha_ultima_gestion`, etc.)
 come from the Excel's own date columns — never from the moment the file happens to be imported.
@@ -181,28 +184,60 @@ The **Excel import UI also lives on this tab now** (moved from a former standalo
 — see "UI implemented so far" below for why), since importing and configuring your agent are both
 one-time/infrequent setup actions, unlike the Casos tab which is the daily-use screen.
 
-## Alerts / workflow (not yet implemented — planned)
+## Alerts / workflow
 
-Two independent alerts, both scoped to the configured `ejecutivo_actual` and both computed live
-from `cliente`/`caso` state rather than stored as separate alert rows. A client or case can have
-both active at once — they don't suppress each other.
+Implemented in `gestor_credito/db/alertas.py` (pure query functions, no UI) and surfaced by
+`gestor_credito/ui/notificaciones_panel.py` (`NotificacionesPanel`, the **Notificaciones** tab).
+Three alerts, all scoped to the configured `ejecutivo_actual` (like the Casos tab's default view)
+and computed **live** from `cliente`/`caso` state on each refresh — never stored as separate alert
+rows. A client/case can have more than one active at once; they don't suppress each other. Time
+thresholds are computed with SQLite's `julianday('now')` (always UTC), not Python's
+`datetime.now()`, to avoid mixing UTC-stamped columns (`datetime('now')` defaults) with local time
+and silently shifting every threshold by the local UTC offset.
 
-1. **Alerta 1 — documentación de cliente nuevo** (per `cliente`, regardless of `estado_solicitud`):
-   active while `documentos_completos_fecha IS NULL`. Fires at 24h and 48h after
-   `cliente.fecha_creacion`, then keeps repeating every 24h indefinitely (72h, 96h, ...) until the
-   user marks `documentos_completos_fecha`, which turns it off permanently for that cliente.
-2. **Alerta 2 — constancia pendiente** (per `caso`, independent of Alerta 1): active while
+1. **Documentos pendientes** (`alertas_documentos_pendientes`, per `cliente`, regardless of
+   `estado_solicitud`): active while `documentos_completos_fecha IS NULL` and ≥24h have passed
+   since `cliente.fecha_creacion`. Does **not** turn off by itself after 48h or any later point —
+   it keeps firing every time the alert list is recomputed, indefinitely, until the user marks
+   `documentos_completos_fecha` via `marcar_documentos_completos()` (button "Marcar documentos
+   completados" in Notificaciones, enabled only when a row of this type is selected), which turns
+   it off permanently for that cliente. The `ejecutivo` used to scope this alert is read from the
+   *first* caso that introduced that cliente (`MIN(fecha_creacion_registro)`, tie-broken by
+   `MIN(id)`), since `documentos_completos_fecha` lives on `cliente`, not `caso`.
+2. **Constancia pendiente** (`alertas_constancia_pendiente`, per `caso`): active while
    `estado_solicitud == ESTADO_EN_ESPERA_CONSTANCIA` and ≥7 days have passed since
-   `estado_solicitud_fecha_cambio`. Checked/sounded twice daily at 09:00 and 16:00, and keeps
-   firing every day the Excel keeps reporting that same estado for that case. Turns off only when
-   a reimport shows a different `estado_solicitud` for that case (see Import behavior above),
-   which simultaneously stamps `constancia_recibida_fecha` and starts the 48h response clock:
-   `estado_solicitud != ESTADO_DESEMBOLSADA` ("Desembolsada") ≥48h after `constancia_recibida_fecha`
-   is its own condition worth surfacing (not necessarily a third recurring alert — TBD when this
-   gets built).
+   `estado_solicitud_fecha_cambio`. Turns off as soon as a reimport (or manual edit) changes
+   `estado_solicitud` away from "En espera de constancia" (which resets
+   `estado_solicitud_fecha_cambio`, see Import behavior above).
+3. **Constancia en mano** (`alertas_constancia_en_mano`, per `caso`): active while
+   `constancia_recibida_fecha IS NOT NULL`, `estado_solicitud != ESTADO_DESEMBOLSADA`, and ≥48h
+   have passed since `constancia_recibida_fecha` (stamped by the importer specifically on the
+   "En espera de constancia" → "En proceso" transition — see Import behavior above). **Assumption,
+   not yet explicitly confirmed with the user**: reaching `ESTADO_DESEMBOLSADA` turns this alert
+   off for good, on the theory that a disbursed case no longer needs nagging — flag if wrong.
 
-Both alerts play a WAV sound and surface only inside a dedicated **Notificaciones** tab (grouped
-list, never individual popups) — consistent with the no-popups UI rule above.
+All three play a WAV sound via `gestor_credito/ui/sonido.py` (`reproducir_sonido()`, using
+`wx.adv.Sound` — silently does nothing if the file isn't present yet, so a missing sound never
+crashes the app or blocks NVDA) and surface only inside the **Notificaciones** tab (one grouped
+`wx.ListCtrl`, columns Tipo de alerta/Nombre/Identificación/Caso/Desde — never individual popups),
+consistent with the no-popups UI rule above. Sound filenames, agreed with the user, live in
+`gestor_credito/assets/sonidos/` (a subfolder of assets, separate from `logo.png`):
+`datosPendientes.wav` (documentos pendientes), `alerta.wav` (constancia pendiente),
+`alertaMaxima.wav` (constancia en mano). These `.wav` files are real audio assets the user
+supplies directly (like `logo.png`), not something generated by Claude Code.
+
+Like Casos, `NotificacionesPanel.recargar()` is called automatically by `MainFrame` whenever the
+Notificaciones tab becomes active (`EVT_NOTEBOOK_PAGE_CHANGED`), plus on an explicit "Actualizar"
+button — there is no background timer/scheduler checking on a fixed clock (e.g. 09:00/16:00); the
+list is only as fresh as the last time the tab was opened or refreshed. Flag if a background
+schedule turns out to be required instead.
+
+**Not yet implemented / out of scope of the above**: a separate "amarilla" alert (7 days without
+an update while `etapa_proceso == "Completar expediente / requisitos"`) and "roja" alert (3 days
+in `etapa_proceso == "Desembolso"`) were mentioned by the user as already-defined elsewhere:
+neither exists yet in this codebase (no schema column tracks "since when has etapa_proceso held
+its current value" the way `estado_solicitud_fecha_cambio` does for Estado Solicitud), and the
+user asked for them to be left alone in this round of work. Don't assume they exist.
 
 ## Filters and reporting
 
@@ -236,11 +271,14 @@ alerts, not reports.
 
 ## UI implemented so far
 
-`MainFrame` hosts a `wx.Notebook` with two tabs, in this order (`gestor_credito/ui/main_frame.py`):
-**Casos** (the daily-use screen) and **Configuración** (one-time/infrequent setup — agent name +
-Excel import). There used to be a third, standalone "Importar" tab; it was folded into
-Configuración because importing and setting your agent are both setup actions, not something
-you do while working a case, and the user wanted fewer top-level tabs.
+`MainFrame` hosts a `wx.Notebook` with three tabs, in this order (`gestor_credito/ui/main_frame.py`):
+**Casos** (the daily-use screen), **Notificaciones** (the alerts list — see Alerts/workflow above),
+and **Configuración** (one-time/infrequent setup — agent name + Excel import). There used to be a
+separate, standalone "Importar" tab; it was folded into Configuración because importing and
+setting your agent are both setup actions, not something you do while working a case, and the user
+wanted fewer top-level tabs. `MainFrame` binds `EVT_NOTEBOOK_PAGE_CHANGED` so both Casos and
+Notificaciones recompute their live data (`recargar()`) every time the user switches into them —
+neither tab is a one-shot load-on-init screen.
 
 - **Casos** (`casos_panel.py`): a single combined search box above a `wx.ListCtrl` showing
   16 columns, in this exact order (user-specified, matches `buscar_casos()`'s internal `SELECT`
@@ -272,27 +310,35 @@ you do while working a case, and the user wanted fewer top-level tabs.
   no selection rather than crashing (`_seleccionar_en_choice` uses `FindString`, which returns
   `wx.NOT_FOUND` safely). "Guardar cambios" calls `actualizar_edicion_manual()`, which never
   touches `constancia_recibida_fecha` (only the importer sets that).
-- **Configuración** (`configuracion_panel.py`): a plain `wx.TextCtrl` (`agente_texto`, with
-  `TE_PROCESS_ENTER` + `EVT_TEXT_ENTER` wired the same way as the Casos search box) to set
-  `ejecutivo_actual`, persisted via `gestor_credito/db/configuracion.py`; and the Excel import UI
-  (file picker + "Importar" + read-only result text area) that used to be its own tab. This field
-  used to be an editable `wx.ComboBox` pre-populated with `obtener_ejecutivos()` as suggestions —
-  changed to a plain text field after the user reported being unable to switch to a different
-  agent once one was saved (editable combo boxes are a known trouble spot for screen readers:
-  ambiguous whether you're typing free text or navigating the dropdown history). If a similar
-  "can't type over this field" report comes up elsewhere, suspect the widget choice first — prefer
-  plain `wx.TextCtrl` over `wx.ComboBox` unless a closed, fixed-choice list is genuinely correct
-  (like the `wx.Choice` dropdowns for Estado Solicitud/Etapa Proceso, which aren't free text).
-  Losing the combo's suggestion dropdown also lost discoverability of which ejecutivos already
-  exist — restored as a separate **read-only** `agentes_existentes_texto` `wx.StaticText` below
-  the input ("Agentes ya vistos en casos importados: X, Y, Z"), refreshed on load and after every
-  import. Deliberately not interactive/clickable: the point of the earlier bug was that mixing
-  "pick from a list" and "type free text" into one control is what broke it, so the fix keeps
-  them as two separate controls — an editable field plus an informational label — instead of
-  reintroducing that ambiguity.
-  **Not implemented yet**: marking a cliente's `documentos_completos_fecha` (the manual action that
-  permanently silences Alerta 1) — that belongs here too per the user's stated structure, but it's
-  part of the alerts module work that's explicitly deferred; don't assume it exists.
+- **Notificaciones** (`notificaciones_panel.py`): see Alerts/workflow above for the full design.
+  One `wx.ListCtrl` ("Lista de alertas activas") grouping all three active alert types, an
+  "Actualizar" button, and a "Marcar documentos completados" button that's only enabled when the
+  selected row is a "Documentos pendientes" alert (mirrors the selection-driven edit panel in
+  Casos). Marking calls `marcar_documentos_completos()` and immediately recomputes the list.
+- **Configuración** (`configuracion_panel.py`): the agent picker went through three iterations —
+  worth knowing the history if a similar "can't change X" report comes up elsewhere:
+  1. An editable `wx.ComboBox` pre-populated with `obtener_ejecutivos()` as suggestions — dropped
+     after the user reported being unable to switch to a different agent once one was saved
+     (editable combo boxes are a known trouble spot for screen readers: ambiguous whether you're
+     typing free text or navigating the dropdown history).
+  2. A plain `wx.TextCtrl` plus a separate **read-only** label listing known agents — fixed the
+     ComboBox ambiguity, but the user then reported this *still* didn't let them actually switch
+     agent: the label was just informational text, not something you could act on, so you had to
+     already know and retype the exact agent name by hand.
+  3. **Current design**: a single closed `wx.Choice` ("Escoge un agente", populated from
+     `obtener_ejecutivos()` — every agent comes from the imported bitácora, so free-text entry
+     isn't needed at all) plus one "Guardar y usar este agente" button that saves
+     `agentes_choice.GetStringSelection()` straight to `ejecutivo_actual`. The currently configured
+     agent is pre-selected on load (`FindString` + `SetSelection`, safely falling back to no
+     selection via `wx.NOT_FOUND` if it's not in the list). **Enter-key bug**: with focus in a
+     native Windows `wx.Choice`, Enter is consumed by the OS combobox before a plain
+     `EVT_KEY_DOWN` handler on the control ever sees it — confirmed by testing `EVT_KEY_DOWN`
+     directly on `agentes_choice`, which did nothing. Fixed by binding `wx.EVT_CHAR_HOOK` on the
+     panel itself (which intercepts the keystroke earlier, before the native control swallows it)
+     and checking `wx.Window.FindFocus() is self.agentes_choice`. If Enter silently does nothing in
+     some *other* control later, suspect this same native-control-eats-the-key issue first.
+  Also here: the Excel import UI (file picker + "Importar" + read-only result text area) that used
+  to be its own standalone tab.
 
 Judgment calls made while building this that are worth the user's attention:
 
@@ -333,17 +379,21 @@ gestor_credito/
   catalogos.py                  # fixed value lists from 02_Catalogos (Estado Solicitud, Etapa Proceso)
   assets/
     logo.png                     # real logo, 2048x2048px — AppLogo scales it down for display
+    sonidos/                      # .wav alert sounds, supplied by the user (not generated by Claude)
   ui/
     main_frame.py                # wx.Frame with the wx.Notebook that hosts every tab
     logo.py                       # AppLogo — the accessible logo shown on every tab
+    sonido.py                     # reproducir_sonido() — plays a .wav from assets/sonidos/ via wx.adv.Sound
     fechas.py                     # ISO <-> DD/MM/AAAA date formatting for the UI boundary
     accesibilidad.py               # activar_con_enter() — apply to every wx.Button, see below
     casos_panel.py                 # "Casos" tab (search/list/manually edit)
+    notificaciones_panel.py         # "Notificaciones" tab (alert list, see Alerts/workflow)
     configuracion_panel.py          # "Configuración" tab (agente actual + importar Excel)
   db/
     database.py                  # sqlite3 connection + schema management
     casos.py                      # queries/updates for the caso entity (search, filter, edit)
     configuracion.py              # get/set for the configuracion key-value table
+    alertas.py                     # live alert queries (documentos/constancia pendiente/en mano)
   importer/
     excel_importer.py             # reads the MIDESA bitácora, upserts cliente/caso
   export/
