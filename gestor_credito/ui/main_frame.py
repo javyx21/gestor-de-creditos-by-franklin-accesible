@@ -1,6 +1,8 @@
 import wx
 
 from gestor_credito.db.database import init_db
+from gestor_credito.ui.atajos import ATAJOS
+from gestor_credito.ui.ayuda_panel import AyudaPanel
 from gestor_credito.ui.casos_panel import CasosPanel
 from gestor_credito.ui.configuracion_panel import ConfiguracionPanel
 from gestor_credito.ui.notificaciones_panel import NotificacionesPanel
@@ -80,6 +82,7 @@ class MainFrame(wx.Frame):
         self.SetSizer(sizer)
 
         self._crear_menu()
+        self._crear_atajos()
 
     def _crear_menu(self):
         menu_bar = wx.MenuBar()
@@ -94,13 +97,57 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_abrir_configuracion, item_configuracion)
         menu_bar.Append(menu_configuracion, "&Configuración")
 
+        menu_ayuda = wx.Menu()
+        item_atajos = menu_ayuda.Append(wx.ID_ANY, "&Atajos de teclado...")
+        self.Bind(wx.EVT_MENU, self._on_abrir_ayuda, item_atajos)
+        menu_bar.Append(menu_ayuda, "A&yuda")
+
         self.SetMenuBar(menu_bar)
+
+    def _crear_atajos(self):
+        """Arma el wx.AcceleratorTable de la ventana a partir del registro
+        central de gestor_credito/ui/atajos.py (única fuente de verdad,
+        compartida con la pestaña Ayuda). Cada entrada apunta a un método
+        público de CasosPanel — ver ese diccionario más abajo — para no
+        necesitar un import circular entre atajos.py y este módulo.
+
+        ATAJOS también documenta mnemónicos de botón/menú y atajos "de
+        sistema" que ya funcionan solos (ver atajos.py): esas filas traen
+        accion=None y se saltan acá, no necesitan un binding.
+
+        Solo tiene efecto con foco dentro de MainFrame: mientras un diálogo
+        modal (Notificaciones/Configuración) está abierto, Windows enruta el
+        teclado ahí primero, así que estos atajos quedan inactivos sin
+        necesidad de deshabilitarlos a mano.
+        """
+        acciones = {
+            "enfocar_busqueda": self.casos_panel.enfocar_busqueda,
+            "enfocar_resultados": self.casos_panel.enfocar_resultados,
+            "limpiar_busqueda": self.casos_panel.limpiar_busqueda,
+        }
+
+        entradas = []
+        for modificador, tecla, _texto, _seccion, _descripcion, accion in ATAJOS:
+            if accion is None:
+                continue
+            id_atajo = wx.NewIdRef()
+            self.Bind(wx.EVT_MENU, self._crear_manejador_atajo(acciones[accion]), id=id_atajo)
+            entradas.append(wx.AcceleratorEntry(modificador, tecla, id_atajo))
+
+        self.SetAcceleratorTable(wx.AcceleratorTable(entradas))
+
+    @staticmethod
+    def _crear_manejador_atajo(metodo):
+        return lambda event: metodo()
 
     def _on_abrir_notificaciones(self, event):
         self._abrir_dialogo("Notificaciones", NotificacionesPanel)
 
     def _on_abrir_configuracion(self, event):
         self._abrir_dialogo("Configuración", ConfiguracionPanel)
+
+    def _on_abrir_ayuda(self, event):
+        self._abrir_dialogo("Ayuda", AyudaPanel)
 
     def _abrir_dialogo(self, titulo, panel_cls):
         with _PanelDialog(self, titulo, panel_cls) as dialogo:

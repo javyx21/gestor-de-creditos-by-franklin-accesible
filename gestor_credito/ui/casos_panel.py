@@ -20,6 +20,7 @@ from gestor_credito.db.database import get_connection
 from gestor_credito.ui.accesibilidad import activar_con_enter
 from gestor_credito.ui.fechas import formatear_fecha
 from gestor_credito.ui.logo import AppLogo
+from gestor_credito.ui.sonido import SONIDO_LIMPIAR_BUSQUEDA, reproducir_sonido
 
 # Orden y set de columnas pedido por el usuario para la lista de Casos. Debe
 # coincidir en orden con el SELECT interno de buscar_casos() en gestor_credito/db/casos.py.
@@ -154,9 +155,39 @@ class CasosPanel(wx.Panel):
         return box
 
     def _on_limpiar_busqueda(self, event):
+        self.limpiar_busqueda()
+
+    def limpiar_busqueda(self):
+        """Vacía la búsqueda y el filtro de alerta. Reproduce un sonido de
+        confirmación (borrar.wav) porque limpiar no deja ningún cambio visual
+        obvio con foco en el botón — pedido explícito del usuario para
+        confirmar que sí se borró todo sin tener que leer la barra de estado
+        a mano. Público (no "_on_...") porque también lo dispara el atajo
+        Alt+L (ver gestor_credito/ui/atajos.py y MainFrame._crear_atajos)."""
         self.busqueda_texto.SetValue("")
         self.filtro_alerta_choice.SetSelection(0)
         self._cargar_casos(avisar_sin_resultados=False)
+        reproducir_sonido(SONIDO_LIMPIAR_BUSQUEDA)
+
+    def enfocar_busqueda(self):
+        """Atajo Ctrl+F: lleva el foco directo al cuadro de búsqueda sin
+        importar qué control tenga el foco en ese momento."""
+        self.busqueda_texto.SetFocus()
+        self.busqueda_texto.SelectAll()
+
+    def enfocar_resultados(self):
+        """Atajo Ctrl+R: lleva el foco a la lista de resultados de Casos. Si
+        no hay ningún ítem seleccionado todavía, selecciona el primero para
+        que las flechas funcionen de inmediato al llegar con el atajo."""
+        if self.lista.GetItemCount() == 0:
+            self.lista.SetFocus()
+            return
+
+        if self.lista.GetFirstSelected() == -1:
+            estado = wx.LIST_STATE_SELECTED | wx.LIST_STATE_FOCUSED
+            self.lista.SetItemState(0, estado, estado)
+
+        self.lista.SetFocus()
 
     def recargar(self):
         """Vuelve a consultar la base de datos con la búsqueda/agente actuales.
