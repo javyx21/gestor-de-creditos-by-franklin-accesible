@@ -1,9 +1,28 @@
 import sqlite3
+import sys
 from pathlib import Path
 
 from gestor_credito.catalogos import ESTADO_DESEMBOLSADA, ESTADO_EN_ESPERA_CONSTANCIA, ESTADO_EN_PROCESO
 
-DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "gestor_credito.db"
+
+def _directorio_base():
+    """Carpeta base para data/gestor_credito.db.
+
+    Empaquetada con PyInstaller, __file__ apunta adentro de la carpeta interna
+    del bundle (p. ej. _internal/), no junto al .exe — usar eso tal cual
+    dejaría la base de datos enterrada ahí en vez de junto al ejecutable, y
+    rompería del todo con un empaquetado --onefile (esa carpeta es temporal,
+    se borra al cerrar la app y se vuelve a crear vacía en el próximo inicio,
+    perdiendo todos los datos). sys.executable sí apunta siempre al .exe real
+    en cualquier modo de empaquetado, así que la base de datos queda visible
+    junto a él, persistiendo entre ejecuciones — necesario para que la app sea
+    realmente portable en un pendrive."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent.parent
+
+
+DB_PATH = _directorio_base() / "data" / "gestor_credito.db"
 
 __all__ = [
     "DB_PATH", "ESTADO_EN_ESPERA_CONSTANCIA", "ESTADO_EN_PROCESO", "ESTADO_DESEMBOLSADA",

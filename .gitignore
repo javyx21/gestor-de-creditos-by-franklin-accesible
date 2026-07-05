@@ -8,5 +8,10 @@ data/
 desktop.ini
 Thumbs.db
 
+# Artefactos de empaquetado con PyInstaller (ver README.md, sección "Empaquetado portable")
+build/
+dist/
+*.spec
+
 # Datos reales de clientes (nombres, cédulas) — nunca deben ir al repositorio.
 MachoteBaseDeDatos.xlsx

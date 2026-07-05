@@ -370,6 +370,24 @@ Note: on this machine, wxPython, openpyxl, and python-docx are already available
 Python install; `pytest` is not, so `pip install -r requirements.txt` (or `pip install pytest`)
 is needed before running tests.
 
+### Empaquetado portable (pendrive)
+
+```
+pyinstaller --name "GestorDeCredito" --windowed --noconfirm --add-data "gestor_credito/assets;gestor_credito/assets" main.py
+```
+
+Produces `dist/GestorDeCredito/` — the `.exe` plus a support folder
+(`_internal/`); the whole folder must be copied as a unit (--onedir, chosen
+over --onefile: faster startup, no self-extraction to a temp folder on every
+launch — confirmed with the user). `gestor_credito/db/database.py`'s
+`DB_PATH` is frozen-aware (`sys.frozen`/`sys.executable`) specifically so that
+`data/gestor_credito.db` is created next to the `.exe`, not inside the
+PyInstaller-internal bundle path that `__file__` would otherwise resolve to —
+this is what makes the data persist across runs and survive being moved to a
+different machine on a pendrive. Don't revert that check to a plain
+`Path(__file__)`-relative path; it would silently break portability. Build
+artifacts (`build/`, `dist/`, `*.spec`) are git-ignored.
+
 ## Architecture
 
 ```

@@ -32,3 +32,16 @@ python main.py
 ```
 pytest
 ```
+
+## Empaquetado portable (pendrive)
+
+```
+pip install pyinstaller
+pyinstaller --name "GestorDeCredito" --windowed --noconfirm --add-data "gestor_credito/assets;gestor_credito/assets" main.py
+```
+
+Genera `dist/GestorDeCredito/` (el .exe + la carpeta `_internal/` de soporte).
+Copiá la carpeta completa al pendrive — no muevas el .exe suelto fuera de
+ella. `data/gestor_credito.db` se crea junto al .exe en el primer inicio y
+queda ahí, persistiendo entre ejecuciones aunque se traslade la carpeta a otra
+máquina.
