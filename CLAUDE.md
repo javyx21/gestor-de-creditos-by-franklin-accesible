@@ -205,15 +205,25 @@ alerts 1 and 2 use `cliente.fecha_creacion` / `caso.estado_solicitud_fecha_cambi
 both are stamped once at INSERT and only touched again on a real value change (see Import behavior
 above and `actualizar_edicion_manual` in `db/casos.py`) — never anything importer/transition-specific.
 
-1. **Documentos pendientes** (`alertas_documentos_pendientes`, per `cliente`, regardless of
-   `estado_solicitud`): active while `documentos_completos_fecha IS NULL` and ≥24h have passed
-   since `cliente.fecha_creacion`. Does **not** turn off by itself after 48h or any later point —
-   it keeps firing every time the alert list is recomputed, indefinitely, until the user marks
+1. **Documentos pendientes** (`alertas_documentos_pendientes`, per `cliente`): active while
+   `documentos_completos_fecha IS NULL`, ≥24h have passed since `cliente.fecha_creacion`, **and**
+   the cliente has at least one caso whose `estado_solicitud` is not in `ESTADOS_CERRADOS`
+   (Desembolsada / No aplica / Cliente desistió — same closed-set already used by
+   `FILTRO_ALERTA_DOCUMENTOS_PENDIENTES` in `db/casos.py`). **This estado_solicitud exclusion was
+   added 2026-07-08 after a real production bug**: originally this alert fired "regardless of
+   estado_solicitud" by design, which meant a cliente whose only credit was already Desembolsada —
+   obviously already had complete documents to get there — kept alerting forever if nobody had ever
+   clicked the checkbox for them; 42 such stale alerts had piled up for one agent alone in real
+   production data (118 total, dropping to 25 after the fix). If a cliente has at least one *other*
+   still-open caso, the alert still fires normally — only clients with ALL their casos closed are
+   excluded. Does **not** turn off by itself after 48h or any later point once active — it keeps
+   firing every time the alert list is recomputed, indefinitely, until the user marks
    `documentos_completos_fecha` via `marcar_documentos_completos()` (button "Marcar documentos
-   completados" in Notificaciones and Casos, enabled only when a row/caso of this type is
-   selected), which turns it off permanently for that cliente — or reactivates it again via
-   `marcar_documentos_pendientes()` (Casos context menu only, see UI section below). The `ejecutivo`
-   used to scope this alert is read from the *first* caso that introduced that cliente
+   completados" in Notificaciones; in Casos, either the "Documentos completados (cliente)" checkbox
+   in the edit panel, or — the safer, deliberate path, see below — "Marcar documentos completados
+   (cliente)" in the context menu), which turns it off permanently for that cliente — or reactivates
+   it again via `marcar_documentos_pendientes()` (Casos context menu, see UI section below). The
+   `ejecutivo` used to scope this alert is read from the *first* caso that introduced that cliente
    (`MIN(fecha_creacion_registro)`, tie-broken by `MIN(id)`), since `documentos_completos_fecha`
    lives on `cliente`, not `caso`. **Known gap, not yet fixed**: `marcar_documentos_pendientes()`
    only clears `documentos_completos_fecha`; it doesn't touch `cliente.fecha_creacion`, so after a
@@ -223,6 +233,31 @@ above and `actualizar_edicion_manual` in `db/casos.py`) — never anything impor
    e.g. "hace 45 días" instead of reflecting the actual revert. Would need a dedicated
    `documentos_pendientes_desde` column (schema migration) to fix properly — flag to the user if it
    comes up before fixing.
+
+   **Second real production incident, same day**: the Casos edit-panel checkbox writes to the
+   database immediately on check (`EVT_CHECKBOX`), with no separate confirm step, and reaching it
+   with Tab during normal NVDA navigation is easy to do by accident — combined with the filtered
+   list not refreshing after marking (a second bug, now fixed in both the checkbox and the new menu
+   item below), several real unrelated clients got silently marked "documentos completados" over a
+   session without the user noticing, until an unrelated action finally refreshed the list and they
+   all vanished at once. **Fix, per explicit user decision**: the checkbox itself was left exactly
+   as-is (the user wants it kept for a sighted user to be able to use) — instead, the context menu
+   gained a new **"Marcar documentos completados (cliente)"** item next to the pre-existing "Marcar
+   como pendiente de completar documentos", giving a deliberate menu-navigate-then-Enter path that
+   doesn't risk an accidental Tab+Space trigger. This is the path the user (blind, tests with NVDA)
+   actually uses now. Don't remove or auto-fire the checkbox without asking first.
+
+   **Same-day visual/audio addition**: `CasosPanel` now highlights, in the main Casos list, any row
+   matching this same "still pending, not closed" criterion (`CasosPanel._documentos_pendientes()`)
+   with a light-red background (`wx.Colour(255, 214, 214)`) and dark-red text
+   (`wx.Colour(139, 0, 0)`) — contrast ≈7.5:1, passes WCAG AAA, verified by hand; don't change these
+   two colors without re-checking contrast. For the blind user, since color alone isn't an
+   accessible equivalent (WCAG 1.4.1), landing on such a row with the keyboard/NVDA (any
+   `EVT_LIST_ITEM_SELECTED`, i.e. arrows, Tab, or click) plays `documentoPendiente.wav`
+   (`SONIDO_FILA_DOCUMENTOS_PENDIENTES` in `ui/sonido.py`) — a *different* file from
+   `datosPendientes.wav` (`SONIDO_DOCUMENTOS_PENDIENTES`), which is the one-shot sound Notificaciones
+   plays once on open/refresh if any alert of this type exists; this new one is a per-row navigation
+   cue local to Casos, explicitly requested as the auditory equivalent of the red highlight.
 2. **Constancia pendiente** (`alertas_constancia_pendiente`, per `caso`): active while
    `estado_solicitud == ESTADO_EN_ESPERA_CONSTANCIA` and ≥7 days have passed since
    `estado_solicitud_fecha_cambio`. Turns off as soon as a reimport (or manual edit) changes
@@ -340,6 +375,28 @@ neither tab is a one-shot load-on-init screen.
   no selection rather than crashing (`_seleccionar_en_choice` uses `FindString`, which returns
   `wx.NOT_FOUND` safely). "Guardar cambios" calls `actualizar_edicion_manual()`, which never
   touches `constancia_recibida_fecha` (only the importer sets that).
+
+  **Real production incident, confirmed by the user (2026-07-07)**: the "Documentos completados
+  (cliente)" checkbox writes to the database immediately on check (`EVT_CHECKBOX`), with no
+  separate confirm step — unlike Notificaciones' "Marcar documentos completados", which requires
+  selecting a row *and* clicking a separate button. Reaching the checkbox with Tab and landing on
+  it is normal keyboard/NVDA navigation, and accidentally hitting Space on it silently commits
+  "documents received" for a real client with no undo from that panel. This combined with a second
+  bug — the filtered list wasn't refreshed after marking, so a marked case kept showing in
+  "Documentos pendientes" with no visible change — meant several real, unrelated clients got marked
+  complete by accident over a session without the user noticing, until an unrelated action (Guardar
+  cambios) finally refreshed the list and they all vanished at once, looking like one action had
+  wrongly mass-marked 10 people. **Fix, per explicit user decision**: the checkbox itself stays
+  exactly as-is (immediate on-check write, no confirm step) — the user wants it left alone for a
+  sighted user to be able to use it. Instead, the context menu (`_construir_menu_contextual`) got a
+  new **"Marcar documentos completados (cliente)"** item, next to the pre-existing "Marcar como
+  pendiente de completar documentos", so a deliberate menu navigation + Enter is available as the
+  safe path — this is the one the user (blind, tests with NVDA) actually uses now that they know
+  the checkbox can trigger by accident. Both the checkbox and the new menu item now call
+  `self._cargar_casos()` right after writing, so the list refreshes immediately either way — that
+  refresh gap was a real bug regardless of which path is used, fixed for both. If a similar
+  "changed without asking" report comes up again for this checkbox, don't touch it without asking
+  first — the checkbox behavior itself is confirmed intentional, not an oversight.
 - **Notificaciones** (`notificaciones_panel.py`): see Alerts/workflow above for the full design.
   One `wx.ListCtrl` ("Lista de alertas activas") grouping all three active alert types, an
   "Actualizar" button, and a "Marcar documentos completados" button that's only enabled when the

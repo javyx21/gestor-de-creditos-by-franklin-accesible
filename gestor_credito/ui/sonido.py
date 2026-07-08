@@ -17,6 +17,15 @@ SONIDO_CONSTANCIA_EN_MANO = "alertaMaxima.wav"
 # estado a mano.
 SONIDO_BORRAR = "borrar.wav"
 
+# Distinto de SONIDO_DOCUMENTOS_PENDIENTES (datosPendientes.wav, que suena una
+# sola vez al abrir/actualizar Notificaciones si hay alguna alerta activa).
+# Este suena en Casos cada vez que el usuario navega con el lector de pantalla
+# hasta una fila cuyo cliente todavía tiene documentos pendientes — pedido
+# explícito del usuario (ciego, navega con NVDA) como equivalente auditivo del
+# resaltado en rojo que ve un vidente en esa misma fila, para no depender de
+# que alguien le lea la lista de Notificaciones para enterarse.
+SONIDO_FILA_DOCUMENTOS_PENDIENTES = "documentoPendiente.wav"
+
 
 def reproducir_sonido(nombre_archivo):
     """Reproduce un .wav de gestor_credito/assets/sonidos/ en forma asíncrona.

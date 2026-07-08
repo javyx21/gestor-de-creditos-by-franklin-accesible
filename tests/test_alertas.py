@@ -96,6 +96,29 @@ def test_documentos_pendientes_se_apaga_al_marcar_completo(conn):
     assert alertas_documentos_pendientes(conn) == []
 
 
+def test_documentos_pendientes_no_activa_si_todos_los_casos_estan_cerrados(conn):
+    """Bug real reportado por el usuario en producción: un cliente cuyo único
+    crédito ya está Desembolsada obviamente tuvo documentos completos para
+    llegar hasta ahí — no debería seguir alertando para siempre solo porque
+    nadie marcó documentos_completos_fecha a mano. Mismo criterio que ya usa
+    el filtro de Casos (FILTRO_ALERTA_DOCUMENTOS_PENDIENTES)."""
+    cliente_id = _crear_cliente(conn, fecha_creacion=_hace(dias=10))
+    _crear_caso(conn, cliente_id, estado_solicitud="Desembolsada")
+
+    assert alertas_documentos_pendientes(conn) == []
+
+
+def test_documentos_pendientes_activa_si_al_menos_un_caso_sigue_abierto(conn):
+    cliente_id = _crear_cliente(conn, fecha_creacion=_hace(dias=10))
+    _crear_caso(conn, cliente_id, clave_caso="P-1", estado_solicitud="Desembolsada")
+    _crear_caso(conn, cliente_id, clave_caso="P-2", estado_solicitud="En proceso")
+
+    activas = alertas_documentos_pendientes(conn)
+
+    assert len(activas) == 1
+    assert activas[0]["cliente_id"] == cliente_id
+
+
 def test_documentos_pendientes_filtra_por_ejecutivo(conn):
     cliente_1 = _crear_cliente(conn, cedula="001-0000001-1", fecha_creacion=_hace(dias=2))
     _crear_caso(conn, cliente_1, clave_caso="P-1", ejecutivo="Maria Gomez")

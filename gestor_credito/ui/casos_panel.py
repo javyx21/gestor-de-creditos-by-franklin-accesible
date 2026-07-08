@@ -2,6 +2,7 @@ import wx
 
 from gestor_credito.catalogos import (
     ESTADO_DESEMBOLSADA,
+    ESTADOS_CERRADOS,
     ETAPA_DESEMBOLSO,
     ETAPAS_PROCESO,
     ESTADOS_SOLICITUD,
@@ -25,7 +26,11 @@ from gestor_credito.db.database import get_connection
 from gestor_credito.ui.accesibilidad import activar_con_enter
 from gestor_credito.ui.fechas import formatear_fecha
 from gestor_credito.ui.logo import AppLogo
-from gestor_credito.ui.sonido import SONIDO_BORRAR, reproducir_sonido
+from gestor_credito.ui.sonido import (
+    SONIDO_BORRAR,
+    SONIDO_FILA_DOCUMENTOS_PENDIENTES,
+    reproducir_sonido,
+)
 
 # Orden y set de columnas pedido por el usuario para la lista de Casos. Debe
 # coincidir en orden con el SELECT interno de buscar_casos() en gestor_credito/db/casos.py.
@@ -35,6 +40,13 @@ COLUMNAS = [
     "Destino del Crédito", "Microseguro", "Estado Solicitud", "Etapa Proceso",
     "Responsable Actual", "Decisión", "Motivo No Aplica / Desistimiento", "Observaciones",
 ]
+
+# Posición de estado_solicitud/documentos_completos_fecha dentro de las tuplas
+# que devuelve buscar_casos() (ver el SELECT de _seleccionar_casos() en
+# gestor_credito/db/casos.py) — se usan para el resaltado en rojo de la fila y
+# el sonido de navegación, ninguno de los dos es una columna visible.
+_INDICE_ESTADO_SOLICITUD_FILA = 11
+_INDICE_DOCUMENTOS_COMPLETOS_FECHA_FILA = 18
 
 # Opciones del combobox "Filtrar por alerta": (texto mostrado, valor interno
 # de gestor_credito/db/casos.py). Solo aplica con la búsqueda vacía — con un
@@ -49,6 +61,19 @@ FILTRO_ALERTA_OPCIONES = [
 
 class CasosPanel(wx.Panel):
     CELDA_VACIA = "Celda vacía"
+
+    # Resalta en rojo, para el vidente, la fila de un caso con documentos
+    # pendientes (mismo criterio que FILTRO_ALERTA_DOCUMENTOS_PENDIENTES: caso
+    # no cerrado + documentos_completos_fecha aún NULL). Fondo rosado claro +
+    # texto rojo oscuro en vez de rojo puro: contraste ~7.5:1 (negro/blanco
+    # sobre esta combinación pasa WCAG AAA, no solo el mínimo AA de 4.5:1),
+    # verificado a mano antes de fijar estos valores — no cambiar los colores
+    # sin volver a chequear el contraste. Pedido explícito del usuario junto
+    # con SONIDO_FILA_DOCUMENTOS_PENDIENTES (ver sonido.py) como equivalente
+    # auditivo para el usuario ciego que navega la misma lista con NVDA — el
+    # color solo no basta (WCAG 1.4.1), por eso van los dos juntos.
+    _COLOR_FONDO_DOCUMENTOS_PENDIENTES = wx.Colour(255, 214, 214)
+    _COLOR_TEXTO_DOCUMENTOS_PENDIENTES = wx.Colour(139, 0, 0)
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -269,10 +294,19 @@ class CasosPanel(wx.Panel):
 
         menu.AppendSeparator()
 
-        # Exclusivo del menú contextual (no está en el panel principal, que
-        # solo permite marcar como completo, nunca desmarcar) — pedido
-        # explícito del usuario para poder revertir un cliente marcado por
-        # error o al que después le faltó un documento.
+        # Vía alternativa al checkbox "Documentos completados (cliente)" del
+        # panel de edición: un ítem de menú requiere navegar el menú y
+        # confirmar con Enter, mientras que el checkbox se dispara con un solo
+        # Tab+Espacio durante la navegación normal — eso causó un bug real en
+        # producción (varios clientes marcados como completados por accidente,
+        # sin querer, simplemente al tabular por la lista). El checkbox se deja
+        # como está para quien prefiera usarlo viendo la pantalla; esta opción
+        # de menú es la vía segura pedida explícitamente por el usuario tras
+        # ese incidente. Junto con "Marcar como pendiente" (ya existía) para
+        # poder ir en ambos sentidos desde acá.
+        item_completo = menu.Append(wx.ID_ANY, "Marcar documentos completados (cliente)")
+        self.Bind(wx.EVT_MENU, self._on_marcar_documentos_completos_menu, item_completo)
+
         item_pendiente = menu.Append(wx.ID_ANY, "Marcar como pendiente de completar documentos")
         self.Bind(wx.EVT_MENU, self._on_marcar_documentos_pendientes, item_pendiente)
 
@@ -340,6 +374,19 @@ class CasosPanel(wx.Panel):
             conn.close()
 
         self.GetTopLevelParent().SetStatusText(f"Responsable Actual cambiado a «{valor}».")
+        self._cargar_casos()
+
+    def _on_marcar_documentos_completos_menu(self, event):
+        if self._cliente_seleccionado_id is None:
+            return
+
+        conn = get_connection()
+        try:
+            marcar_documentos_completos(conn, self._cliente_seleccionado_id)
+        finally:
+            conn.close()
+
+        self.GetTopLevelParent().SetStatusText("Documentos marcados como completados.")
         self._cargar_casos()
 
     def _on_marcar_documentos_pendientes(self, event):
@@ -491,6 +538,12 @@ class CasosPanel(wx.Panel):
             for columna, valor in enumerate(valores[1:], start=1):
                 self.lista.SetItem(indice, columna, valor)
 
+            estado = fila[_INDICE_ESTADO_SOLICITUD_FILA]
+            documentos_completos_fecha = fila[_INDICE_DOCUMENTOS_COMPLETOS_FECHA_FILA]
+            if self._documentos_pendientes(estado, documentos_completos_fecha):
+                self.lista.SetItemBackgroundColour(indice, self._COLOR_FONDO_DOCUMENTOS_PENDIENTES)
+                self.lista.SetItemTextColour(indice, self._COLOR_TEXTO_DOCUMENTOS_PENDIENTES)
+
         for columna in range(len(COLUMNAS)):
             self.lista.SetColumnWidth(columna, wx.LIST_AUTOSIZE_USEHEADER)
 
@@ -530,6 +583,15 @@ class CasosPanel(wx.Panel):
         # el dato no aplica a ese caso, en vez de sonar como si algo faltara.
         return [valor if valor else cls.CELDA_VACIA for valor in valores]
 
+    @staticmethod
+    def _documentos_pendientes(estado, documentos_completos_fecha):
+        """Mismo criterio que FILTRO_ALERTA_DOCUMENTOS_PENDIENTES en
+        db/casos.py: un caso ya cerrado (Desembolsada/No aplica/Cliente
+        desistió) no cuenta como pendiente aunque documentos_completos_fecha
+        siga NULL. Usado tanto para el resaltado en rojo de la fila como para
+        el sonido de navegación (ver _refrescar_lista y _on_seleccionar_caso)."""
+        return documentos_completos_fecha is None and estado not in ESTADOS_CERRADOS
+
     def _on_seleccionar_caso(self, event):
         indice = event.GetIndex()
         fila = self._filas[indice]
@@ -567,6 +629,13 @@ class CasosPanel(wx.Panel):
 
         self.mensaje_texto.SetLabel("")
 
+        # Equivalente auditivo, para el usuario ciego, del resaltado en rojo
+        # que ve un vidente en esta misma fila (ver _refrescar_lista): suena
+        # cada vez que la selección llega a un caso con documentos pendientes,
+        # sea por flechas, Tab o clic — EVT_LIST_ITEM_SELECTED cubre los tres.
+        if self._documentos_pendientes(estado, documentos_completos_fecha):
+            reproducir_sonido(SONIDO_FILA_DOCUMENTOS_PENDIENTES)
+
     def _on_documentos_completos_check(self, event):
         if not event.IsChecked() or self._cliente_seleccionado_id is None:
             return
@@ -577,8 +646,16 @@ class CasosPanel(wx.Panel):
         finally:
             conn.close()
 
-        self.documentos_completos_check.Disable()
+        # Refresca la lista de inmediato (bug real en producción: sin este
+        # refresco, un Tab+Espacio accidental sobre este checkbox quedaba
+        # grabado en la base de datos sin ninguna señal visible, y el caso
+        # seguía apareciendo en el filtro "Documentos pendientes" como si nada
+        # — varios clientes terminaron marcados por accidente sin que el
+        # usuario lo notara hasta mucho después). _cargar_casos() ya limpia y
+        # deshabilita este checkbox como parte de resetear el panel de edición
+        # tras la recarga, igual que "Guardar cambios"/"Eliminar caso".
         self.mensaje_texto.SetLabel("Documentos completados marcados. Se apagó la alerta para este cliente.")
+        self._cargar_casos()
 
     @staticmethod
     def _seleccionar_en_choice(choice_ctrl, valor):

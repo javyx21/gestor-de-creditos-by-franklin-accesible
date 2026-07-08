@@ -22,6 +22,7 @@ diseño — se estampan una vez al insertar y solo se tocan de nuevo cuando el
 valor relevante cambia de verdad (ver actualizar_edicion_manual en db/casos.py
 y el importador)."""
 
+from gestor_credito.catalogos import ESTADOS_CERRADOS
 from gestor_credito.db.database import ESTADO_EN_ESPERA_CONSTANCIA, ESTADO_EN_PROCESO
 
 HORAS_ALERTA_DOCUMENTOS = 24
@@ -30,14 +31,28 @@ HORAS_ALERTA_CONSTANCIA_EN_MANO = 48
 
 
 def alertas_documentos_pendientes(conn, ejecutivo_actual=None):
-    """Clientes nuevos sin documentos_completos_fecha, con >= 24h desde su alta.
+    """Clientes nuevos sin documentos_completos_fecha, con >= 24h desde su alta,
+    y que tengan AL MENOS UN caso todavía abierto (no Desembolsada/No aplica/
+    Cliente desistió).
 
     Sigue activa indefinidamente (no se apaga por tiempo) hasta que se marque
     documentos_completos_fecha con marcar_documentos_completos(). El ejecutivo
     de referencia es el del primer caso que dio de alta a ese cliente (la
     columna vive en cliente, no en caso — ver CLAUDE.md, Alerta 1).
+
+    La exclusión de clientes con TODOS sus casos ya cerrados se agregó tras un
+    bug real reportado por el usuario en producción: un cliente cuyo único
+    crédito ya estaba Desembolsada (evidentemente con documentos completos
+    para haber llegado hasta ahí) seguía apareciendo para siempre en esta
+    alerta si nadie había marcado documentos_completos_fecha a mano — 42 casos
+    así se acumularon en su base real. Mismo criterio que ya usaba
+    FILTRO_ALERTA_DOCUMENTOS_PENDIENTES en db/casos.py para el filtro de
+    Casos, ahora también acá para que ambas vistas coincidan. Un cliente con
+    AL MENOS UN caso todavía abierto (aunque tenga otros ya cerrados) sigue
+    alertando con normalidad.
     """
-    query = """
+    placeholders = ", ".join("?" for _ in ESTADOS_CERRADOS)
+    query = f"""
         SELECT cliente.id, cliente.nombre, cliente.cedula, cliente.fecha_creacion,
                (
                    SELECT caso.ejecutivo FROM caso
@@ -48,9 +63,14 @@ def alertas_documentos_pendientes(conn, ejecutivo_actual=None):
         FROM cliente
         WHERE cliente.documentos_completos_fecha IS NULL
           AND (julianday('now') - julianday(cliente.fecha_creacion)) * 24 >= ?
+          AND EXISTS (
+              SELECT 1 FROM caso
+              WHERE caso.cliente_id = cliente.id
+                AND caso.estado_solicitud NOT IN ({placeholders})
+          )
         ORDER BY cliente.fecha_creacion ASC
     """
-    filas = conn.execute(query, (HORAS_ALERTA_DOCUMENTOS,)).fetchall()
+    filas = conn.execute(query, (HORAS_ALERTA_DOCUMENTOS, *ESTADOS_CERRADOS)).fetchall()
 
     if ejecutivo_actual:
         filas = [f for f in filas if f[4] == ejecutivo_actual]
