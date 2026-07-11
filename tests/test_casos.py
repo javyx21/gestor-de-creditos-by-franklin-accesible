@@ -172,6 +172,43 @@ def test_edicion_manual_resetea_fecha_cambio_solo_si_estado_cambia(conn):
     assert fecha_sin_cambio_estado == fecha_original
 
 
+def test_edicion_manual_a_desembolsada_completa_documentos_del_cliente(conn):
+    # Reporte real del usuario (2026-07-11): un caso que llega a Desembolsada
+    # evidentemente tuvo sus documentos completos para llegar hasta ahí, pero
+    # nada lo marcaba así — quedaba pendiente para siempre.
+    caso_id = _crear_cliente_y_caso(conn, estado="En proceso")
+
+    actualizar_edicion_manual(conn, caso_id, "Desembolsada", "Desembolso")
+
+    (documentos_completos_fecha,) = conn.execute(
+        "SELECT cliente.documentos_completos_fecha FROM cliente "
+        "JOIN caso ON caso.cliente_id = cliente.id WHERE caso.id = ?",
+        (caso_id,),
+    ).fetchone()
+
+    assert documentos_completos_fecha is not None
+
+
+def test_edicion_manual_a_desembolsada_no_pisa_fecha_ya_marcada(conn):
+    caso_id = _crear_cliente_y_caso(conn, estado="En proceso")
+    conn.execute(
+        "UPDATE cliente SET documentos_completos_fecha = '2026-01-01 00:00:00' "
+        "WHERE id = (SELECT cliente_id FROM caso WHERE id = ?)",
+        (caso_id,),
+    )
+    conn.commit()
+
+    actualizar_edicion_manual(conn, caso_id, "Desembolsada", "Desembolso")
+
+    (documentos_completos_fecha,) = conn.execute(
+        "SELECT cliente.documentos_completos_fecha FROM cliente "
+        "JOIN caso ON caso.cliente_id = cliente.id WHERE caso.id = ?",
+        (caso_id,),
+    ).fetchone()
+
+    assert documentos_completos_fecha == "2026-01-01 00:00:00"
+
+
 # --- filtro_alerta de buscar_casos -------------------------------------------
 # A diferencia de las alertas de Notificaciones (gestor_credito/db/alertas.py),
 # este filtro es de ESTADO actual, sin umbral de tiempo — un caso recién

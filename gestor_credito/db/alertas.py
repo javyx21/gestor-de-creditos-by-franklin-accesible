@@ -172,3 +172,34 @@ def marcar_documentos_pendientes(conn, cliente_id):
         (cliente_id,),
     )
     conn.commit()
+
+
+def completar_documentos_por_desembolso(conn, cliente_id):
+    """Si un caso del cliente llega a ESTADO_DESEMBOLSADA, sus documentos
+    evidentemente estaban completos para que el crédito se desembolsara —
+    esto cierra sola la Alerta 'Documentos pendientes' en vez de dejarla en
+    blanco para siempre. Se llama desde el importador (_upsert_caso, tanto al
+    insertar un caso nuevo ya Desembolsada como al actualizar uno existente
+    a ese estado) y desde actualizar_edicion_manual() en db/casos.py, para
+    cubrir tanto el reimport de Excel como el cambio manual de estado.
+
+    NO pisa una fecha ya existente (WHERE documentos_completos_fecha IS
+    NULL): si el usuario ya la había marcado antes a mano (con una fecha real
+    distinta), esa fecha original se respeta. Idempotente: llamarla de nuevo
+    sobre un cliente ya marcado no hace nada.
+
+    Agregada tras un reporte real del usuario (2026-07-11): sin esto, un
+    cliente cuyo único crédito llegaba a Desembolsada quedaba con
+    documentos_completos_fecha en NULL para siempre — sin alertar (por la
+    exclusión de casos cerrados ya existente, ver alertas_documentos_pendientes),
+    pero también sin ninguna acción automática que cerrara el dato. Se
+    detectaron 78 clientes reales en ese estado; ver el backfill puntual en
+    el historial de commits (no es una migración de esquema, solo un UPDATE
+    de datos)."""
+    conn.execute(
+        "UPDATE cliente SET documentos_completos_fecha = datetime('now'), "
+        "fecha_actualizacion = datetime('now') "
+        "WHERE id = ? AND documentos_completos_fecha IS NULL",
+        (cliente_id,),
+    )
+    conn.commit()

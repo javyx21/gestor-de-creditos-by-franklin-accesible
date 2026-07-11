@@ -234,6 +234,30 @@ above and `actualizar_edicion_manual` in `db/casos.py`) — never anything impor
    `documentos_pendientes_desde` column (schema migration) to fix properly — flag to the user if it
    comes up before fixing.
 
+   **Auto-completion on desembolso (added 2026-07-11)**: the 2026-07-08 exclusion above stops the
+   *alert* from firing for a cliente whose casos are all closed, but it never actually set
+   `documentos_completos_fecha` — a cliente whose only credit reached Desembolsada sat with that
+   column NULL forever, silent but never actually resolved. Real user report: trying to toggle this
+   by hand for a Desembolsada caso (Miguel Ángel Sevilla, IMMSA) didn't work because the checkbox is
+   deliberately hidden for closed casos (see `_on_seleccionar_caso` in `casos_panel.py`) — the
+   context menu items still work for closed casos, but the underlying gap (nothing ever closes the
+   field automatically) was real: 78 real production clients had a Desembolsada caso with
+   `documentos_completos_fecha` still NULL. Fixed with `completar_documentos_por_desembolso(conn,
+   cliente_id)` in `db/alertas.py`: sets `documentos_completos_fecha = datetime('now')` **only if
+   still NULL** (never overwrites a real, earlier completion date) whenever a caso reaches
+   `ESTADO_DESEMBOLSADA`. Called from both write paths that can produce that transition:
+   `actualizar_edicion_manual()` in `db/casos.py` (covers "Guardar cambios", "Cambiar estatus de
+   solicitud", and "Cambiar estado a desembolso" — all three route through it) and
+   `_upsert_caso()` in `importer/excel_importer.py` (covers both a caso inserted already-Desembolsada
+   on first import, and an existing caso updated to Desembolsada on reimport). The 78 pre-existing
+   clients were backfilled once by hand (not a schema migration, just a data UPDATE via this same
+   function) — their `documentos_completos_fecha` reads today's backfill date, not the real
+   historical desembolso date, since that was never recorded anywhere. The other ~14 clients with
+   all-closed casos but *no* Desembolsada among them (e.g. only "No aplica"/"Cliente desistió") were
+   deliberately left NULL — they never actually disbursed, so marking their documents "completed"
+   would be factually wrong; they stay correctly excluded from the alert by the 2026-07-08 rule
+   regardless.
+
    **Second real production incident, same day**: the Casos edit-panel checkbox writes to the
    database immediately on check (`EVT_CHECKBOX`), with no separate confirm step, and reaching it
    with Tab during normal NVDA navigation is easy to do by accident — combined with the filtered

@@ -7,6 +7,7 @@ from gestor_credito.db.alertas import (
     alertas_constancia_en_mano,
     alertas_constancia_pendiente,
     alertas_documentos_pendientes,
+    completar_documentos_por_desembolso,
     marcar_documentos_completos,
 )
 
@@ -94,6 +95,28 @@ def test_documentos_pendientes_se_apaga_al_marcar_completo(conn):
     marcar_documentos_completos(conn, cliente_id)
 
     assert alertas_documentos_pendientes(conn) == []
+
+
+def test_completar_documentos_por_desembolso_marca_si_estaba_pendiente(conn):
+    cliente_id = _crear_cliente(conn)
+
+    completar_documentos_por_desembolso(conn, cliente_id)
+
+    (documentos_completos_fecha,) = conn.execute(
+        "SELECT documentos_completos_fecha FROM cliente WHERE id = ?", (cliente_id,)
+    ).fetchone()
+    assert documentos_completos_fecha is not None
+
+
+def test_completar_documentos_por_desembolso_no_pisa_fecha_ya_marcada(conn):
+    cliente_id = _crear_cliente(conn, documentos_completos_fecha="2026-01-01 00:00:00")
+
+    completar_documentos_por_desembolso(conn, cliente_id)
+
+    (documentos_completos_fecha,) = conn.execute(
+        "SELECT documentos_completos_fecha FROM cliente WHERE id = ?", (cliente_id,)
+    ).fetchone()
+    assert documentos_completos_fecha == "2026-01-01 00:00:00"
 
 
 def test_documentos_pendientes_no_activa_si_todos_los_casos_estan_cerrados(conn):

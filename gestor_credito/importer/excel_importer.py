@@ -3,7 +3,13 @@ from datetime import date, datetime
 
 import openpyxl
 
-from gestor_credito.db.database import ESTADO_EN_ESPERA_CONSTANCIA, ESTADO_EN_PROCESO, get_connection
+from gestor_credito.db.alertas import completar_documentos_por_desembolso
+from gestor_credito.db.database import (
+    ESTADO_DESEMBOLSADA,
+    ESTADO_EN_ESPERA_CONSTANCIA,
+    ESTADO_EN_PROCESO,
+    get_connection,
+)
 
 # Columnas de la bitácora de MIDESA cuyo valor es una fecha y debe normalizarse a
 # texto ISO (YYYY-MM-DD) sin importar si openpyxl las entrega como datetime o texto.
@@ -229,6 +235,11 @@ def _upsert_caso(conn, cliente_id, clave_caso, data):
         placeholders = ", ".join("?" for _ in columnas)
         params = [cliente_id, clave_caso, *valores.values(), "excel"]
         conn.execute(f"INSERT INTO caso ({', '.join(columnas)}) VALUES ({placeholders})", params)
+        # Un caso que llega ya Desembolsada en su primera importación
+        # evidentemente tuvo sus documentos completos para llegar hasta ahí
+        # — ver completar_documentos_por_desembolso.
+        if valores["estado_solicitud"] == ESTADO_DESEMBOLSADA:
+            completar_documentos_por_desembolso(conn, cliente_id)
         return True
 
     caso_id, estado_anterior = existing
@@ -251,4 +262,8 @@ def _upsert_caso(conn, cliente_id, clave_caso, data):
 
     params.append(caso_id)
     conn.execute(f"UPDATE caso SET {', '.join(set_sql)} WHERE id = ?", params)
+
+    if estado_nuevo == ESTADO_DESEMBOLSADA:
+        completar_documentos_por_desembolso(conn, cliente_id)
+
     return False

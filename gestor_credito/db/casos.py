@@ -1,6 +1,12 @@
 import re
 
-from gestor_credito.catalogos import ESTADO_EN_ESPERA_CONSTANCIA, ESTADO_EN_PROCESO, ESTADOS_CERRADOS
+from gestor_credito.catalogos import (
+    ESTADO_DESEMBOLSADA,
+    ESTADO_EN_ESPERA_CONSTANCIA,
+    ESTADO_EN_PROCESO,
+    ESTADOS_CERRADOS,
+)
+from gestor_credito.db.alertas import completar_documentos_por_desembolso
 
 # Índices de columna dentro de las tuplas que devuelve _seleccionar_casos().
 _INDICE_CASO_ID = 0
@@ -165,8 +171,8 @@ def actualizar_edicion_manual(conn, caso_id, estado_solicitud, etapa_proceso):
     No toca constancia_recibida_fecha: esa fecha SOLO la marca el importador al
     detectar el cambio de estado en el Excel, nunca una edición manual.
     """
-    (estado_anterior,) = conn.execute(
-        "SELECT estado_solicitud FROM caso WHERE id = ?", (caso_id,)
+    estado_anterior, cliente_id = conn.execute(
+        "SELECT estado_solicitud, cliente_id FROM caso WHERE id = ?", (caso_id,)
     ).fetchone()
 
     set_sql = [
@@ -183,6 +189,11 @@ def actualizar_edicion_manual(conn, caso_id, estado_solicitud, etapa_proceso):
     params.append(caso_id)
     conn.execute(f"UPDATE caso SET {', '.join(set_sql)} WHERE id = ?", params)
     conn.commit()
+
+    # Un caso que llega a Desembolsada evidentemente tuvo sus documentos
+    # completos para llegar hasta ahí — ver completar_documentos_por_desembolso.
+    if estado_solicitud == ESTADO_DESEMBOLSADA:
+        completar_documentos_por_desembolso(conn, cliente_id)
 
 
 def actualizar_responsable_actual(conn, caso_id, responsable_actual):

@@ -181,6 +181,41 @@ def test_cambio_a_otro_estado_no_marca_constancia_recibida(db, tmp_path):
     assert caso[1] is None
 
 
+def test_caso_nuevo_ya_desembolsada_completa_documentos_del_cliente(db, tmp_path):
+    # Reporte real del usuario (2026-07-11): un caso importado directo en
+    # "Desembolsada" (constancia ya en mano desde antes de entrar a esta app)
+    # evidentemente tuvo sus documentos completos, pero nada lo marcaba así.
+    excel_path = tmp_path / "bitacora.xlsx"
+    _escribir_excel(excel_path, [_fila(**{"Estado Solicitud": "Desembolsada"})])
+    import_bitacora(excel_path)
+
+    conn = db.get_connection()
+    (documentos_completos_fecha,) = conn.execute(
+        "SELECT documentos_completos_fecha FROM cliente"
+    ).fetchone()
+    conn.close()
+
+    assert documentos_completos_fecha is not None
+
+
+def test_reimport_a_desembolsada_completa_documentos_del_cliente(db, tmp_path):
+    excel_path = tmp_path / "bitacora.xlsx"
+    _escribir_excel(excel_path, [_fila(**{"Estado Solicitud": "En proceso"})])
+    import_bitacora(excel_path)
+
+    excel_path_2 = tmp_path / "bitacora_2.xlsx"
+    _escribir_excel(excel_path_2, [_fila(**{"Estado Solicitud": "Desembolsada"})])
+    import_bitacora(excel_path_2)
+
+    conn = db.get_connection()
+    (documentos_completos_fecha,) = conn.execute(
+        "SELECT documentos_completos_fecha FROM cliente"
+    ).fetchone()
+    conn.close()
+
+    assert documentos_completos_fecha is not None
+
+
 def test_fila_sin_cedula_se_omite(db, tmp_path):
     excel_path = tmp_path / "bitacora.xlsx"
     _escribir_excel(excel_path, [_fila(**{"Identificación": None})])
