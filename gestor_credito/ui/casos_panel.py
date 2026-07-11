@@ -23,7 +23,7 @@ from gestor_credito.db.casos import (
 from gestor_credito.db.clientes import contar_casos, eliminar_cliente
 from gestor_credito.db.configuracion import CLAVE_EJECUTIVO_ACTUAL, obtener_valor
 from gestor_credito.db.database import get_connection
-from gestor_credito.ui.accesibilidad import activar_con_enter
+from gestor_credito.ui.accesibilidad import activar_con_enter, anunciar_voz_nvda, nombre_accesible
 from gestor_credito.ui.fechas import formatear_fecha
 from gestor_credito.ui.logo import AppLogo
 from gestor_credito.ui.sonido import (
@@ -57,6 +57,19 @@ FILTRO_ALERTA_OPCIONES = [
     ("En espera de constancia", FILTRO_ALERTA_CONSTANCIA_PENDIENTE),
     ("Constancia en mano sin respuesta", FILTRO_ALERTA_CONSTANCIA_EN_MANO),
 ]
+
+# Frase que acompaña la cantidad en el anuncio de la barra de estado (ver
+# _cargar_casos/anunciar_texto_estado) cuando el filtro activo no es "Todos"
+# — pedido explícito del usuario, 2026-07-11: al elegir "Documentos
+# pendientes" o "En espera de constancia" en el combobox, quiere escuchar
+# "X caso(s) con documentos pendientes" / "X caso(s) en espera de
+# constancia", no el genérico "X caso(s) encontrados" que no aclara a qué
+# filtro corresponde el número.
+_FRASE_FILTRO_ALERTA = {
+    FILTRO_ALERTA_DOCUMENTOS_PENDIENTES: "con documentos pendientes",
+    FILTRO_ALERTA_CONSTANCIA_PENDIENTE: "en espera de constancia",
+    FILTRO_ALERTA_CONSTANCIA_EN_MANO: "con constancia en mano sin respuesta",
+}
 
 
 class CasosPanel(wx.Panel):
@@ -95,7 +108,7 @@ class CasosPanel(wx.Panel):
         sizer.Add(self._crear_busqueda(), 0, wx.EXPAND | wx.ALL, 8)
 
         self.lista = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
-        self.lista.SetName("Lista de casos")
+        nombre_accesible(self.lista, "Lista de casos")
         for indice, columna in enumerate(COLUMNAS):
             self.lista.InsertColumn(indice, columna)
         self.lista.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_seleccionar_caso)
@@ -107,13 +120,38 @@ class CasosPanel(wx.Panel):
         self.SetSizer(sizer)
         self._cargar_casos(avisar_sin_resultados=False)
 
+        # wx.Choice envuelve un combobox nativo que cambia de valor solo con
+        # las flechas (sin necesidad de abrir la lista ni confirmar) — por
+        # eso EVT_CHOICE ya recarga la lista en cada flecha (ver más abajo),
+        # pero un anuncio de voz en cada flecha sería ruidoso y pisaría el
+        # anuncio nativo del nombre de la opción que NVDA ya hace solo. Enter
+        # es distinto: como con el combo de agente en configuracion_panel.py,
+        # el control nativo se queda con la tecla antes de que llegue a un
+        # EVT_KEY_DOWN normal, así que hace falta EVT_CHAR_HOOK para
+        # interceptarla más arriba. Pedido explícito del usuario 2026-07-11:
+        # solo al confirmar con Enter debe anunciarse en voz (vía NVDA
+        # directo, ver anunciar_voz_nvda) la cantidad real de casos que
+        # quedó filtrada — el anuncio por región viva de la barra de estado
+        # (anunciar_texto_estado) no se estaba escuchando de forma confiable
+        # en el uso real.
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+
+    def _on_char_hook(self, event):
+        if (
+            event.GetKeyCode() in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER)
+            and wx.Window.FindFocus() is self.filtro_alerta_choice
+        ):
+            self._cargar_casos(avisar_sin_resultados=False, anunciar_voz=True)
+            return
+        event.Skip()
+
     def _crear_busqueda(self):
         box = wx.StaticBoxSizer(wx.HORIZONTAL, self, "Buscar")
         contenedor = box.GetStaticBox()
 
         label = wx.StaticText(contenedor, label="Cédula o nombre del cliente:")
         self.busqueda_texto = wx.TextCtrl(contenedor, style=wx.TE_PROCESS_ENTER)
-        self.busqueda_texto.SetName("Buscar por cédula o nombre")
+        nombre_accesible(self.busqueda_texto, "Buscar por cédula o nombre")
         self.busqueda_texto.Bind(wx.EVT_TEXT_ENTER, lambda event: self._buscar())
 
         buscar_btn = wx.Button(contenedor, label="&Buscar")
@@ -128,7 +166,7 @@ class CasosPanel(wx.Panel):
         self.filtro_alerta_choice = wx.Choice(
             contenedor, choices=[texto for texto, _valor in FILTRO_ALERTA_OPCIONES]
         )
-        self.filtro_alerta_choice.SetName("Filtrar por alerta")
+        nombre_accesible(self.filtro_alerta_choice, "Filtrar por alerta")
         self.filtro_alerta_choice.SetSelection(0)
         self.filtro_alerta_choice.Bind(
             wx.EVT_CHOICE, lambda event: self._cargar_casos(avisar_sin_resultados=False)
@@ -167,11 +205,11 @@ class CasosPanel(wx.Panel):
 
         estado_label = wx.StaticText(contenedor, label="Estado Solicitud:")
         self.estado_choice = wx.Choice(contenedor, choices=ESTADOS_SOLICITUD)
-        self.estado_choice.SetName("Estado Solicitud")
+        nombre_accesible(self.estado_choice, "Estado Solicitud")
 
         etapa_label = wx.StaticText(contenedor, label="Etapa Proceso:")
         self.etapa_choice = wx.Choice(contenedor, choices=ETAPAS_PROCESO)
-        self.etapa_choice.SetName("Etapa Proceso")
+        nombre_accesible(self.etapa_choice, "Etapa Proceso")
 
         self.guardar_btn = wx.Button(contenedor, label="&Guardar cambios")
         self.guardar_btn.Bind(wx.EVT_BUTTON, self._on_guardar)
@@ -556,7 +594,7 @@ class CasosPanel(wx.Panel):
         """
         self._cargar_casos(avisar_sin_resultados=False)
 
-    def _cargar_casos(self, avisar_sin_resultados=True, restaurar_indice=None):
+    def _cargar_casos(self, avisar_sin_resultados=True, restaurar_indice=None, anunciar_voz=False):
         """avisar_sin_resultados controla el wx.MessageBox de "Sin resultados":
         solo debe dispararse ante una búsqueda EXPLÍCITA (Enter/"Buscar"), no
         ante un refresco silencioso (carga inicial, recargar(), "Limpiar
@@ -573,6 +611,12 @@ class CasosPanel(wx.Panel):
         fila más próxima si esa posición ya no existe) en vez de dejar el
         foco flotando en el próximo control habilitado del panel de edición
         — ver _enfocar_indice para el reporte real que motivó esto.
+
+        anunciar_voz: además de la barra de estado, pide a NVDA que hable el
+        mismo mensaje de inmediato (ver anunciar_voz_nvda en accesibilidad.py)
+        — solo lo usa _on_char_hook al confirmar el combo "Filtrar por
+        alerta" con Enter, no cualquier otro llamado silencioso a este
+        método (ver _on_char_hook para el porqué).
         """
         termino = self.busqueda_texto.GetValue().strip() or None
         _texto, filtro_alerta = FILTRO_ALERTA_OPCIONES[self.filtro_alerta_choice.GetSelection()]
@@ -596,15 +640,30 @@ class CasosPanel(wx.Panel):
         self._refrescar_lista()
 
         if self._filas:
-            self.GetTopLevelParent().SetStatusText(f"{len(self._filas)} caso(s) encontrados")
+            mensaje = self._mensaje_cantidad(len(self._filas), termino, filtro_alerta)
         else:
-            mensaje = "No se encontraron resultados."
-            self.GetTopLevelParent().SetStatusText(mensaje)
+            mensaje = "No se encontraron resultados." if termino else self._mensaje_cantidad(0, termino, filtro_alerta)
             if avisar_sin_resultados:
                 wx.MessageBox(mensaje, "Sin resultados", wx.OK | wx.ICON_INFORMATION, self)
 
+        self.GetTopLevelParent().SetStatusText(mensaje)
+        if anunciar_voz:
+            anunciar_voz_nvda(mensaje)
+
         if restaurar_indice is not None:
             self._enfocar_indice(restaurar_indice)
+
+    @staticmethod
+    def _mensaje_cantidad(cantidad, termino, filtro_alerta):
+        """Arma el texto que va a la barra de estado (y de ahí al anuncio
+        accesible, ver anunciar_texto_estado): con un filtro de alerta activo
+        y sin término de búsqueda, nombra el filtro ("con documentos
+        pendientes", "en espera de constancia") en vez del genérico "caso(s)
+        encontrados" — ver _FRASE_FILTRO_ALERTA más arriba."""
+        frase_filtro = None if termino else _FRASE_FILTRO_ALERTA.get(filtro_alerta)
+        if frase_filtro:
+            return f"{cantidad} caso(s) {frase_filtro}"
+        return f"{cantidad} caso(s) encontrados"
 
     def _refrescar_lista(self):
         self.lista.DeleteAllItems()

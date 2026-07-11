@@ -485,6 +485,128 @@ Judgment calls made while building this that are worth the user's attention:
   a real bug found during NVDA testing and is now fixed; don't reintroduce it. The real logo file
   (`gestor_credito/assets/logo.png`) is 2048x2048px, so `AppLogo` scales it down to `DISPLAY_SIZE`
   (32px) before rendering — never show the source bitmap unscaled, it would dominate the window.
+  **`SetName()` doesn't actually work — anywhere in this app (found + fixed 2026-07-11)**: real
+  user report — NVDA landed on the logo and announced only the role ("gráfico"), no name at all.
+  This turned into a full accessibility audit once the same root cause turned up on other controls
+  too; see `gestor_credito/ui/accesibilidad.py` for the fixes. **How it was verified** (don't take
+  this on faith, the tooling is cheap to rebuild): temporarily `pip install pywinauto comtypes`
+  (diagnostic only, never added to `requirements.txt`), then either (a) `pywinauto`'s
+  `Desktop(backend="uia")` + `print_control_identifiers()` for a quick tree dump, or (b), more
+  authoritative since it's the exact interface NVDA queries for a classic wx/Win32 app,
+  `oleacc.AccessibleObjectFromWindow` via `comtypes` to call the real `IAccessible.accName`/
+  `accRole`/`accState` directly on a control's HWND. UIA inspection can look fine while raw MSAA is
+  still broken (or vice versa) — when in doubt, check both.
+  - **The name bug**: `wx.Window.SetName()` does not propagate to the real accessible name for
+    *any* control type tested — static (`wx.StaticBitmap`, `wx.StaticText`) or interactive
+    (`wx.ListCtrl`, `wx.TextCtrl`, `wx.Choice`, `wx.TreeCtrl`). Windows silently falls back to its
+    own "nearest preceding STATIC label by creation order" heuristic, which sometimes happens to
+    read fine (a `wx.Choice` right after its own `wx.StaticText` label) and sometimes doesn't — the
+    Casos results list (`self.lista`, code says `SetName("Lista de casos")`) was actually being
+    announced as **"Buscar"**, borrowed from the nearest unrelated GroupBox, confirmed with raw
+    MSAA. **Fix**: `nombre_accesible(control, nombre)` in `accesibilidad.py` — calls `SetName()`
+    still (harmless) but the part that actually works is `control.SetAccessible(_SoloNombreAccesible(...))`,
+    a `wx.Accessible` subclass overriding **only** `GetName`. Verified empirically that leaving
+    `GetRole`/`GetState` unoverridden preserves the control's native role/state correctly (tested
+    against a real `wx.ListCtrl`: name fixed, role stayed `ROLE_SYSTEM_LIST`, state untouched) —
+    don't override those for a real native control, only for a decorative one (see next point).
+    Every `.SetName(...)` call site in the codebase was migrated to `nombre_accesible(...)`.
+  - **The logo's second bug, found only via real NVDA (fixing the name wasn't enough)**: even
+    with the name correct at the MSAA level, the user's actual NVDA still couldn't reach it —
+    `wx.StaticBitmap`/`wx.StaticText` don't accept keyboard focus by default, so the logo was
+    invisible to Tab navigation (which is how the user reaches literally everything else in this
+    app) and apparently not surfaced by NVDA's object-navigation fallback either, without resorting
+    to a non-default NVDA cursor. Also, `wx.StaticBitmap`'s native role/state MSAA implementation is
+    itself broken/empty (unlike a normal control) — a raw UIA check with only `GetName` overridden
+    showed the control's type silently degrade from "Image" to a generic "Pane". **Fix**: `logo.py`
+    defines `_LogoBitmap`/`_LogoTexto` (subclasses of `wx.StaticBitmap`/`wx.StaticText` overriding
+    `AcceptsFocus`/`AcceptsFocusFromKeyboard` to return `True`, confirmed via simulated Shift+Tab
+    that focus actually lands on the HWND now) plus `_NombreAccesible` (a **local**, more complete
+    `wx.Accessible` override than the generic helper above — also supplies `GetRole` returning
+    `wx.ROLE_SYSTEM_GRAPHIC` and `GetState` returning `ACC_STATE_SYSTEM_FOCUSABLE`/`_FOCUSED`, since
+    the native implementation can't be trusted here). Confirmed fixed against the user's real NVDA.
+    Visual side effect, accepted: a sighted user tabbing through now sees a standard focus rectangle
+    around the small logo — no visible text, alt text still fully inaudible/invisible per the rule
+    above, just a focus outline like any other tab stop.
+  - **Silent status bar changes, also found via real NVDA use**: filtering Casos by alert type
+    ("Filtrar por alerta": Documentos pendientes, En espera de constancia, etc.) updates the
+    "N caso(s) encontrados" status bar text, but — per the general SetStatusText limitation already
+    documented above — NVDA never announced it, and the user had no way to know the count without
+    manually navigating to check. A `wx.MessageBox` per filter change was already rejected earlier
+    for this exact combobox (`_cargar_casos` in `casos_panel.py`: `EVT_CHOICE` fires on every
+    arrow key while navigating it, so a modal per keystroke made the filter unusable). **Fix**:
+    `anunciar_texto_estado(status_bar)` in `accesibilidad.py`, called right after every
+    `SetStatusText()` — fires the MSAA `EVENT_OBJECT_LIVEREGIONCHANGED` event (via
+    `user32.NotifyWinEvent`, the same mechanism browsers use for `aria-live="polite"`) targeted at
+    the status bar's first field (verified with raw MSAA: the status bar object itself always
+    reports `accName=None`; the actual text lives on child id 1). This doesn't steal focus and isn't
+    modal, so it's safe to fire unconditionally on every status change, not just explicit searches.
+    Wired into both places `SetStatusText` is exposed to child panels: `MainFrame.SetStatusText`
+    (new override; previously just inherited `wx.Frame`'s, silently) and `_PanelDialog.SetStatusText`
+    (the manual status bar wrapper used by the Notificaciones/Configuración/Ayuda modal dialogs —
+    see architecture note below). Confirmed to fire without error; full live-announcement behavior
+    depends on the user's real NVDA (a synthetic test rig can't "hear" speech output), so this one
+    still wants a real-world confirmation pass, unlike the name/focus fixes above which were
+    verified directly against the user's actual screen reader.
+
+  **That real-world confirmation came back negative (2026-07-11)**: the user reported the status
+  bar's live-region announcement (`anunciar_texto_estado`) simply isn't heard in practice on the
+  Casos tab's "Filtrar por alerta" combobox (`filtro_alerta_choice`) — neither while arrowing
+  through options nor after landing on one. The user also clarified the *wanted* behavior is more
+  specific than "announce on every change": arrowing through options should only get NVDA's own
+  native announcement of the option name (already free, since `wx.Choice` is a real native
+  combobox), and a *separate*, explicit announcement of the real filtered case count should fire
+  only once the user commits a choice with Enter — not on every arrow keystroke. **Fix**:
+  `anunciar_voz_nvda(texto)` in `accesibilidad.py` — instead of relying on NVDA noticing an MSAA
+  live-region event on some object, this calls straight into NVDA's own public API for external
+  (non-add-on) applications, `nvdaController_speakText` in `nvdaControllerClient(32|64).dll`,
+  found documented in the NVDA add-on manual the user placed at the project root ("manual creación
+  de complementos.docx") — that's the officially documented mechanism for a program that lives
+  outside NVDA's own process (unlike an add-on, which would use `ui.message()` from inside NVDA)
+  to make NVDA speak a string immediately, with no dependency on focus, roles, or NVDA's live-region
+  heuristics. Verified empirically end-to-end (not just import-level) before trusting it: NVDA is
+  actually running on the dev machine, `nvdaController_testIfRunning()` returns 0, and
+  `nvdaController_speakText()` returns 0 (success) both from a standalone ctypes call and from
+  inside a real `CasosPanel` instance with a real DB connection and a simulated Enter keypress —
+  audible confirmation from the user's actual NVDA is still the last word, same caveat as
+  `anunciar_texto_estado` above, but this path no longer depends on an NVDA heuristic that's
+  already been reported not to fire. The `.dll` files are **not** part of a normal NVDA
+  installation (confirmed by hand: absent from `C:\Program Files\NVDA` on this machine) — they're
+  a separate redistributable NV Access publishes for third-party apps to embed in themselves, and
+  were pulled here from the `accessible_output2` PyPI package (which bundles them verbatim) into
+  `gestor_credito/assets/nvda/` rather than adding that whole package as a dependency — only
+  `nvdaController_speakText` was needed, not `accessible_output2`'s full multi-screen-reader
+  abstraction layer. Being under `gestor_credito/assets/`, the existing PyInstaller `--add-data`
+  flag already picks them up with no packaging changes needed. Wired into `CasosPanel`
+  (`casos_panel.py`): `EVT_CHOICE` on `filtro_alerta_choice` is unchanged (still silently reloads
+  the list on every arrow key, same as before — needed for a sighted user to see the list update
+  live and for `self._filas` to stay in sync with whatever option is currently selected). A new
+  `EVT_CHAR_HOOK` on the panel (same native-control-eats-Enter workaround as the agent picker in
+  `configuracion_panel.py` — `wx.Choice`'s native Win32 combobox consumes Enter before a plain
+  `EVT_KEY_DOWN` on the control would ever see it) checks `wx.Window.FindFocus() is
+  self.filtro_alerta_choice`, and if so calls `self._cargar_casos(avisar_sin_resultados=False,
+  anunciar_voz=True)` — a new keyword-only escape hatch on `_cargar_casos()` that, after computing
+  the exact same status-bar message every other call already computes (`_mensaje_cantidad()`,
+  which already names the active filter — "N caso(s) con documentos pendientes", etc., see
+  Filters/reporting above), also passes that same string to `anunciar_voz_nvda()`. No other caller
+  of `_cargar_casos()` passes `anunciar_voz=True`, so this stays scoped to the one interaction the
+  user asked about — arrow-key browsing elsewhere in the app keeps behaving exactly as before.
+  `anunciar_texto_estado`/`EVENT_OBJECT_LIVEREGIONCHANGED` was **not** ripped out — it's left in
+  place everywhere else in the app (Notificaciones, Configuración, other Casos status-bar updates)
+  since only this one interaction was confirmed broken and asked about; if the same "not heard"
+  report comes back for another spot, `anunciar_voz_nvda` is the fix to reach for there too, but
+  don't swap it in preemptively without a fresh report.
+
+  **Architecture note, found while doing this audit**: the "UI implemented so far" section below
+  still describes three `wx.Notebook` tabs (Casos/Notificaciones/Configuración). That's stale — the
+  actual current code (`main_frame.py`) has `MainFrame` host Casos directly (no notebook at all) and
+  open Notificaciones/Configuración/**Ayuda** (a 4th screen, not documented below either — a
+  keyboard-shortcuts reference list) as modal `wx.Dialog`s from a classic Windows menu bar
+  ("Herramientas", "Configuración", "Ayuda"), per `_PanelDialog` in `main_frame.py`. This evidently
+  changed at some point after that section was last updated, per an explicit comment in the code:
+  "pedido explícito del usuario por cómo navega con NVDA." Flagging it here rather than silently
+  leaving stale docs — the "UI implemented so far" section needs a real rewrite to match, out of
+  scope for this accessibility-audit pass; ask the user before doing that rewrite since it's a
+  sizable, separate edit.
 
 ## Commands
 

@@ -1,5 +1,6 @@
 import wx
 
+from gestor_credito.ui.accesibilidad import nombre_accesible
 from gestor_credito.ui.atajos import ATAJOS
 from gestor_credito.ui.logo import AppLogo
 
@@ -26,7 +27,7 @@ class AyudaPanel(wx.Panel):
         sizer.Add(titulo, 0, wx.ALL, 8)
 
         self.lista = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
-        self.lista.SetName("Lista de atajos de teclado")
+        nombre_accesible(self.lista, "Lista de atajos de teclado")
         self.lista.InsertColumn(0, "Atajo")
         self.lista.InsertColumn(1, "Sección")
         self.lista.InsertColumn(2, "Acción")

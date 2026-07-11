@@ -5,7 +5,7 @@ from gestor_credito.db.clientes import vaciar_base_datos
 from gestor_credito.db.configuracion import CLAVE_EJECUTIVO_ACTUAL, guardar_valor, obtener_valor
 from gestor_credito.db.database import get_connection
 from gestor_credito.importer.excel_importer import import_bitacora
-from gestor_credito.ui.accesibilidad import activar_con_enter
+from gestor_credito.ui.accesibilidad import activar_con_enter, nombre_accesible
 from gestor_credito.ui.logo import AppLogo
 
 
@@ -53,7 +53,7 @@ class ConfiguracionPanel(wx.Panel):
 
         existentes_label = wx.StaticText(contenedor, label="Escoge un agente:")
         self.agentes_choice = wx.Choice(contenedor, choices=[])
-        self.agentes_choice.SetName("Escoge un agente")
+        nombre_accesible(self.agentes_choice, "Escoge un agente")
 
         guardar_btn = wx.Button(contenedor, label="&Guardar y usar este agente")
         guardar_btn.Bind(wx.EVT_BUTTON, self._on_guardar_agente)
@@ -75,7 +75,7 @@ class ConfiguracionPanel(wx.Panel):
         fila_archivo = wx.BoxSizer(wx.HORIZONTAL)
         archivo_label = wx.StaticText(contenedor, label="Archivo seleccionado:")
         self.archivo_texto = wx.TextCtrl(contenedor, style=wx.TE_READONLY)
-        self.archivo_texto.SetName("Archivo Excel seleccionado")
+        nombre_accesible(self.archivo_texto, "Archivo Excel seleccionado")
         fila_archivo.Add(archivo_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
         fila_archivo.Add(self.archivo_texto, 1)
         box.Add(fila_archivo, 0, wx.EXPAND | wx.BOTTOM, 8)
@@ -99,7 +99,7 @@ class ConfiguracionPanel(wx.Panel):
         self.resultado_texto = wx.TextCtrl(
             contenedor, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 200)
         )
-        self.resultado_texto.SetName("Resultado de la importación")
+        nombre_accesible(self.resultado_texto, "Resultado de la importación")
         box.Add(self.resultado_texto, 1, wx.EXPAND)
 
         return box

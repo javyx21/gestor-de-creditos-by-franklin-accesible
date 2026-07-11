@@ -10,7 +10,7 @@ from gestor_credito.db.alertas import (
 )
 from gestor_credito.db.configuracion import CLAVE_EJECUTIVO_ACTUAL, obtener_valor
 from gestor_credito.db.database import get_connection
-from gestor_credito.ui.accesibilidad import activar_con_enter
+from gestor_credito.ui.accesibilidad import activar_con_enter, nombre_accesible
 from gestor_credito.ui.logo import AppLogo
 from gestor_credito.ui.sonido import (
     SONIDO_CONSTANCIA_EN_MANO,
@@ -81,7 +81,7 @@ class NotificacionesPanel(wx.Panel):
         # wx.TreeCtrl es un control nativo de Windows con soporte MSAA/UIA de
         # fábrica, igual que el resto de los widgets estándar de la app.
         self.arbol = wx.TreeCtrl(self, style=wx.TR_DEFAULT_STYLE | wx.TR_HIDE_ROOT)
-        self.arbol.SetName("Árbol de alertas activas")
+        nombre_accesible(self.arbol, "Árbol de alertas activas")
         self.arbol.Bind(wx.EVT_TREE_SEL_CHANGED, self._on_seleccionar)
         sizer.Add(self.arbol, 1, wx.EXPAND | wx.ALL, 8)
 

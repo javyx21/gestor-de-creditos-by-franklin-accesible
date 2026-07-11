@@ -1,6 +1,7 @@
 import wx
 
 from gestor_credito.db.database import init_db
+from gestor_credito.ui.accesibilidad import anunciar_texto_estado
 from gestor_credito.ui.atajos import ATAJOS
 from gestor_credito.ui.ayuda_panel import AyudaPanel
 from gestor_credito.ui.casos_panel import CasosPanel
@@ -61,6 +62,7 @@ class _PanelDialog(wx.Dialog):
 
     def SetStatusText(self, texto):
         self._status_bar.SetStatusText(texto)
+        anunciar_texto_estado(self._status_bar)
 
 
 class MainFrame(wx.Frame):
@@ -83,6 +85,14 @@ class MainFrame(wx.Frame):
 
         self._crear_menu()
         self._crear_atajos()
+
+    def SetStatusText(self, texto):
+        """Override sobre wx.Frame.SetStatusText: además de mostrar el texto,
+        dispara el anuncio accesible (ver anunciar_texto_estado) — sin esto,
+        cada self.GetTopLevelParent().SetStatusText(...) de los paneles hijos
+        seguía siendo mudo para NVDA, igual que en _PanelDialog más arriba."""
+        super().SetStatusText(texto)
+        anunciar_texto_estado(self.GetStatusBar())
 
     def _crear_menu(self):
         menu_bar = wx.MenuBar()
