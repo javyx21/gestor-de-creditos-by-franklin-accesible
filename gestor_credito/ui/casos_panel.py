@@ -377,7 +377,28 @@ class CasosPanel(wx.Panel):
         self._cargar_casos()
 
     def _on_marcar_documentos_completos_menu(self, event):
+        """Vía "segura" para marcar documentos completados (ver comentario en
+        _construir_menu_contextual): a diferencia del checkbox del panel de
+        edición (que se deja como está, a propósito, sin confirmación — ver
+        CLAUDE.md), esta sí pide confirmar el nombre exacto antes de guardar,
+        mismo patrón que _eliminar_caso_seleccionado(). Se agregó tras un
+        reporte real del usuario (semana de uso en producción, 2026-07-11): en
+        ocasiones el cliente marcado no era el que tenía activo. No se pudo
+        reproducir la causa de fondo a nivel de código (la selección de la
+        lista y la escritura en base de datos son correctas y sincrónicas en
+        todos los casos revisados), así que esta confirmación es la red de
+        seguridad: si el nombre leído acá no coincide con el cliente que el
+        usuario cree tener activo, puede cancelar antes de que se guarde nada."""
         if self._cliente_seleccionado_id is None:
+            return
+
+        nombre = self._cliente_seleccionado_nombre or "(sin nombre)"
+        cedula = self._cliente_seleccionado_cedula or "(sin cédula)"
+        mensaje = f"¿Marcar a {nombre} (Cédula {cedula}) como documentos completados?"
+        confirmacion = wx.MessageBox(
+            mensaje, "Marcar documentos completados", wx.YES_NO | wx.ICON_QUESTION, self
+        )
+        if confirmacion != wx.YES:
             return
 
         conn = get_connection()
@@ -386,7 +407,7 @@ class CasosPanel(wx.Panel):
         finally:
             conn.close()
 
-        self.GetTopLevelParent().SetStatusText("Documentos marcados como completados.")
+        self.GetTopLevelParent().SetStatusText(f"Documentos marcados como completados para {nombre}.")
         self._cargar_casos()
 
     def _on_marcar_documentos_pendientes(self, event):

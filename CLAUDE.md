@@ -397,6 +397,27 @@ neither tab is a one-shot load-on-init screen.
   refresh gap was a real bug regardless of which path is used, fixed for both. If a similar
   "changed without asking" report comes up again for this checkbox, don't touch it without asking
   first — the checkbox behavior itself is confirmed intentional, not an oversight.
+
+  **Second real production report (2026-07-11)**, after a week of live use: even via the "safe"
+  menu path above, the user occasionally found the wrong cliente had been marked documentos
+  completados — not the one they had active. Investigated at the code level first (selection
+  tracking in `casos_panel.py` and `marcar_documentos_completos()` in `db/alertas.py`) and
+  confirmed both are correct: `wx.ListCtrl` selection events fire synchronously (verified
+  empirically — `SetItemState`/`InsertItem`/`DeleteAllItems` don't leave any async gap where
+  `_cliente_seleccionado_id` could lag behind the actual selection), the DB write always targets
+  the exact `cliente_id` passed in, and `_seleccionar_casos()`'s `ORDER BY` is stable, so no
+  reordering happens from marking alone. Confirmed with the user this happens through **both** the
+  checkbox and the menu item, and **not** only when "Filtrar por alerta: Documentos pendientes" is
+  active — ruling out a filtered-list-reshuffle explanation too. Root cause not reproducible at the
+  code level (most likely a timing gap between what NVDA has announced and what the user acts on,
+  e.g. arrow-key repeat overshoot — outside the app's control). **Fix**: `_on_marcar_documentos_completos_menu`
+  now shows a `wx.MessageBox` confirmation naming the exact cliente ("¿Marcar a {nombre} — Cédula
+  {x} — como documentos completados?") before writing, same YES/NO pattern as
+  `_eliminar_caso_seleccionado`/`_eliminar_cliente_seleccionado` — this is the safety net regardless
+  of the underlying cause: NVDA reliably announces `wx.MessageBox`, so the user gets one more
+  checkpoint to catch a mismatch before it's written, not after. **The checkbox was deliberately
+  left untouched again** — confirmed with the user this time too: adding a confirm step there would
+  reverse the earlier explicit "keep it one-step" decision, so only the menu item changed.
 - **Notificaciones** (`notificaciones_panel.py`): see Alerts/workflow above for the full design.
   One `wx.ListCtrl` ("Lista de alertas activas") grouping all three active alert types, an
   "Actualizar" button, and a "Marcar documentos completados" button that's only enabled when the
