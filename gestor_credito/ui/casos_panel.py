@@ -114,10 +114,10 @@ class CasosPanel(wx.Panel):
         label = wx.StaticText(contenedor, label="Cédula o nombre del cliente:")
         self.busqueda_texto = wx.TextCtrl(contenedor, style=wx.TE_PROCESS_ENTER)
         self.busqueda_texto.SetName("Buscar por cédula o nombre")
-        self.busqueda_texto.Bind(wx.EVT_TEXT_ENTER, lambda event: self._cargar_casos())
+        self.busqueda_texto.Bind(wx.EVT_TEXT_ENTER, lambda event: self._buscar())
 
         buscar_btn = wx.Button(contenedor, label="&Buscar")
-        buscar_btn.Bind(wx.EVT_BUTTON, lambda event: self._cargar_casos())
+        buscar_btn.Bind(wx.EVT_BUTTON, lambda event: self._buscar())
         activar_con_enter(buscar_btn)
 
         limpiar_btn = wx.Button(contenedor, label="&Limpiar búsqueda")
@@ -205,6 +205,15 @@ class CasosPanel(wx.Panel):
 
         return box
 
+    def _buscar(self):
+        """Búsqueda explícita (botón "Buscar" o Enter en el cuadro de texto):
+        a diferencia de un refresco silencioso, acá SÍ mandamos el foco a la
+        tabla de resultados si hay alguno — pedido explícito del usuario para
+        no tener que acordarse de Ctrl+R después de buscar."""
+        self._cargar_casos()
+        if self._filas:
+            self.enfocar_resultados()
+
     def _on_limpiar_busqueda(self, event):
         self.limpiar_busqueda()
 
@@ -238,6 +247,34 @@ class CasosPanel(wx.Panel):
             estado = wx.LIST_STATE_SELECTED | wx.LIST_STATE_FOCUSED
             self.lista.SetItemState(0, estado, estado)
 
+        self.lista.SetFocus()
+
+    def _enfocar_indice(self, indice):
+        """Selecciona y enfoca la fila `indice` de la lista tras una acción
+        que la recarga (marcar completado, eliminar, cambiar estado/
+        responsable, guardar cambios). Sin esto, el foco quedaba "en el
+        aire": _refrescar_lista() deshabilita el checkbox "Documentos
+        completados (cliente)", y si ese control tenía el foco en ese
+        momento, Windows lo mueve automáticamente al siguiente control
+        habilitado en el orden de tabulación (el combo Estado Solicitud) —
+        reporte real del usuario: con flecha abajo terminaba navegando ese
+        combo (que incluye "Desembolsada"/"Desembolso" entre sus opciones)
+        sin saber en qué control estaba parado.
+
+        `indice` es la posición que tenía la fila ANTES del refresco. Si esa
+        fila ya no existe (se marcó/eliminó y desapareció del filtro activo),
+        recortarlo a len(self._filas) - 1 selecciona exactamente la fila que
+        quedó en su lugar (la más próxima hacia abajo) o, si era la última de
+        la lista, la fila anterior — mismo criterio pedido por el usuario
+        para todas estas acciones."""
+        if not self._filas:
+            self.lista.SetFocus()
+            return
+
+        indice = max(0, min(indice, len(self._filas) - 1))
+        estado = wx.LIST_STATE_SELECTED | wx.LIST_STATE_FOCUSED
+        self.lista.SetItemState(indice, estado, estado)
+        self.lista.EnsureVisible(indice)
         self.lista.SetFocus()
 
     def _on_menu_contextual(self, event):
@@ -338,6 +375,7 @@ class CasosPanel(wx.Panel):
         if self._caso_seleccionado_id is None:
             return
 
+        indice = self.lista.GetFirstSelected()
         etapa_actual = self.etapa_choice.GetStringSelection() or None
         conn = get_connection()
         try:
@@ -346,12 +384,13 @@ class CasosPanel(wx.Panel):
             conn.close()
 
         self.GetTopLevelParent().SetStatusText(f"Estado Solicitud cambiado a «{nuevo_estado}».")
-        self._cargar_casos()
+        self._cargar_casos(restaurar_indice=indice)
 
     def _on_cambiar_a_desembolso(self, event):
         if self._caso_seleccionado_id is None:
             return
 
+        indice = self.lista.GetFirstSelected()
         conn = get_connection()
         try:
             actualizar_edicion_manual(
@@ -361,12 +400,13 @@ class CasosPanel(wx.Panel):
             conn.close()
 
         self.GetTopLevelParent().SetStatusText("Caso marcado como Desembolsada / Desembolso.")
-        self._cargar_casos()
+        self._cargar_casos(restaurar_indice=indice)
 
     def _cambiar_responsable_actual(self, valor):
         if self._caso_seleccionado_id is None:
             return
 
+        indice = self.lista.GetFirstSelected()
         conn = get_connection()
         try:
             actualizar_responsable_actual(conn, self._caso_seleccionado_id, valor)
@@ -374,7 +414,7 @@ class CasosPanel(wx.Panel):
             conn.close()
 
         self.GetTopLevelParent().SetStatusText(f"Responsable Actual cambiado a «{valor}».")
-        self._cargar_casos()
+        self._cargar_casos(restaurar_indice=indice)
 
     def _on_marcar_documentos_completos_menu(self, event):
         """Vía "segura" para marcar documentos completados (ver comentario en
@@ -392,6 +432,7 @@ class CasosPanel(wx.Panel):
         if self._cliente_seleccionado_id is None:
             return
 
+        indice = self.lista.GetFirstSelected()
         nombre = self._cliente_seleccionado_nombre or "(sin nombre)"
         cedula = self._cliente_seleccionado_cedula or "(sin cédula)"
         mensaje = f"¿Marcar a {nombre} (Cédula {cedula}) como documentos completados?"
@@ -408,12 +449,13 @@ class CasosPanel(wx.Panel):
             conn.close()
 
         self.GetTopLevelParent().SetStatusText(f"Documentos marcados como completados para {nombre}.")
-        self._cargar_casos()
+        self._cargar_casos(restaurar_indice=indice)
 
     def _on_marcar_documentos_pendientes(self, event):
         if self._cliente_seleccionado_id is None:
             return
 
+        indice = self.lista.GetFirstSelected()
         conn = get_connection()
         try:
             marcar_documentos_pendientes(conn, self._cliente_seleccionado_id)
@@ -421,7 +463,7 @@ class CasosPanel(wx.Panel):
             conn.close()
 
         self.GetTopLevelParent().SetStatusText("Documentos marcados como pendientes nuevamente.")
-        self._cargar_casos()
+        self._cargar_casos(restaurar_indice=indice)
 
     def _on_eliminar_caso(self, event):
         self._eliminar_caso_seleccionado()
@@ -436,6 +478,7 @@ class CasosPanel(wx.Panel):
         if self._caso_seleccionado_id is None:
             return
 
+        indice = self.lista.GetFirstSelected()
         no_presolicitud = self._caso_seleccionado_no_presolicitud or "(sin número)"
         mensaje = (
             f"¿Eliminar el caso No. Presolicitud {no_presolicitud}?\n\n"
@@ -456,7 +499,7 @@ class CasosPanel(wx.Panel):
 
         reproducir_sonido(SONIDO_BORRAR)
         self.GetTopLevelParent().SetStatusText(f"Caso {no_presolicitud} eliminado.")
-        self._cargar_casos()
+        self._cargar_casos(restaurar_indice=indice)
 
     def _on_eliminar_cliente_completo(self, event):
         self._eliminar_cliente_seleccionado()
@@ -473,6 +516,7 @@ class CasosPanel(wx.Panel):
         if self._cliente_seleccionado_id is None:
             return
 
+        indice = self.lista.GetFirstSelected()
         nombre = self._cliente_seleccionado_nombre or "(sin nombre)"
         cedula = self._cliente_seleccionado_cedula or "(sin cédula)"
 
@@ -501,7 +545,7 @@ class CasosPanel(wx.Panel):
 
         reproducir_sonido(SONIDO_BORRAR)
         self.GetTopLevelParent().SetStatusText(f"Cliente {nombre} y todo su historial eliminados.")
-        self._cargar_casos()
+        self._cargar_casos(restaurar_indice=indice)
 
     def recargar(self):
         """Vuelve a consultar la base de datos con la búsqueda/agente actuales.
@@ -512,7 +556,7 @@ class CasosPanel(wx.Panel):
         """
         self._cargar_casos(avisar_sin_resultados=False)
 
-    def _cargar_casos(self, avisar_sin_resultados=True):
+    def _cargar_casos(self, avisar_sin_resultados=True, restaurar_indice=None):
         """avisar_sin_resultados controla el wx.MessageBox de "Sin resultados":
         solo debe dispararse ante una búsqueda EXPLÍCITA (Enter/"Buscar"), no
         ante un refresco silencioso (carga inicial, recargar(), "Limpiar
@@ -521,6 +565,14 @@ class CasosPanel(wx.Panel):
         se navega el combobox, y abrir un diálogo modal en cada tecla dejaba
         el filtro inusable (reporte real del usuario). El estado siempre
         queda igual reflejado en la barra de estado, con o sin el popup.
+
+        restaurar_indice: posición (previa al refresco) de la fila que
+        disparó la acción que llama a este método (marcar completado,
+        eliminar, cambiar estado/responsable, guardar cambios). Si se pasa,
+        _enfocar_indice() vuelve a dejar la selección y el foco ahí (o en la
+        fila más próxima si esa posición ya no existe) en vez de dejar el
+        foco flotando en el próximo control habilitado del panel de edición
+        — ver _enfocar_indice para el reporte real que motivó esto.
         """
         termino = self.busqueda_texto.GetValue().strip() or None
         _texto, filtro_alerta = FILTRO_ALERTA_OPCIONES[self.filtro_alerta_choice.GetSelection()]
@@ -550,6 +602,9 @@ class CasosPanel(wx.Panel):
             self.GetTopLevelParent().SetStatusText(mensaje)
             if avisar_sin_resultados:
                 wx.MessageBox(mensaje, "Sin resultados", wx.OK | wx.ICON_INFORMATION, self)
+
+        if restaurar_indice is not None:
+            self._enfocar_indice(restaurar_indice)
 
     def _refrescar_lista(self):
         self.lista.DeleteAllItems()
@@ -661,6 +716,7 @@ class CasosPanel(wx.Panel):
         if not event.IsChecked() or self._cliente_seleccionado_id is None:
             return
 
+        indice = self.lista.GetFirstSelected()
         conn = get_connection()
         try:
             marcar_documentos_completos(conn, self._cliente_seleccionado_id)
@@ -674,9 +730,13 @@ class CasosPanel(wx.Panel):
         # — varios clientes terminaron marcados por accidente sin que el
         # usuario lo notara hasta mucho después). _cargar_casos() ya limpia y
         # deshabilita este checkbox como parte de resetear el panel de edición
-        # tras la recarga, igual que "Guardar cambios"/"Eliminar caso".
+        # tras la recarga, igual que "Guardar cambios"/"Eliminar caso". Pasar
+        # restaurar_indice devuelve el foco a la lista (ver _enfocar_indice):
+        # sin esto, al deshabilitarse este mismo checkbox recién tildado,
+        # Windows movía el foco solo al siguiente control habilitado (el
+        # combo Estado Solicitud) — reporte real del usuario.
         self.mensaje_texto.SetLabel("Documentos completados marcados. Se apagó la alerta para este cliente.")
-        self._cargar_casos()
+        self._cargar_casos(restaurar_indice=indice)
 
     @staticmethod
     def _seleccionar_en_choice(choice_ctrl, valor):
@@ -694,6 +754,7 @@ class CasosPanel(wx.Panel):
             self.mensaje_texto.SetLabel("Seleccioná un Estado Solicitud y una Etapa Proceso.")
             return
 
+        indice = self.lista.GetFirstSelected()
         conn = get_connection()
         try:
             actualizar_edicion_manual(conn, self._caso_seleccionado_id, estado, etapa)
@@ -701,4 +762,4 @@ class CasosPanel(wx.Panel):
             conn.close()
 
         self.mensaje_texto.SetLabel("Cambios guardados.")
-        self._cargar_casos()
+        self._cargar_casos(restaurar_indice=indice)
