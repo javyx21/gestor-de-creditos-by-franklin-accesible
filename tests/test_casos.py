@@ -101,6 +101,18 @@ def test_buscar_por_cedula_ignora_el_filtro_de_agente(conn):
     assert resultado[0][3] == "Pedro Diaz"
 
 
+def test_buscar_por_cedula_es_insensible_a_mayusculas(conn):
+    # Reporte real del usuario (2026-07-12): una cédula real guardada con
+    # sufijo de letra en mayúscula ("...010Q") no se encontraba si se
+    # tipeaba en minúscula (a propósito o por tener Bloq Mayús desactivado).
+    _crear_cliente_y_caso(conn, cedula="2011307810010Q")
+
+    resultado = buscar_casos(conn, termino="2011307810010q")
+
+    assert len(resultado) == 1
+    assert resultado[0][6] == "2011307810010Q"
+
+
 def test_buscar_por_nombre_es_insensible_a_mayusculas(conn):
     _crear_cliente_y_caso(conn, nombre="ARMANDO JAVIER PEÑA ARIAS")
 

@@ -355,3 +355,56 @@ def test_guardado_repetido_de_la_misma_tasa_no_desincroniza_nada(calc, conn):
         calc.recargar()
     calc._on_calcular(None)
     assert calc._ultimo_resultado.cuota_usd == pytest.approx(_cuota_esperada(calc, 0.33))
+
+
+# ---- limpiar_formulario() (atajo GLOBAL Alt+L en la Calculadora) ---------
+
+def test_limpiar_formulario_vacia_los_campos_pero_conserva_la_empresa(calc, conn):
+    _llenar_formulario(calc)
+    _elegir_empresa(calc, "NICAES")
+    calc._on_calcular(None)
+    assert calc._ultimo_resultado is not None
+
+    calc.limpiar_formulario()
+
+    assert calc._empresa_seleccionada() == "NICAES"
+    assert calc.fecha_ingreso_texto.GetValue() == ""
+    assert calc.salario_texto.GetValue() == ""
+    assert calc.extra_texto.GetValue() == "0"
+    assert calc.monto_texto.GetValue() == ""
+    assert calc.plazo_texto.GetValue() == ""
+    assert calc.periodicidad_choice.GetSelection() == 0
+    assert calc.deuda_texto.GetValue() == "0"
+
+
+def test_limpiar_formulario_limpia_pasivo_laboral_y_resultados(calc, conn):
+    _llenar_formulario(calc)
+    _elegir_empresa(calc, "MIDESA")
+    calc._on_calcular(None)
+    assert calc._pasivo_laboral_cordobas is not None
+    assert calc._ultimo_resultado is not None
+
+    calc.limpiar_formulario()
+
+    assert calc._pasivo_laboral_cordobas is None
+    assert calc.resultado_pasivo_laboral.GetLabel() == "Pasivo laboral: —"
+    assert calc._ultimo_resultado is None
+    assert calc.resultado_cuota.GetLabel() == "Cuota calculada: —"
+
+
+def test_limpiar_formulario_sin_empresa_elegida_no_falla(calc, conn):
+    calc.limpiar_formulario()  # no debe lanzar
+    assert calc._empresa_seleccionada() is None
+
+
+def test_limpiar_formulario_reproduce_el_sonido_de_borrado(calc, conn, monkeypatch):
+    llamadas = []
+    monkeypatch.setattr(
+        "gestor_credito.ui.calculadora_panel.reproducir_sonido",
+        lambda nombre: llamadas.append(nombre),
+    )
+    from gestor_credito.ui.sonido import SONIDO_BORRAR
+
+    calc.limpiar_formulario()
+
+    assert llamadas == [SONIDO_BORRAR]

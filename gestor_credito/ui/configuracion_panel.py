@@ -6,6 +6,7 @@ from gestor_credito.db.configuracion import CLAVE_EJECUTIVO_ACTUAL, guardar_valo
 from gestor_credito.db.convenios import eliminar_convenio, guardar_tasa, listar_convenios
 from gestor_credito.db.database import get_connection
 from gestor_credito.importer.excel_importer import import_bitacora
+from gestor_credito.importer.reporte_creditos_importer import import_reporte_creditos
 from gestor_credito.ui.accesibilidad import activar_con_enter, anunciar_voz_nvda, nombre_accesible
 from gestor_credito.ui.logo import AppLogo
 
@@ -28,6 +29,7 @@ class ConfiguracionPanel(wx.Panel):
         super().__init__(parent)
 
         self._file_path = None
+        self._file_path_creditos = None
         self._convenios_cargados = []
 
         sizer = wx.BoxSizer(wx.VERTICAL)
@@ -66,8 +68,10 @@ class ConfiguracionPanel(wx.Panel):
 
     def _crear_arbol_y_contenido(self):
         """Reestructuración pedida explícitamente por el usuario (2026-07-12):
-        un wx.TreeCtrl a la izquierda con dos categorías principales
-        ("Configuración de Casos", "Configuración de la Calculadora") y el
+        un wx.TreeCtrl a la izquierda con categorías principales
+        ("Configuración de Casos", "Configuración de la Calculadora",
+        "Configuración de Reporte de Créditos" — esta última agregada el
+        mismo día, al construir el módulo Historial de Créditos) y el
         contenido correspondiente a la derecha, en vez de las secciones
         apiladas que tenía este panel antes. Mismo control ya usado y
         probado en este proyecto para Notificaciones (self.arbol en
@@ -94,36 +98,48 @@ class ConfiguracionPanel(wx.Panel):
 
         self.arbol_categorias = wx.TreeCtrl(
             self, style=wx.TR_DEFAULT_STYLE | wx.TR_HIDE_ROOT | wx.TR_NO_LINES,
-            size=(220, -1),
+            size=(260, -1),
         )
         nombre_accesible(self.arbol_categorias, "Categorías de configuración")
         raiz = self.arbol_categorias.AddRoot("Configuración")
         self.item_casos = self.arbol_categorias.AppendItem(raiz, "Configuración de Casos")
         self.item_calculadora = self.arbol_categorias.AppendItem(raiz, "Configuración de la Calculadora")
+        self.item_creditos = self.arbol_categorias.AppendItem(raiz, "Configuración de Reporte de Créditos")
         self.arbol_categorias.Bind(wx.EVT_TREE_SEL_CHANGED, self._on_seleccionar_categoria)
         fila.Add(self.arbol_categorias, 0, wx.EXPAND | wx.RIGHT, 8)
 
         self.sizer_derecha = wx.BoxSizer(wx.VERTICAL)
         self.panel_casos = wx.Panel(self)
         self.panel_calculadora = wx.Panel(self)
+        self.panel_creditos = wx.Panel(self)
         self._crear_contenido_casos(self.panel_casos)
         self._crear_contenido_calculadora(self.panel_calculadora)
+        self._crear_contenido_creditos(self.panel_creditos)
         self.sizer_derecha.Add(self.panel_casos, 1, wx.EXPAND)
         self.sizer_derecha.Add(self.panel_calculadora, 1, wx.EXPAND)
+        self.sizer_derecha.Add(self.panel_creditos, 1, wx.EXPAND)
         fila.Add(self.sizer_derecha, 1, wx.EXPAND)
 
         return fila
 
     def _mostrar_panel(self, panel_a_mostrar):
-        for panel in (self.panel_casos, self.panel_calculadora):
+        for panel in (self.panel_casos, self.panel_calculadora, self.panel_creditos):
             self.sizer_derecha.Show(panel, panel is panel_a_mostrar)
         self.sizer_derecha.Layout()
 
     def _panel_para_item(self, item):
-        return self.panel_calculadora if item == self.item_calculadora else self.panel_casos
+        if item == self.item_calculadora:
+            return self.panel_calculadora
+        if item == self.item_creditos:
+            return self.panel_creditos
+        return self.panel_casos
 
     def _primer_control_para_item(self, item):
-        return self.convenios_lista if item == self.item_calculadora else self.agentes_choice
+        if item == self.item_calculadora:
+            return self.convenios_lista
+        if item == self.item_creditos:
+            return self.seleccionar_creditos_btn
+        return self.agentes_choice
 
     def _activar_categoria_seleccionada(self, enfocar_primer_campo=False):
         item = self.arbol_categorias.GetSelection()
@@ -157,7 +173,12 @@ class ConfiguracionPanel(wx.Panel):
         anuncio de pestañas: "no es necesario repetir la palabra")."""
         item = event.GetItem()
         if item.IsOk():
-            nombre_corto = "Calculadora" if item == self.item_calculadora else "Casos"
+            if item == self.item_calculadora:
+                nombre_corto = "Calculadora"
+            elif item == self.item_creditos:
+                nombre_corto = "Reporte de Créditos"
+            else:
+                nombre_corto = "Casos"
             anunciar_voz_nvda(f"{nombre_corto}, seleccionado")
         event.Skip()
 
@@ -622,3 +643,100 @@ class ConfiguracionPanel(wx.Panel):
         # Mismo motivo que en _on_guardar_convenio: SetStatusText por sí
         # solo no se escucha de forma confiable.
         anunciar_voz_nvda(mensaje)
+
+    # ---- Configuración de Reporte de Créditos ----------------------------
+    # Módulo nuevo (2026-07-12): igual que la bitácora de MIDESA, importar es
+    # una acción de configuración puntual — vive acá, no en CreditosPanel (la
+    # pestaña "Historial de Créditos" es solo de consulta). Mismo patrón
+    # exacto que _crear_seccion_importar()/_on_seleccionar_archivo()/
+    # _on_importar() más arriba, adaptado a reporte_creditos_importer.py.
+
+    def _crear_contenido_creditos(self, panel):
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Importar reporte de créditos")
+        contenedor = box.GetStaticBox()
+
+        fila_archivo = wx.BoxSizer(wx.HORIZONTAL)
+        archivo_label = wx.StaticText(contenedor, label="Archivo seleccionado:")
+        self.archivo_creditos_texto = wx.TextCtrl(contenedor, style=wx.TE_READONLY)
+        nombre_accesible(self.archivo_creditos_texto, "Archivo Excel del reporte de créditos seleccionado")
+        fila_archivo.Add(archivo_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        fila_archivo.Add(self.archivo_creditos_texto, 1)
+        box.Add(fila_archivo, 0, wx.EXPAND | wx.BOTTOM, 8)
+
+        botones = wx.BoxSizer(wx.HORIZONTAL)
+        self.seleccionar_creditos_btn = wx.Button(contenedor, label="&Seleccionar archivo Excel...")
+        self.seleccionar_creditos_btn.Bind(wx.EVT_BUTTON, self._on_seleccionar_archivo_creditos)
+        activar_con_enter(self.seleccionar_creditos_btn)
+        botones.Add(self.seleccionar_creditos_btn, 0, wx.RIGHT, 8)
+
+        self.importar_creditos_btn = wx.Button(contenedor, label="&Importar")
+        self.importar_creditos_btn.Disable()
+        self.importar_creditos_btn.Bind(wx.EVT_BUTTON, self._on_importar_creditos)
+        activar_con_enter(self.importar_creditos_btn)
+        botones.Add(self.importar_creditos_btn, 0)
+        box.Add(botones, 0, wx.BOTTOM, 8)
+
+        resultado_label = wx.StaticText(contenedor, label="Resultado de la importación:")
+        box.Add(resultado_label, 0, wx.BOTTOM, 4)
+
+        self.resultado_creditos_texto = wx.TextCtrl(
+            contenedor, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 150)
+        )
+        nombre_accesible(self.resultado_creditos_texto, "Resultado de la importación del reporte de créditos")
+        box.Add(self.resultado_creditos_texto, 1, wx.EXPAND)
+
+        sizer.Add(box, 1, wx.EXPAND)
+        panel.SetSizer(sizer)
+
+    def _on_seleccionar_archivo_creditos(self, event):
+        # (*.xls) incluido en el filtro a pedido explícito del usuario, aunque
+        # openpyxl (usado por import_reporte_creditos) no lee el formato
+        # binario .xls viejo — el archivo real de referencia
+        # (recursos/reporte.xlsx) ya es .xlsx; si algún día llega un .xls real,
+        # el error de import_reporte_creditos() al abrirlo queda igual
+        # capturado y mostrado por _on_importar_creditos() más abajo.
+        with wx.FileDialog(
+            self,
+            "Seleccionar archivo Excel del reporte de créditos",
+            wildcard="Archivos Excel (*.xlsx;*.xls)|*.xlsx;*.xls",
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+        ) as dialogo:
+            if dialogo.ShowModal() == wx.ID_CANCEL:
+                return
+            self._file_path_creditos = dialogo.GetPath()
+            self.archivo_creditos_texto.SetValue(self._file_path_creditos)
+            self.importar_creditos_btn.Enable()
+
+    def _on_importar_creditos(self, event):
+        if not self._file_path_creditos:
+            return
+
+        try:
+            resumen = import_reporte_creditos(self._file_path_creditos)
+        except Exception as exc:
+            mensaje = f"Error al importar: {exc}"
+            self.resultado_creditos_texto.SetValue(mensaje)
+            self.GetTopLevelParent().SetStatusText("Error al importar el reporte de créditos")
+            wx.MessageBox(mensaje, "Error al importar", wx.OK | wx.ICON_ERROR, self)
+            return
+
+        lineas = [
+            f"Créditos nuevos: {resumen.creditos_nuevos}",
+            f"Créditos actualizados: {resumen.creditos_actualizados}",
+            f"Filas omitidas: {len(resumen.filas_omitidas)}",
+        ]
+        resumen_mensaje = "\n".join(lineas)
+
+        for fila_numero, motivo in resumen.filas_omitidas:
+            lineas.append(f"  Fila {fila_numero}: {motivo}")
+
+        self.resultado_creditos_texto.SetValue("\n".join(lineas))
+        self.GetTopLevelParent().SetStatusText("Importación del reporte de créditos completada")
+
+        if resumen.filas_omitidas:
+            resumen_mensaje += (
+                "\n\nRevisá el detalle de las filas omitidas en el cuadro "
+                "de resultado de la importación."
+            )
+        wx.MessageBox(resumen_mensaje, "Importación completada", wx.OK | wx.ICON_INFORMATION, self)

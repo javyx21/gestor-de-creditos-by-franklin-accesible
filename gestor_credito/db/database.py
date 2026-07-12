@@ -157,6 +157,33 @@ CREATE TABLE IF NOT EXISTS calculo_credito (
 
     fecha_calculo TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Reporte periódico de créditos ya desembolsados (recursos/reporte.xlsx),
+-- módulo nuevo e independiente ("Historial de Créditos") — NO se referencia
+-- desde cliente/caso a propósito, mismo criterio de independencia ya usado
+-- para convenio_tasa/calculo_credito (ver CLAUDE.md, Calculadora de Crédito):
+-- cedula/nombre_cliente son columnas propias de este reporte, no una FK a
+-- cliente. no_credito es UNIQUE: es la clave real del Excel de origen (sin
+-- duplicados verificados en el reporte real), así que una reimportación
+-- periódica actualiza la fila existente en vez de duplicarla, igual que
+-- clave_caso en la bitácora de MIDESA.
+CREATE TABLE IF NOT EXISTS reporte_credito (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    no_credito TEXT NOT NULL UNIQUE,
+    cedula TEXT NOT NULL,
+    nombre_cliente TEXT NOT NULL,
+    fecha_desembolso TEXT,
+    fecha_vencimiento TEXT,
+    monto_desembolsado REAL,
+    estado_credito TEXT,
+    empresa_convenio TEXT,
+    plazo_credito INTEGER,
+    cuotas_pagadas INTEGER,
+    fecha_actualizacion_registro TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_reporte_credito_cedula ON reporte_credito(cedula);
+CREATE INDEX IF NOT EXISTS idx_reporte_credito_estado ON reporte_credito(estado_credito);
 """
 
 # Tasas reales extraídas de la hoja "Convenios" del Excel de referencia

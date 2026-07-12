@@ -66,28 +66,44 @@ def buscar_casos(conn, ejecutivo_actual=None, termino=None, filtro_alerta=None):
 
     Sin término: filtra por ejecutivo_actual (el agente configurado, o trae
     todo si todavía no hay agente configurado) y, además, por filtro_alerta si
-    no es None/FILTRO_ALERTA_TODOS.
+    no es None/FILTRO_ALERTA_TODOS. Este filtro por ejecutivo se aplica en SQL
+    (ver _seleccionar_casos), no trayendo todo el historial de todos los
+    agentes para descartar la mayoría en Python — optimización real
+    (2026-07-12): reporte del usuario de lentitud real al cambiar de pestaña
+    (recargar() corre siempre, ver MainFrame) a medida que se acumulan casos
+    de más agentes con el uso diario. El resultado final es idéntico al de
+    antes, solo más barato de calcular; ya existía un índice
+    (idx_caso_ejecutivo) para esta columna, sin usar hasta ahora.
 
     Con término: busca por cédula (si el término trae algún dígito) o por
     nombre (si es solo letras), e IGNORA tanto ejecutivo_actual como
     filtro_alerta — una búsqueda específica por cédula/nombre tiene prioridad
     sobre ambos filtros, aunque el resultado sea de otro agente o no cumpla el
-    filtro de alerta seleccionado.
+    filtro de alerta seleccionado. Ambos tipos de búsqueda son insensibles a
+    mayúsculas (reporte real del usuario, 2026-07-12: una cédula real
+    guardada en mayúsculas —p. ej. con sufijo "Q"— no aparecía si se
+    tipeaba en minúscula, ya sea a propósito o por tener Bloq Mayús
+    desactivado). Se compara con str.upper() de Python, no UPPER() de
+    SQLite, mismo motivo que ya usa la comparación por nombre: UPPER() en
+    SQLite es solo ASCII y no pliega correctamente Ñ/vocales acentuadas
+    (irrelevante para cédulas en sí, pero mantiene una sola forma de
+    comparar en todo este módulo).
     """
-    filas = _seleccionar_casos(conn)
     termino = (termino or "").strip()
 
     if termino:
+        # Un término específico busca en TODOS los agentes por diseño, así
+        # que acá sí hace falta traer todo el historial — ver docstring.
+        filas = _seleccionar_casos(conn)
         tipo = clasificar_termino_busqueda(termino)
+        termino_mayus = termino.upper()
         if tipo == "cedula":
-            filas = [f for f in filas if termino in (f[_INDICE_CEDULA] or "")]
+            filas = [f for f in filas if termino_mayus in (f[_INDICE_CEDULA] or "").upper()]
         else:
-            termino_mayus = termino.upper()
             filas = [f for f in filas if termino_mayus in (f[_INDICE_NOMBRE] or "").upper()]
         return filas
 
-    if ejecutivo_actual:
-        filas = [f for f in filas if f[_INDICE_EJECUTIVO] == ejecutivo_actual]
+    filas = _seleccionar_casos(conn, ejecutivo_actual=ejecutivo_actual)
 
     if filtro_alerta and filtro_alerta != FILTRO_ALERTA_TODOS:
         filas = _filtrar_por_alerta(filas, filtro_alerta)
@@ -121,7 +137,7 @@ def _filtrar_por_alerta(filas, filtro_alerta):
     return filas
 
 
-def _seleccionar_casos(conn):
+def _seleccionar_casos(conn, ejecutivo_actual=None):
     # El orden de las primeras 17 columnas de este SELECT (hasta observaciones)
     # es el orden exacto en que deben mostrarse en la lista de la pestaña Casos
     # (ver COLUMNAS en casos_panel.py). cliente_id, documentos_completos_fecha y
@@ -152,9 +168,14 @@ def _seleccionar_casos(conn):
                caso.constancia_recibida_fecha
         FROM caso
         JOIN cliente ON cliente.id = caso.cliente_id
+        {where}
         ORDER BY caso.fecha_registro DESC, caso.id DESC
     """
-    return conn.execute(query).fetchall()
+    if ejecutivo_actual:
+        return conn.execute(
+            query.format(where="WHERE caso.ejecutivo = ?"), (ejecutivo_actual,)
+        ).fetchall()
+    return conn.execute(query.format(where="")).fetchall()
 
 
 def obtener_ejecutivos(conn):

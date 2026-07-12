@@ -111,6 +111,16 @@ class CasosPanel(wx.Panel):
         nombre_accesible(self.lista, "Lista de casos")
         for indice, columna in enumerate(COLUMNAS):
             self.lista.InsertColumn(indice, columna)
+            # LIST_AUTOSIZE_USEHEADER solo depende del ANCHO DEL ENCABEZADO
+            # (no del contenido de las filas), así que alcanza con hacerlo
+            # una sola vez acá — repetirlo en cada _refrescar_lista() (como
+            # se hacía antes) es puro trabajo repetido: mismo resultado
+            # exacto, pero mil veces por sesión. Optimización real
+            # (2026-07-12), reporte del usuario de lentitud al cambiar de
+            # pestaña con muchos casos acumulados: medido a mano, este único
+            # cambio ahorra ~1.2s de los ~3.1s que tardaba refrescar 5000
+            # filas.
+            self.lista.SetColumnWidth(indice, wx.LIST_AUTOSIZE_USEHEADER)
         self.lista.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_seleccionar_caso)
         self.lista.Bind(wx.EVT_CONTEXT_MENU, self._on_menu_contextual)
         sizer.Add(self.lista, 1, wx.EXPAND | wx.ALL, 8)
@@ -158,7 +168,15 @@ class CasosPanel(wx.Panel):
         buscar_btn.Bind(wx.EVT_BUTTON, lambda event: self._buscar())
         activar_con_enter(buscar_btn)
 
-        limpiar_btn = wx.Button(contenedor, label="&Limpiar búsqueda")
+        # "&Vaciar búsqueda", no "Limpiar búsqueda": Alt+L pasó a ser un
+        # atajo GLOBAL cuyo efecto depende de la pestaña activa (pedido
+        # explícito del usuario, 2026-07-12; en Casos ahora limpia el cuadro
+        # de edición, ver limpiar_edicion() y MainFrame._limpiar_segun_pestana_activa)
+        # y ese atajo global intercepta Alt+L antes de que llegara al
+        # mnemónico local de este botón — mismo tipo de choque ya evitado
+        # antes al elegir Alt+A en vez de Alt+L para el botón Calcular de la
+        # Calculadora (ver calculadora_panel.py).
+        limpiar_btn = wx.Button(contenedor, label="&Vaciar búsqueda")
         limpiar_btn.Bind(wx.EVT_BUTTON, self._on_limpiar_busqueda)
         activar_con_enter(limpiar_btn)
 
@@ -260,11 +278,54 @@ class CasosPanel(wx.Panel):
         confirmación (borrar.wav) porque limpiar no deja ningún cambio visual
         obvio con foco en el botón — pedido explícito del usuario para
         confirmar que sí se borró todo sin tener que leer la barra de estado
-        a mano. Público (no "_on_...") porque también lo dispara el atajo
-        Alt+L (ver gestor_credito/ui/atajos.py y MainFrame._crear_atajos)."""
+        a mano. Público (no "_on_...") porque lo dispara el botón "Vaciar
+        búsqueda" (Alt+V, mnemónico local de esta pestaña) — YA NO el atajo
+        global Alt+L (ver limpiar_edicion() más abajo y
+        MainFrame._limpiar_segun_pestana_activa: pedido explícito del
+        usuario, 2026-07-12, "en el apartado de Casos [Alt+L] debe limpiar
+        por completo el cuadro de edición actual", no la búsqueda)."""
         self.busqueda_texto.SetValue("")
         self.filtro_alerta_choice.SetSelection(0)
         self._cargar_casos(avisar_sin_resultados=False)
+        reproducir_sonido(SONIDO_BORRAR)
+
+    def limpiar_edicion(self):
+        """Atajo GLOBAL Alt+L cuando la pestaña activa es Casos (pedido
+        explícito del usuario, 2026-07-12: "en el apartado de Casos [Alt+L]
+        debe limpiar por completo el cuadro de edición actual") — ver
+        MainFrame._limpiar_segun_pestana_activa, que decide qué método de
+        qué pestaña llamar según cuál esté activa en ese momento.
+
+        Deja el panel de edición exactamente como si no hubiera ningún caso
+        seleccionado: deselecciona la fila en la lista, Estado Solicitud/
+        Etapa Proceso, el checkbox de documentos, los botones Guardar/
+        Eliminar y el mensaje — no toca la búsqueda ni el filtro de alerta
+        (para eso está limpiar_busqueda(), el botón "Vaciar búsqueda").
+
+        Reproduce el sonido de confirmación (borrar.wav) — pedido explícito
+        del usuario: "la acción de borrar siempre tiene que hacer llamado
+        al sonido", mismo criterio que ya usan limpiar_busqueda()/
+        eliminar_caso()/eliminar_cliente()."""
+        indice = self.lista.GetFirstSelected()
+        if indice != wx.NOT_FOUND:
+            estado_actual = wx.LIST_STATE_SELECTED | wx.LIST_STATE_FOCUSED
+            self.lista.SetItemState(indice, 0, estado_actual)
+
+        self._caso_seleccionado_id = None
+        self._caso_seleccionado_no_presolicitud = None
+        self._cliente_seleccionado_id = None
+        self._cliente_seleccionado_nombre = None
+        self._cliente_seleccionado_cedula = None
+        self.estado_choice.SetSelection(wx.NOT_FOUND)
+        self.etapa_choice.SetSelection(wx.NOT_FOUND)
+        self.guardar_btn.Disable()
+        self.eliminar_btn.Disable()
+        self.documentos_completos_check.SetValue(False)
+        self.documentos_completos_check.Disable()
+        self.documentos_completos_check.Show(True)
+        self.mensaje_texto.SetLabel("")
+        self.Layout()
+        self.caso_seleccionado_texto.SetLabel("Ningún caso seleccionado")
         reproducir_sonido(SONIDO_BORRAR)
 
     def enfocar_busqueda(self):
@@ -666,21 +727,30 @@ class CasosPanel(wx.Panel):
         return f"{cantidad} caso(s) encontrados"
 
     def _refrescar_lista(self):
-        self.lista.DeleteAllItems()
-        for fila in self._filas:
-            valores = self._fila_a_columnas(fila)
-            indice = self.lista.InsertItem(self.lista.GetItemCount(), valores[0])
-            for columna, valor in enumerate(valores[1:], start=1):
-                self.lista.SetItem(indice, columna, valor)
+        # Freeze/Thaw: pedido explícito del usuario (2026-07-12) tras un
+        # reporte real de lentitud al cambiar de pestaña a medida que se
+        # acumulan casos — sin esto, wx redibuja/recalcula el layout de la
+        # lista en CADA InsertItem/SetItem individual (16 columnas por fila),
+        # que con miles de casos se nota. Freeze() suspende ese redibujado
+        # hasta Thaw() al final, sin cambiar ningún resultado visible.
+        self.lista.Freeze()
+        try:
+            self.lista.DeleteAllItems()
+            for fila in self._filas:
+                valores = self._fila_a_columnas(fila)
+                indice = self.lista.InsertItem(self.lista.GetItemCount(), valores[0])
+                for columna, valor in enumerate(valores[1:], start=1):
+                    self.lista.SetItem(indice, columna, valor)
 
-            estado = fila[_INDICE_ESTADO_SOLICITUD_FILA]
-            documentos_completos_fecha = fila[_INDICE_DOCUMENTOS_COMPLETOS_FECHA_FILA]
-            if self._documentos_pendientes(estado, documentos_completos_fecha):
-                self.lista.SetItemBackgroundColour(indice, self._COLOR_FONDO_DOCUMENTOS_PENDIENTES)
-                self.lista.SetItemTextColour(indice, self._COLOR_TEXTO_DOCUMENTOS_PENDIENTES)
-
-        for columna in range(len(COLUMNAS)):
-            self.lista.SetColumnWidth(columna, wx.LIST_AUTOSIZE_USEHEADER)
+                estado = fila[_INDICE_ESTADO_SOLICITUD_FILA]
+                documentos_completos_fecha = fila[_INDICE_DOCUMENTOS_COMPLETOS_FECHA_FILA]
+                if self._documentos_pendientes(estado, documentos_completos_fecha):
+                    self.lista.SetItemBackgroundColour(indice, self._COLOR_FONDO_DOCUMENTOS_PENDIENTES)
+                    self.lista.SetItemTextColour(indice, self._COLOR_TEXTO_DOCUMENTOS_PENDIENTES)
+            # El ancho de columnas ya se fija una sola vez en __init__ (ver
+            # ese comentario) — no hace falta repetirlo acá en cada refresco.
+        finally:
+            self.lista.Thaw()
 
         self._caso_seleccionado_id = None
         self._caso_seleccionado_no_presolicitud = None

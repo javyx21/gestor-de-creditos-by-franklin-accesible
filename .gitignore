@@ -16,3 +16,4 @@ dist/
 # Datos reales de clientes (nombres, cédulas) — nunca deben ir al repositorio.
 MachoteBaseDeDatos.xlsx
 recursos/calculadora.xlsx
+recursos/reporte.xlsx

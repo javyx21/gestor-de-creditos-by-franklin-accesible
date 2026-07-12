@@ -34,22 +34,63 @@ ATAJOS = [
     # (modificador wx.ACCEL_* o None, tecla o None, texto, sección, descripción, acción o None)
     (
         wx.ACCEL_CTRL, ord("F"), "Ctrl+F", "Casos",
-        "Ir al cuadro de búsqueda de Casos (Cédula o nombre)",
+        "Ir al cuadro de búsqueda de Casos (Cédula o nombre) — atajo GLOBAL cuyo "
+        "efecto depende de la pestaña activa (pedido explícito del usuario, "
+        "2026-07-12), ver también la fila de Historial de Créditos",
         "enfocar_busqueda",
     ),
     (
+        None, None, "Ctrl+F", "Historial de Créditos",
+        "Ir al cuadro de búsqueda de Historial de Créditos (Cédula o nombre) — "
+        "mismo atajo físico que en Casos, cada pestaña define su propio efecto "
+        "(en Calculadora no hace nada, no hay un cuadro de búsqueda ahí)",
+        None,
+    ),
+    (
         wx.ACCEL_CTRL, ord("R"), "Ctrl+R", "Casos",
-        "Ir a la lista de resultados de Casos",
+        "Ir a la lista de resultados de Casos — atajo GLOBAL cuyo efecto depende de "
+        "la pestaña activa (pedido explícito del usuario, 2026-07-12), ver también la "
+        "fila de Historial de Créditos",
         "enfocar_resultados",
     ),
     (
+        None, None, "Ctrl+R", "Historial de Créditos",
+        "Ir a la lista de resultados de Historial de Créditos — mismo atajo físico "
+        "que en Casos, cada pestaña define su propio efecto (en Calculadora no hace "
+        "nada, no hay una lista de resultados ahí)",
+        None,
+    ),
+    (
         wx.ACCEL_ALT, ord("L"), "Alt+L", "Casos",
-        "Limpiar la búsqueda y el filtro por alerta de Casos",
+        "Limpiar por completo el cuadro de edición del caso seleccionado — atajo "
+        "GLOBAL cuyo efecto depende de la pestaña activa (pedido explícito del "
+        "usuario, 2026-07-12), ver también las filas de Calculadora e Historial "
+        "de Créditos. Antes vaciaba la búsqueda/filtro de Casos: eso ahora es el "
+        "botón \"Vaciar búsqueda\" (Alt+V), sin atajo global",
         "limpiar_busqueda",
+    ),
+    (
+        None, None, "Alt+L", "Calculadora",
+        "Limpiar todos los campos de entrada, conservando elegida la última "
+        "empresa convenio usada",
+        None,
+    ),
+    (
+        None, None, "Alt+L", "Historial de Créditos",
+        "Vaciar la búsqueda y volver a la vista por defecto (créditos en estado "
+        "Corriente) — mismo efecto que el botón \"Vaciar búsqueda\" (Alt+V)",
+        None,
     ),
     (
         None, None, "Alt+B", "Casos",
         "Ejecutar la búsqueda con el término escrito (botón Buscar)",
+        None,
+    ),
+    (
+        None, None, "Alt+V (en Casos)", "Casos",
+        "Vaciar la búsqueda y el filtro por alerta de Casos (botón Vaciar "
+        "búsqueda) — solo funciona con el foco dentro de esta pestaña, a "
+        "diferencia de Alt+L que es global",
         None,
     ),
     (
@@ -143,15 +184,27 @@ ATAJOS = [
         None,
     ),
     (
+        None, None, "Alt+S (en Configuración de Reporte de Créditos)", "Configuración",
+        "Elegir el archivo Excel del reporte de créditos a importar",
+        None,
+    ),
+    (
+        None, None, "Alt+I (en Configuración de Reporte de Créditos)", "Configuración",
+        "Importar el reporte de créditos del archivo Excel seleccionado",
+        None,
+    ),
+    (
         None, None, "Alt+Y, A", "Ayuda",
         "Abrir esta pantalla de Ayuda con la lista de atajos de teclado",
         None,
     ),
     (
         None, None, "Ctrl+Tab / Ctrl+Shift+Tab", "Calculadora",
-        "Alternar entre las pestañas Casos y Calculadora de Crédito — la Calculadora es "
-        "una pestaña de primer nivel, no un diálogo de menú (pedido explícito del "
-        "usuario, 2026-07-11: \"esto es una función no una configuración\")",
+        "Alternar entre las pestañas Casos, Calculadora de Crédito e Historial de "
+        "Créditos — todas son pestañas de primer nivel, no diálogos de menú (pedido "
+        "explícito del usuario, 2026-07-11: \"esto es una función no una "
+        "configuración\", mismo criterio aplicado a Historial de Créditos el "
+        "2026-07-12). Al llegar a cada una, se anuncia por voz su nombre",
         None,
     ),
     (
@@ -186,6 +239,22 @@ ATAJOS = [
         "Confirmar la empresa resaltada y anunciar por voz \"Seleccionada {empresa}\", sin "
         "repetir la tasa — al navegar con las flechas, NVDA ya anuncia nombre y tasa de "
         "cada opción por su cuenta",
+        None,
+    ),
+    (
+        None, None, "Alt+B (en Historial de Créditos)", "Historial de Créditos",
+        "Ejecutar la búsqueda con el término escrito (botón Buscar)",
+        None,
+    ),
+    (
+        None, None, "Alt+V (en Historial de Créditos)", "Historial de Créditos",
+        "Vaciar la búsqueda y volver a la vista por defecto (créditos en estado "
+        "Corriente)",
+        None,
+    ),
+    (
+        None, None, "Enter (con foco en el cuadro de búsqueda)", "Historial de Créditos",
+        "Ejecutar la búsqueda, igual que el botón Buscar",
         None,
     ),
     (

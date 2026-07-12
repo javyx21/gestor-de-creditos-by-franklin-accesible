@@ -7,6 +7,7 @@ from gestor_credito.ui.ayuda_panel import AyudaPanel
 from gestor_credito.ui.calculadora_panel import CalculadoraPanel
 from gestor_credito.ui.casos_panel import CasosPanel
 from gestor_credito.ui.configuracion_panel import ConfiguracionPanel
+from gestor_credito.ui.creditos_panel import CreditosPanel
 from gestor_credito.ui.notificaciones_panel import NotificacionesPanel
 
 
@@ -84,23 +85,30 @@ class MainFrame(wx.Frame):
         # (2026-07-11), después de probar la primera versión como diálogo de
         # menú: "esto es una función no una configuración", tiene que ser un
         # módulo de primer nivel igual que Casos, no algo escondido en un
-        # menú. Por eso acá SÍ vuelve un wx.Notebook con dos pestañas
-        # (Casos, Calculadora) — la única pestaña real de la app, todo lo
-        # demás sigue siendo diálogo modal.
+        # menú. Mismo criterio aplicado (2026-07-12) al nuevo módulo
+        # "Historial de Créditos" (reporte_credito, ver CreditosPanel): es
+        # una función de consulta diaria, no una configuración puntual, así
+        # que también es una pestaña de primer nivel. Por eso acá SÍ vuelve
+        # un wx.Notebook (ahora con TRES pestañas: Casos, Calculadora,
+        # Historial de Créditos) — las únicas pestañas reales de la app,
+        # todo lo demás sigue siendo diálogo modal.
         self.notebook = wx.Notebook(self)
         nombre_accesible(self.notebook, "Módulos")
 
         # wx.Notebook exige que cada página tenga al notebook como parent
         # directo (AssertionError real si no: "notebook pages must have
-        # notebook as parent") — por eso CasosPanel/CalculadoraPanel se
-        # construyen con self.notebook, no con self (MainFrame), a pesar de
-        # que casos_panel.py sigue llamando self.GetTopLevelParent() para la
-        # barra de estado: eso sube toda la cadena de parents hasta el
-        # Frame real sin importar cuántos niveles de Notebook haya en el medio.
+        # notebook as parent") — por eso CasosPanel/CalculadoraPanel/
+        # CreditosPanel se construyen con self.notebook, no con self
+        # (MainFrame), a pesar de que casos_panel.py sigue llamando
+        # self.GetTopLevelParent() para la barra de estado: eso sube toda la
+        # cadena de parents hasta el Frame real sin importar cuántos niveles
+        # de Notebook haya en el medio.
         self.casos_panel = CasosPanel(self.notebook)
         self.notebook.AddPage(self.casos_panel, "Casos")
         self.calculadora_panel = CalculadoraPanel(self.notebook)
         self.notebook.AddPage(self.calculadora_panel, "Calculadora de Crédito")
+        self.creditos_panel = CreditosPanel(self.notebook)
+        self.notebook.AddPage(self.creditos_panel, "Historial de Créditos")
         self.notebook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, self._on_cambiar_pestana)
 
         sizer = wx.BoxSizer(wx.VERTICAL)
@@ -146,6 +154,8 @@ class MainFrame(wx.Frame):
             self.casos_panel.recargar()
         elif pagina is self.calculadora_panel:
             self.calculadora_panel.recargar()
+        elif pagina is self.creditos_panel:
+            self.creditos_panel.recargar()
         anunciar_voz_nvda(self.notebook.GetPageText(indice))
         event.Skip()
 
@@ -180,9 +190,9 @@ class MainFrame(wx.Frame):
     def _crear_atajos(self):
         """Arma el wx.AcceleratorTable de la ventana a partir del registro
         central de gestor_credito/ui/atajos.py (única fuente de verdad,
-        compartida con la pestaña Ayuda). Cada entrada apunta a un método
-        público de CasosPanel — ver ese diccionario más abajo — para no
-        necesitar un import circular entre atajos.py y este módulo.
+        compartida con la pestaña Ayuda). Cada entrada apunta a un método —
+        ver ese diccionario más abajo — para no necesitar un import circular
+        entre atajos.py y este módulo.
 
         ATAJOS también documenta mnemónicos de botón/menú y atajos "de
         sistema" que ya funcionan solos (ver atajos.py): esas filas traen
@@ -192,11 +202,21 @@ class MainFrame(wx.Frame):
         modal (Notificaciones/Configuración) está abierto, Windows enruta el
         teclado ahí primero, así que estos atajos quedan inactivos sin
         necesidad de deshabilitarlos a mano.
+
+        "enfocar_busqueda", "enfocar_resultados" y "limpiar_busqueda" ya NO
+        apuntan directo a un método de CasosPanel (pedido explícito del
+        usuario, 2026-07-12): Ctrl+F, Ctrl+R y Alt+L pasaron a ser atajos
+        GLOBALES cuyo efecto depende de la pestaña activa del notebook en
+        ese momento — antes siempre apuntaban a Casos sin importar qué
+        pestaña estuviera realmente activa, así que no tenían ningún efecto
+        visible desde la Calculadora o Historial de Créditos. Ver
+        _enfocar_busqueda_segun_pestana_activa/_enfocar_resultados_segun_pestana_activa/
+        _limpiar_segun_pestana_activa más abajo.
         """
         acciones = {
-            "enfocar_busqueda": self.casos_panel.enfocar_busqueda,
-            "enfocar_resultados": self.casos_panel.enfocar_resultados,
-            "limpiar_busqueda": self.casos_panel.limpiar_busqueda,
+            "enfocar_busqueda": self._enfocar_busqueda_segun_pestana_activa,
+            "enfocar_resultados": self._enfocar_resultados_segun_pestana_activa,
+            "limpiar_busqueda": self._limpiar_segun_pestana_activa,
         }
 
         entradas = []
@@ -212,6 +232,55 @@ class MainFrame(wx.Frame):
     @staticmethod
     def _crear_manejador_atajo(metodo):
         return lambda event: metodo()
+
+    def _enfocar_busqueda_segun_pestana_activa(self):
+        """Atajo GLOBAL Ctrl+F (pedido explícito del usuario, 2026-07-12):
+        "si el usuario está posicionado en el apartado de Casos, el atajo
+        debe activar la búsqueda interna de ese módulo. Si el usuario se
+        encuentra en el apartado del Historial de Créditos, el atajo debe
+        mover el foco del cursor directamente al cuadro de edición de
+        búsqueda". En Calculadora no hay un cuadro de búsqueda equivalente,
+        así que no hace nada ahí — antes este atajo apuntaba siempre a
+        CasosPanel.enfocar_busqueda() sin importar la pestaña activa, sin
+        ningún efecto visible desde las otras dos."""
+        pagina = self.notebook.GetCurrentPage()
+        if pagina is self.casos_panel:
+            self.casos_panel.enfocar_busqueda()
+        elif pagina is self.creditos_panel:
+            self.creditos_panel.enfocar_busqueda()
+
+    def _enfocar_resultados_segun_pestana_activa(self):
+        """Atajo GLOBAL Ctrl+R (pedido explícito del usuario, 2026-07-12:
+        "el comando Ctrl+R que lleva a la lista igual tiene que funcionar
+        con el apartado del historial de créditos") — mismo criterio que
+        _enfocar_busqueda_segun_pestana_activa: antes apuntaba siempre a
+        CasosPanel.enfocar_resultados() sin importar la pestaña activa, sin
+        ningún efecto visible desde Historial de Créditos. En Calculadora
+        no hay una lista de resultados equivalente, así que no hace nada
+        ahí."""
+        pagina = self.notebook.GetCurrentPage()
+        if pagina is self.casos_panel:
+            self.casos_panel.enfocar_resultados()
+        elif pagina is self.creditos_panel:
+            self.creditos_panel.enfocar_resultados()
+
+    def _limpiar_segun_pestana_activa(self):
+        """Atajo GLOBAL Alt+L (pedido explícito del usuario, 2026-07-12): su
+        efecto ahora depende de qué pestaña está activa, en vez de apuntar
+        siempre a Casos — cada módulo define su propio significado de
+        "limpiar": la Calculadora limpia todos los campos de entrada
+        (conservando la última empresa convenio elegida), Casos limpia el
+        cuadro de edición del caso seleccionado (ya NO la búsqueda — eso
+        pasó al botón local "Vaciar búsqueda", Alt+V, ver casos_panel.py), e
+        Historial de Créditos vacía la búsqueda y vuelve a la vista por
+        defecto."""
+        pagina = self.notebook.GetCurrentPage()
+        if pagina is self.calculadora_panel:
+            self.calculadora_panel.limpiar_formulario()
+        elif pagina is self.casos_panel:
+            self.casos_panel.limpiar_edicion()
+        elif pagina is self.creditos_panel:
+            self.creditos_panel.limpiar_busqueda()
 
     def _on_abrir_notificaciones(self, event):
         self._abrir_dialogo("Notificaciones", NotificacionesPanel)
@@ -246,6 +315,13 @@ class MainFrame(wx.Frame):
         # con el valor anterior". Recargar acá, incondicional, sin importar
         # qué diálogo se cerró, es más simple y seguro que intentar detectar
         # si el diálogo cerrado tocó convenio_tasa específicamente.
+        #
+        # Historial de Créditos, mismo motivo (2026-07-12): su importación
+        # también vive en Configuración (Configuración de Reporte de
+        # Créditos), no en la propia pestaña — sin este recargo, reimportar
+        # el Excel y volver directo a esta pestaña (sin pasar por otra)
+        # dejaría la lista mostrando los datos de antes de importar.
         self.casos_panel.recargar()
         self.calculadora_panel.recargar()
+        self.creditos_panel.recargar()
         self.SetStatusText("Listo")

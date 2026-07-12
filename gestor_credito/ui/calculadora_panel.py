@@ -11,6 +11,7 @@ from gestor_credito.db.database import get_connection
 from gestor_credito.ui.accesibilidad import activar_con_enter, anunciar_voz_nvda, nombre_accesible
 from gestor_credito.ui.fechas import parsear_fecha_ui
 from gestor_credito.ui.logo import AppLogo
+from gestor_credito.ui.sonido import SONIDO_BORRAR, reproducir_sonido
 
 # Fijo a pedido explícito del usuario (2026-07-12): "por el momento es
 # estrictamente fijo... no va a variar". Antes era un campo editable
@@ -491,6 +492,42 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
             self._limpiar_resultados()
             return
         self._calcular_y_mostrar(entradas, hablar=False)
+
+    def limpiar_formulario(self):
+        """Atajo GLOBAL Alt+L cuando la pestaña activa es la Calculadora
+        (pedido explícito del usuario, 2026-07-12: "debe limpiar
+        absolutamente todos los campos de entrada de datos, manteniendo
+        únicamente seleccionada la última empresa que se utilizó") — ver
+        MainFrame._limpiar_segun_pestana_activa.
+
+        empresa_choice NO se toca a propósito: la empresa/tasa ya resuelta
+        no es un dato que el oficial tipee a mano, así que no tiene sentido
+        "olvidarla" cada vez que limpia el resto. El resto de los campos
+        vuelve a su estado inicial en blanco (Periodicidad a su selección
+        por defecto, índice 0 "Mensual", igual que al construir el panel).
+
+        Al vaciar fecha/salario, el pasivo laboral en vivo también se limpia
+        solo (ver _actualizar_pasivo_laboral_en_vivo, ya atado a EVT_TEXT de
+        esos dos campos) — se llama una vez más acá de forma explícita,
+        mismo criterio que _on_calcular, para no depender únicamente del
+        evento. El cuadro de Resultados también se limpia (ver
+        _limpiar_resultados): un cálculo anterior ya no corresponde a un
+        formulario recién vaciado.
+
+        Reproduce el sonido de confirmación (borrar.wav) — pedido explícito
+        del usuario: "la acción de borrar siempre tiene que hacer llamado
+        al sonido", mismo criterio que ya usan las acciones de limpiar/
+        eliminar de CasosPanel."""
+        self.fecha_ingreso_texto.SetValue("")
+        self.salario_texto.SetValue("")
+        self.extra_texto.SetValue("0")
+        self.monto_texto.SetValue("")
+        self.plazo_texto.SetValue("")
+        self.periodicidad_choice.SetSelection(0)
+        self.deuda_texto.SetValue("0")
+        self._actualizar_pasivo_laboral_en_vivo()
+        self._limpiar_resultados()
+        reproducir_sonido(SONIDO_BORRAR)
 
     # ---- Atajos de verbalización pura (Ctrl+Shift+Q/W/E/R) ----------------
 
