@@ -765,6 +765,62 @@ about "todas las salidas de texto y cajas de resultado de la calculadora", not t
 — `casos_panel.py`'s monto formatting (`f"{monto_solicitado:,.2f}"`) still uses commas and wasn't
 touched; don't assume this rule generalizes to the rest of the app without being told.
 
+**Real bug found via user report, NOT a formula error (2026-07-12)**: user reported the cuota for
+MIDESA (monto US$1140, plazo 24 meses) came out "excesivamente alto" and asked for a full audit of
+every rate against the Excel plus a recheck of the cuota formula itself. Verified the formula
+first, rigorously: drove `recursos/calculadora.xlsx` via Excel COM (`ReadOnly=True`, per the
+OneDrive/AutoSave lesson above) with those exact inputs (MIDESA, monto=1140, plazo=24, Mensual) —
+Excel's own `B14` returned US$59.05, and `evaluar_capacidad()` with the same inputs and `tasa=0.18`
+returns the identical value (`59.05328338275904`, matching to 10+ decimal places) — the formula is
+correct, not the bug. Then queried the **live** `convenio_tasa` table directly and compared every
+row against the Excel's `Convenios` sheet: **MIDESA alone was wrong — 0.70 (70%) in the database
+vs. 0.18 (18%) in the Excel**, timestamped the same day, almost certainly a leftover from testing
+the "Actualizar tasa" feature before it was removed from this panel (see above) — every other
+company matched exactly. Fixed by calling `guardar_tasa(conn, "MIDESA", 0.18)` directly against the
+live database (not a code change — the code was never wrong). **Lesson**: when a computed number
+looks wrong, verify the formula against Excel via COM *and* check the live data the formula was fed
+before assuming which one is broken — here the formula was fine and a single stale row in the
+manually-editable table was the actual cause.
+
+**Empresa list now speaks its own rate (2026-07-12)** — directly motivated by the MIDESA incident
+above: user's words, *"para estar completamente seguro de qué tasa se está aplicando... necesito
+que al navegar por la lista, cada opción muestre y verbalice el nombre de la empresa junto con su
+respectivo porcentaje de tasa"* (e.g. "Aceitera El Real: Tasa: 33%"). `_texto_opcion_empresa()`
+builds that combined string for every `empresa_choice` item — NVDA already announces a
+`wx.Choice` item's own text while arrowing through it, so folding the tasa into the item text was
+enough; no new accessibility plumbing needed. This meant `empresa_choice`'s visible/announced text
+is no longer the real empresa name, which broke every place that used to read it with
+`GetStringSelection()` — replaced with `_empresa_seleccionada()`, which maps the selected *index*
+back to the real empresa name via a parallel list (`_empresas_por_indice`, kept in the same order
+as the choice items by `_cargar_empresas`). `self.tasa_texto` (the separate "Tasa: X%" label next
+to the dropdown) was left in place too — belt and suspenders, not asked to be removed, and it still
+serves a sighted user glancing at the screen without navigating the dropdown.
+
+**Confirmation-only "Seleccionada", Ctrl+Shift+E, and a shorter Calcular summary (2026-07-12,
+same day, two follow-up rounds)** — three related refinements after the empresa list started
+speaking its own rate, all aimed at cutting down repetitive/noisy speech:
+- **Enter/Espacio on `empresa_choice`** speaks an explicit confirmation, via the same
+  `EVT_CHAR_HOOK` + `wx.Window.FindFocus() is self.empresa_choice` pattern already established for
+  `filtro_alerta_choice` (`casos_panel.py`) and `agentes_choice` (`configuracion_panel.py`) — folded
+  into the same handler as the Ctrl+Shift+Q/W/E hotkeys below, since only one `EVT_CHAR_HOOK` is
+  bound per panel. Arrowing through the list (`EVT_CHOICE`) stays silent on the app's side, same as
+  before — NVDA's own native announcement of each item's text (which now includes the tasa) is
+  untouched and not something app code can suppress for a standard `wx.Choice` without abandoning
+  it for a custom-drawn control (against the project's own accessibility guidance). **Went through
+  two iterations on the exact wording**: first attempt spoke `"{empresa}, tasa {tasa}, seleccionada"`
+  (repeating the rate) — user reported this as "demasiada información... mucho ruido" after testing,
+  since the rate was already just heard while arrowing. **Final form**: `"Seleccionada {empresa}"`
+  only, e.g. `"Seleccionada Midesa"`, `"Seleccionada EL ZOCALO"` — no tasa, no trailing punctuation
+  read awkwardly by the synthesizer. `_anunciar_empresa_confirmada()` in `calculadora_panel.py`.
+- **Ctrl+Shift+E**: new voice-only shortcut, same family as Q/W — speaks only the currently chosen
+  empresa's name (`"Empresa: Midesa."`), deliberately without the tasa (user's words: "ese dato ya
+  lo revisé en la lista"). Never moves focus, same as Q/W.
+- **Calcular's spoken summary dropped the pasivo laboral line** — it used to open with "Pasivo
+  laboral: X córdobas." before the cuota/endeudamiento, which the user found redundant now that
+  Ctrl+Shift+Q exists specifically for that number; the summary is now just "Cuota calculada: X
+  dólares. Nivel de endeudamiento: Y%." The visible result label (`resultado_pasivo_laboral`) is
+  untouched — only the *spoken* summary changed.
+
 **Validation errors on Calcular** (missing/invalid fields, empresa with no tasa configured) use
 `wx.MessageBox`, matching this app's one established exception to "no popups" — same reasoning as
 everywhere else it's used: an inline label wouldn't be proactively announced by NVDA, and this is

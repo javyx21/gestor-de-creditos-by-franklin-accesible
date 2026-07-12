@@ -132,6 +132,19 @@ ATAJOS = [
         None,
     ),
     (
+        None, None, "Ctrl+Shift+E", "Calculadora",
+        "Anunciar por voz únicamente el nombre de la empresa convenio elegida (sin la "
+        "tasa), sin mover el foco",
+        None,
+    ),
+    (
+        None, None, "Enter / Espacio (en Empresa convenio)", "Calculadora",
+        "Confirmar la empresa resaltada y anunciar por voz \"Seleccionada {empresa}\", sin "
+        "repetir la tasa — al navegar con las flechas, NVDA ya anuncia nombre y tasa de "
+        "cada opción por su cuenta",
+        None,
+    ),
+    (
         None, None, "Esc", "General",
         "Cerrar el diálogo abierto (Notificaciones/Configuración/Ayuda) y volver a Casos",
         None,

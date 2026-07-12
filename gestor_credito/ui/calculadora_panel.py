@@ -23,6 +23,20 @@ from gestor_credito.ui.logo import AppLogo
 TIPO_CAMBIO_FIJO = 36.6243
 
 
+def _texto_opcion_empresa(empresa, tasa):
+    """Texto de cada ítem de empresa_choice — pedido explícito del usuario
+    (2026-07-12), tras un reporte real de una tasa desactualizada que hizo
+    que no confiara en cuál se estaba aplicando: "necesito que al navegar
+    por la lista, cada opción muestre y verbalice el nombre de la empresa
+    junto con su respectivo porcentaje de tasa". NVDA ya anuncia el texto
+    de cada ítem al arrastrar flechas por un wx.Choice sin necesitar nada
+    especial de accesibilidad acá — con la tasa DENTRO del texto del ítem,
+    se escucha "Empresa: Tasa: X%" en cada opción sin un paso extra."""
+    if tasa is None:
+        return f"{empresa}: Tasa: sin configurar"
+    return f"{empresa}: Tasa: {tasa:.0%}"
+
+
 class CalculadoraPanel(scrolledpanel.ScrolledPanel):
     """Calculadora de crédito completamente independiente y autocontenida —
     pedido explícito del usuario (2026-07-12): "por el momento, este módulo
@@ -67,6 +81,12 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         super().__init__(parent)
 
         self._convenios = {}
+        # Empresas en el mismo orden que los ítems de empresa_choice — permite
+        # recuperar el nombre real de la empresa a partir del índice
+        # seleccionado, ya que el texto visible/anunciado de cada ítem ahora
+        # incluye la tasa (ver _texto_opcion_empresa) y no es directamente la
+        # empresa. Ver _empresa_seleccionada().
+        self._empresas_por_indice = []
         self._ultimo_resultado = None
         # Pasivo laboral: se rastrea aparte del resto de "Resultados" porque
         # se actualiza en vivo (ver _actualizar_pasivo_laboral_en_vivo), sin
@@ -190,8 +210,22 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
 
         return box
 
+    def _empresa_seleccionada(self):
+        """Nombre real de la empresa elegida en empresa_choice — no
+        GetStringSelection(), porque el texto visible de cada ítem ahora
+        incluye la tasa (pedido explícito del usuario, 2026-07-12: quiere
+        que NVDA anuncie "Empresa: Tasa: X%" al navegar la lista, ver
+        _texto_opcion_empresa) y no coincide con la clave que usan
+        `self._convenios`/`obtener_tasa`. Se recupera por índice contra
+        `_empresas_por_indice`, que _cargar_empresas mantiene en el mismo
+        orden que los ítems del wx.Choice."""
+        indice = self.empresa_choice.GetSelection()
+        if indice == wx.NOT_FOUND or indice >= len(self._empresas_por_indice):
+            return None
+        return self._empresas_por_indice[indice]
+
     def _actualizar_tasa_mostrada(self):
-        empresa = self.empresa_choice.GetStringSelection()
+        empresa = self._empresa_seleccionada()
         tasa = self._convenios.get(empresa)
         self.tasa_texto.SetLabel("Tasa: sin configurar" if tasa is None else f"Tasa: {tasa:.0%}")
 
@@ -262,7 +296,7 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         siempre wx.MessageBox, ver _on_calcular: es una validación que de
         otra forma NVDA no se enteraría, mismo criterio que el resto de la
         app para este tipo de error)."""
-        empresa = self.empresa_choice.GetStringSelection()
+        empresa = self._empresa_seleccionada()
         if not empresa:
             return None, "Elegí una empresa convenio."
         tasa = self._convenios.get(empresa)
@@ -354,8 +388,10 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
             f"Nivel de endeudamiento: {resultado.nivel_endeudamiento:.0%}"
         )
 
+        # Pedido explícito del usuario (2026-07-12): sin el pasivo laboral
+        # acá — para eso ya está Ctrl+Shift+Q, este resumen se quedaba
+        # demasiado largo repitiendo un dato que ya se puede consultar aparte.
         mensaje = (
-            f"Pasivo laboral: {resultado.pasivo_laboral_cordobas:.2f} córdobas. "
             f"Cuota calculada: {resultado.cuota_usd:.2f} dólares. "
             f"Nivel de endeudamiento: {resultado.nivel_endeudamiento:.0%}."
         )
@@ -368,7 +404,7 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         # usuario, para el que se construyó esa función.
         anunciar_voz_nvda(mensaje)
 
-    # ---- Atajos de verbalización pura (Ctrl+Shift+Q/W) -------------------
+    # ---- Atajos de verbalización pura (Ctrl+Shift+Q/W/E) ------------------
 
     def _on_atajo_verbalizacion(self, event):
         if event.ControlDown() and event.ShiftDown() and not event.AltDown():
@@ -379,6 +415,24 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
             if codigo == ord("W"):
                 self._anunciar_salario_neto()
                 return
+            if codigo == ord("E"):
+                self._anunciar_empresa()
+                return
+        elif (
+            not event.ControlDown() and not event.ShiftDown() and not event.AltDown()
+            and event.GetKeyCode() in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER, wx.WXK_SPACE)
+            and wx.Window.FindFocus() is self.empresa_choice
+        ):
+            # Pedido explícito del usuario (2026-07-12): mientras se navega
+            # empresa_choice con las flechas, NVDA ya anuncia el texto de
+            # cada ítem solo (nombre + tasa, ver _texto_opcion_empresa) — no
+            # se agrega ningún anuncio propio ahí, para no ser repetitivo.
+            # "Seleccionada" se habla SOLO al confirmar con Enter/Espacio,
+            # mismo mecanismo EVT_CHAR_HOOK que ya usan filtro_alerta_choice
+            # (casos_panel.py) y agentes_choice (configuracion_panel.py) para
+            # interceptar Enter antes de que el combo nativo se lo trague.
+            self._anunciar_empresa_confirmada()
+            return
         event.Skip()
 
     def _anunciar_pasivo_laboral(self):
@@ -407,6 +461,29 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
             f"Salario con deducciones: {r.salario_neto_usd:.2f} dólares y {r.salario_neto_cordobas:.2f} córdobas."
         )
 
+    def _anunciar_empresa(self):
+        """Ctrl+Shift+E: habla SOLO el nombre de la empresa convenio
+        actualmente elegida — sin la tasa, a propósito (pedido explícito del
+        usuario, 2026-07-12: "ese dato ya lo revisé en la lista", ver
+        _texto_opcion_empresa, que ya la anuncia al navegar el combo)."""
+        empresa = self._empresa_seleccionada()
+        if empresa is None:
+            anunciar_voz_nvda("Todavía no se eligió ninguna empresa convenio.")
+            return
+        anunciar_voz_nvda(f"Empresa: {empresa}.")
+
+    def _anunciar_empresa_confirmada(self):
+        """Enter/Espacio sobre empresa_choice: confirmación mínima, a
+        propósito — pedido explícito del usuario (2026-07-12) tras probar
+        la versión anterior (que repetía la tasa) y encontrarla "demasiada
+        información... mucho ruido". Ahora es solo "Seleccionada {empresa}",
+        sin tasa — la tasa ya se escuchó al navegar la lista (ver
+        _texto_opcion_empresa) y no hace falta repetirla acá."""
+        empresa = self._empresa_seleccionada()
+        if empresa is None:
+            return
+        anunciar_voz_nvda(f"Seleccionada {empresa}")
+
     # ---- Empresas / tasas por convenio ---------------------------------
     # Solo lectura acá — pedido explícito del usuario (2026-07-12): editar
     # tasas, agregar empresas o cambiar el tipo de cambio es trabajo futuro
@@ -431,13 +508,12 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         finally:
             conn.close()
 
-        empresa_previa = self.empresa_choice.GetStringSelection()
+        empresa_previa = self._empresa_seleccionada()
 
         self._convenios = dict(convenios)
-        self.empresa_choice.Set([empresa for empresa, _tasa in convenios])
+        self._empresas_por_indice = [empresa for empresa, _tasa in convenios]
+        self.empresa_choice.Set([_texto_opcion_empresa(empresa, tasa) for empresa, tasa in convenios])
 
-        if empresa_previa:
-            indice = self.empresa_choice.FindString(empresa_previa)
-            if indice != wx.NOT_FOUND:
-                self.empresa_choice.SetSelection(indice)
-                self._actualizar_tasa_mostrada()
+        if empresa_previa and empresa_previa in self._empresas_por_indice:
+            self.empresa_choice.SetSelection(self._empresas_por_indice.index(empresa_previa))
+            self._actualizar_tasa_mostrada()
