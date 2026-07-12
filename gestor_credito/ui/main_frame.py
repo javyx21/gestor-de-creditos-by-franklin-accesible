@@ -217,7 +217,12 @@ class MainFrame(wx.Frame):
         self._abrir_dialogo("Notificaciones", NotificacionesPanel)
 
     def _on_abrir_configuracion(self, event):
-        self._abrir_dialogo("Configuración", ConfiguracionPanel)
+        # Más ancho que el tamaño por defecto de _abrir_dialogo: desde que
+        # este panel pasó a un wx.TreeCtrl de categorías + contenido al
+        # costado (2026-07-12), el ancho por defecto (760) dejaba la lista
+        # de empresas convenio de "Configuración de la Calculadora" muy
+        # angosta junto al árbol.
+        self._abrir_dialogo("Configuración", ConfiguracionPanel, size=(900, 620))
 
     def _on_abrir_ayuda(self, event):
         self._abrir_dialogo("Ayuda", AyudaPanel)
@@ -230,5 +235,17 @@ class MainFrame(wx.Frame):
         # Configuración o una alerta marcada en Notificaciones debe reflejarse
         # sin que el usuario tenga que volver a apretar "Buscar" a mano (mismo
         # criterio que antes aplicaba EVT_NOTEBOOK_PAGE_CHANGED con pestañas).
+        #
+        # Calculadora también, desde que Configuración > Configuración de la
+        # Calculadora permite editar empresas/tasas (2026-07-12): si la
+        # Calculadora ya estaba abierta en la otra pestaña y no se cambia de
+        # pestaña después de cerrar Configuración, EVT_NOTEBOOK_PAGE_CHANGED
+        # nunca dispara su propio recargar() y se queda mostrando la tasa
+        # vieja hasta la próxima vez que se visite la pestaña — reporte real
+        # del usuario (2026-07-12): "cambio la tasa pero la calculadora sigue
+        # con el valor anterior". Recargar acá, incondicional, sin importar
+        # qué diálogo se cerró, es más simple y seguro que intentar detectar
+        # si el diálogo cerrado tocó convenio_tasa específicamente.
         self.casos_panel.recargar()
+        self.calculadora_panel.recargar()
         self.SetStatusText("Listo")

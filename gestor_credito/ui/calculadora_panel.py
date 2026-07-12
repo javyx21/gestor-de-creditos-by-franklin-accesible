@@ -104,17 +104,22 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         sizer.Add(self._crear_entradas(), 0, wx.EXPAND | wx.ALL, 8)
         sizer.Add(self._crear_resultados(), 0, wx.EXPAND | wx.ALL, 8)
 
-        # Atajos de verbalización pura (pedido explícito del usuario,
-        # 2026-07-12): Ctrl+Shift+Q/W anuncian Pasivo laboral / Salario con
-        # deducciones por voz SIN mover el foco ni tabular hasta el cuadro de
+        # Atajos de un solo tecleo (pedido explícito del usuario, 2026-07-12):
+        # Ctrl+Shift+Q/W/E anuncian Pasivo laboral / Salario con deducciones /
+        # Empresa por voz SIN mover el foco ni tabular hasta el cuadro de
         # Resultados — para no obligar a NVDA a recorrer todos los campos
-        # informativos cada vez que solo hace falta un dato puntual. Mismo
-        # mecanismo EVT_CHAR_HOOK a nivel de panel que ya usa CasosPanel para
-        # el combo "Filtrar por alerta" (necesario porque, a diferencia de un
-        # wx.Dialog, un wx.Panel dentro de un wx.Notebook no recibe atajos de
-        # teclado "globales" por ningún otro medio) — pero acá SIN el chequeo
-        # de FindFocus() de ese caso, a propósito: el pedido es que funcione
-        # sin importar qué control del panel tenga el foco en ese momento.
+        # informativos cada vez que solo hace falta un dato puntual.
+        # Ctrl+Shift+R es distinto (ver _on_atajo_verbalizacion): no se limita
+        # a anunciar, dispara el cálculo completo — es el ÚNICO atajo de
+        # teclado para calcular, ver el botón "Calcular" (sin mnemónico desde
+        # que se sacó Alt+A, pedido explícito del usuario: "no dupliques
+        # funciones"). Mismo mecanismo EVT_CHAR_HOOK a nivel de panel que ya
+        # usa CasosPanel para el combo "Filtrar por alerta" (necesario
+        # porque, a diferencia de un wx.Dialog, un wx.Panel dentro de un
+        # wx.Notebook no recibe atajos de teclado "globales" por ningún otro
+        # medio) — pero acá SIN el chequeo de FindFocus() de ese caso, a
+        # propósito: el pedido es que funcione sin importar qué control del
+        # panel tenga el foco en ese momento.
         self.Bind(wx.EVT_CHAR_HOOK, self._on_atajo_verbalizacion)
 
         self.SetSizer(sizer)
@@ -203,7 +208,18 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
 
         # Único botón de acción de esta sección — siempre habilitado (no hay
         # ningún estado previo, como un caso seleccionado, del que dependa).
-        self.calcular_btn = wx.Button(contenedor, label="&Calcular")
+        #
+        # SIN mnemónico (antes Alt+A, antes de eso Alt+C — ver historial en
+        # git): pedido explícito del usuario (2026-07-12), "no dupliques
+        # funciones... el único shortcut encargado de realizar el cálculo y
+        # mostrar el resultado debe ser Control+Shift+R" — Alt+A quedaba
+        # duplicando exactamente esa misma acción. El botón sigue existiendo
+        # para un usuario vidente que prefiera hacer clic con el mouse (sigue
+        # activándose con Enter una vez que tiene el foco, ver
+        # activar_con_enter), pero ya no tiene un acelerador de teclado
+        # global — ver _on_atajo_verbalizacion (codigo == ord("R")), que
+        # ahora llama directo a _on_calcular.
+        self.calcular_btn = wx.Button(contenedor, label="Calcular")
         self.calcular_btn.Bind(wx.EVT_BUTTON, self._on_calcular)
         activar_con_enter(self.calcular_btn)
         box.Add(self.calcular_btn, 0)
@@ -228,6 +244,7 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         empresa = self._empresa_seleccionada()
         tasa = self._convenios.get(empresa)
         self.tasa_texto.SetLabel("Tasa: sin configurar" if tasa is None else f"Tasa: {tasa:.0%}")
+        self._refrescar_resultado_tras_cambio_de_tasa()
 
     # ---- Resultados ---------------------------------------------------
     # Orden y contenido calcan Calculadora!B7:B19 del Excel de referencia.
@@ -339,7 +356,24 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         if error:
             wx.MessageBox(error, "Datos incompletos", wx.OK | wx.ICON_ERROR, self)
             return
+        self._calcular_y_mostrar(entradas, hablar=True)
 
+    def _calcular_y_mostrar(self, entradas, hablar):
+        """Núcleo compartido entre Calcular (botón o Ctrl+Shift+R,
+        `hablar=True`: valida antes vía _leer_entradas/wx.MessageBox, avisa
+        por voz y estado al terminar)
+        y el refresco silencioso al cambiar de empresa (`hablar=False`, ver
+        _refrescar_resultado_tras_cambio_de_tasa) — antes este cálculo vivía
+        solo dentro de _on_calcular, así que un cambio de empresa sin volver
+        a presionar Calcular dejaba el cuadro de Resultados mostrando el
+        número calculado con la tasa de la empresa ANTERIOR, indistinguible
+        de un resultado válido. Reporte real del usuario (2026-07-12),
+        calificado como fallo crítico: "el sistema siempre devuelve el mismo
+        resultado... no recalcula al cambiar el foco de la empresa
+        seleccionada". Confirmado con una batería de pruebas de estrés
+        (tests/test_calculadora_panel.py) que la tasa SÍ se leía fresca en
+        cada Calcular — lo que faltaba era forzar ese Calcular, no arreglar
+        la lectura de la tasa en sí."""
         resultado = evaluar_capacidad(
             fecha_ingreso=entradas["fecha_ingreso"],
             salario_bruto_mensual_cordobas=entradas["salario_bruto_cordobas"],
@@ -388,6 +422,15 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
             f"Nivel de endeudamiento: {resultado.nivel_endeudamiento:.0%}"
         )
 
+        if not hablar:
+            # Refresco silencioso (cambio de empresa/tasa, ver
+            # _refrescar_resultado_tras_cambio_de_tasa): mismo criterio que
+            # ya usa tasa_texto (se actualiza en cada cambio del combo sin
+            # anunciarse por voz) — anunciar acá también convertiría cada
+            # flecha sobre empresa_choice en un anuncio hablado, exactamente
+            # el tipo de ruido que ya se evitó a propósito para ese combo.
+            return
+
         # Pedido explícito del usuario (2026-07-12): sin el pasivo laboral
         # acá — para eso ya está Ctrl+Shift+Q, este resumen se quedaba
         # demasiado largo repitiendo un dato que ya se puede consultar aparte.
@@ -404,7 +447,52 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         # usuario, para el que se construyó esa función.
         anunciar_voz_nvda(mensaje)
 
-    # ---- Atajos de verbalización pura (Ctrl+Shift+Q/W/E) ------------------
+    def _limpiar_resultados(self):
+        """Vuelve el cuadro de Resultados (salvo Pasivo laboral, que se
+        rastrea aparte y sigue siendo válido) a su estado "todavía no
+        calculado" — usado cuando cambiar de empresa deja el formulario sin
+        datos suficientes para recalcular limpio (ver
+        _refrescar_resultado_tras_cambio_de_tasa): mostrar el resultado de la
+        empresa ANTERIOR ahí sería indistinguible de un cálculo válido para
+        la empresa recién elegida."""
+        self._ultimo_resultado = None
+        self.resultado_salario_bruto.SetLabel("Salario bruto: —")
+        self.resultado_salario_neto.SetLabel("Salario neto mensual: —")
+        self.resultado_cuota.SetLabel("Cuota calculada: —")
+        self.resultado_cobertura.SetLabel("Cobertura de pasivo laboral: —")
+        self.resultado_endeudamiento.SetLabel("Nivel de endeudamiento: —")
+
+    def _refrescar_resultado_tras_cambio_de_tasa(self):
+        """Se llama cada vez que la tasa aplicable puede haber cambiado: al
+        elegir otra empresa en empresa_choice, y al recargar() (ver ese
+        método) cuando la MISMA empresa elegida tiene ahora una tasa distinta
+        porque se editó desde Configuración mientras esta pestaña seguía
+        abierta. Pedido explícito del usuario (2026-07-12), fallo calificado
+        como crítico: "asegurate de que cada cambio de empresa fuerce un
+        recálculo limpio con su tasa correspondiente".
+
+        Sin datos previos calculados (_ultimo_resultado is None) no hay nada
+        que quede desactualizado, así que no hace nada — evita, por ejemplo,
+        que construir el panel (recargar/_cargar_empresas corre en __init__)
+        dispare un cálculo antes de que el oficial haya tipeado nada.
+
+        Si ya había un resultado y el formulario sigue teniendo datos
+        válidos, se recalcula en silencio con la tasa/empresa actuales (sin
+        wx.MessageBox ni voz — esto no es una acción explícita del usuario,
+        mismo criterio que tasa_texto). Si el formulario YA NO alcanza para
+        calcular (p. ej. se cambió a una empresa sin tasa configurada), se
+        limpia el cuadro en vez de dejar el número de la empresa anterior
+        mostrado como si siguiera vigente — eso es exactamente lo que se
+        reportó como "cálculos incorrectos"."""
+        if self._ultimo_resultado is None:
+            return
+        entradas, error = self._leer_entradas()
+        if error:
+            self._limpiar_resultados()
+            return
+        self._calcular_y_mostrar(entradas, hablar=False)
+
+    # ---- Atajos de verbalización pura (Ctrl+Shift+Q/W/E/R) ----------------
 
     def _on_atajo_verbalizacion(self, event):
         if event.ControlDown() and event.ShiftDown() and not event.AltDown():
@@ -417,6 +505,18 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
                 return
             if codigo == ord("E"):
                 self._anunciar_empresa()
+                return
+            if codigo == ord("R"):
+                # Único atajo que dispara el cálculo (pedido explícito del
+                # usuario, 2026-07-12: "no dupliques funciones... el único
+                # shortcut encargado de realizar el cálculo y mostrar el
+                # resultado debe ser Control+Shift+R") — antes esta tecla
+                # solo anunciaba por voz un resultado ya calculado con
+                # Alt+A/el botón Calcular (ver _anunciar_cuota, eliminado);
+                # ahora llama directo a la misma lógica que el botón, así
+                # que ya no hace falta ningún otro atajo/mnemónico para
+                # calcular.
+                self._on_calcular(None)
                 return
         elif (
             not event.ControlDown() and not event.ShiftDown() and not event.AltDown()
@@ -454,7 +554,7 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         """Ctrl+Shift+W: igual que _anunciar_pasivo_laboral pero para el
         salario con deducciones aplicadas (INSS + IR + ingresos extra)."""
         if self._ultimo_resultado is None:
-            anunciar_voz_nvda("Todavía no se calculó el salario con deducciones. Presioná Alt+C para calcular primero.")
+            anunciar_voz_nvda("Todavía no se calculó el salario con deducciones. Presioná Ctrl+Shift+R para calcular primero.")
             return
         r = self._ultimo_resultado
         anunciar_voz_nvda(
@@ -517,3 +617,10 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         if empresa_previa and empresa_previa in self._empresas_por_indice:
             self.empresa_choice.SetSelection(self._empresas_por_indice.index(empresa_previa))
             self._actualizar_tasa_mostrada()
+        elif empresa_previa:
+            # La empresa que estaba elegida se borró (Configuración >
+            # "Eliminar empresa") mientras esta pestaña seguía abierta con un
+            # resultado ya calculado para ella — mismo criterio que un
+            # cambio de tasa: no dejar ese número mostrado como si siguiera
+            # vigente para una empresa que ya no existe.
+            self._limpiar_resultados()

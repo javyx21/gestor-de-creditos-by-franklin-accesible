@@ -103,6 +103,46 @@ ATAJOS = [
         None,
     ),
     (
+        None, None, "Flecha arriba / abajo (en árbol de categorías)", "Configuración",
+        "Moverse entre las categorías Configuración de Casos / Configuración de la "
+        "Calculadora — navegación nativa del árbol, no cambia todavía la sección "
+        "mostrada",
+        None,
+    ),
+    (
+        None, None, "Enter (en árbol de categorías)", "Configuración",
+        "Activar (mostrar) la sección de la categoría seleccionada, sin mover el foco",
+        None,
+    ),
+    (
+        None, None, "Tab (en árbol de categorías)", "Configuración",
+        "Activar la sección seleccionada y pasar el foco directo a su primer campo "
+        "editable",
+        None,
+    ),
+    (
+        None, None, "Alt+G (en Configuración de la Calculadora)", "Configuración",
+        "Guardar (crear o actualizar) la empresa convenio y tasa de los campos, y "
+        "anunciar por voz la confirmación",
+        None,
+    ),
+    (
+        None, None, "Enter (en el cuadro de Tasa de interés)", "Configuración",
+        "Guardar la tasa directamente sin tener que ir hasta el botón, y anunciar por "
+        "voz \"Tasa actualizada\"",
+        None,
+    ),
+    (
+        None, None, "Alt+N (en Configuración de la Calculadora)", "Configuración",
+        "Limpiar los campos para dar de alta una empresa convenio nueva",
+        None,
+    ),
+    (
+        None, None, "Alt+R (en Configuración de la Calculadora)", "Configuración",
+        "Eliminar la empresa convenio seleccionada (pide confirmación)",
+        None,
+    ),
+    (
         None, None, "Alt+Y, A", "Ayuda",
         "Abrir esta pantalla de Ayuda con la lista de atajos de teclado",
         None,
@@ -112,11 +152,6 @@ ATAJOS = [
         "Alternar entre las pestañas Casos y Calculadora de Crédito — la Calculadora es "
         "una pestaña de primer nivel, no un diálogo de menú (pedido explícito del "
         "usuario, 2026-07-11: \"esto es una función no una configuración\")",
-        None,
-    ),
-    (
-        None, None, "Alt+C", "Calculadora",
-        "Calcular pasivo laboral, salario neto, cuota y endeudamiento con los datos ingresados",
         None,
     ),
     (
@@ -135,6 +170,15 @@ ATAJOS = [
         None, None, "Ctrl+Shift+E", "Calculadora",
         "Anunciar por voz únicamente el nombre de la empresa convenio elegida (sin la "
         "tasa), sin mover el foco",
+        None,
+    ),
+    (
+        None, None, "Ctrl+Shift+R", "Calculadora",
+        "Calcular (pasivo laboral, salario neto, cuota y endeudamiento con los datos "
+        "ingresados) y anunciar por voz el resultado — único atajo de teclado para "
+        "calcular; el botón \"Calcular\" ya no tiene mnemónico (antes Alt+A, retirado "
+        "2026-07-12 para no duplicar la misma acción, pedido explícito del usuario: "
+        "\"no dupliques funciones\")",
         None,
     ),
     (

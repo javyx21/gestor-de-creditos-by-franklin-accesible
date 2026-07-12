@@ -1,7 +1,7 @@
 import pytest
 
 from gestor_credito.db import database
-from gestor_credito.db.convenios import guardar_tasa, listar_convenios, obtener_tasa
+from gestor_credito.db.convenios import eliminar_convenio, guardar_tasa, listar_convenios, obtener_tasa
 
 
 @pytest.fixture
@@ -47,3 +47,13 @@ def test_listar_convenios_incluye_las_29_empresas_sembradas(conn):
     assert len(convenios) == 29
     assert ("IMMSA", 0.36) in convenios
     assert ("GRUPO TALSE", None) in convenios
+
+
+def test_eliminar_convenio_la_quita_de_la_lista(conn):
+    eliminar_convenio(conn, "IMMSA")
+    assert obtener_tasa(conn, "IMMSA") is None
+    assert "IMMSA" not in [empresa for empresa, _tasa in listar_convenios(conn)]
+
+
+def test_eliminar_convenio_de_una_empresa_inexistente_no_falla(conn):
+    eliminar_convenio(conn, "EMPRESA QUE NO EXISTE")

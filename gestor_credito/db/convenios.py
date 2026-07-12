@@ -42,3 +42,13 @@ def guardar_tasa(conn, empresa_convenio, tasa_interes):
         (empresa_convenio, tasa_interes),
     )
     conn.commit()
+
+
+def eliminar_convenio(conn, empresa_convenio):
+    """Borra una empresa convenio y su tasa. Usado por el botón "Eliminar
+    empresa" del panel Configuración > Configuración de la Calculadora
+    (2026-07-12) — no afecta ningún caso ya importado con esa
+    empresa_convenio (obtener_tasa() simplemente vuelve a devolver None para
+    ella, igual que cualquier empresa desconocida)."""
+    conn.execute("DELETE FROM convenio_tasa WHERE empresa_convenio = ?", (empresa_convenio,))
+    conn.commit()
