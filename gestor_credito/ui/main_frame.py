@@ -1,7 +1,7 @@
 import wx
 
 from gestor_credito.db.database import init_db
-from gestor_credito.ui.accesibilidad import anunciar_texto_estado, nombre_accesible
+from gestor_credito.ui.accesibilidad import anunciar_texto_estado, anunciar_voz_nvda, nombre_accesible
 from gestor_credito.ui.atajos import ATAJOS
 from gestor_credito.ui.ayuda_panel import AyudaPanel
 from gestor_credito.ui.calculadora_panel import CalculadoraPanel
@@ -115,12 +115,38 @@ class MainFrame(wx.Frame):
         wx.Notebook: cada pestaña recarga sus datos en vivo al entrar, para
         que un cambio hecho en la otra pestaña o en un diálogo (agente
         configurado, tasa de convenio actualizada) se vea sin tener que
-        recargar a mano."""
-        pagina = self.notebook.GetPage(event.GetSelection())
+        recargar a mano.
+
+        Anuncia además el módulo al que se acaba de entrar — reporte real
+        del usuario (2026-07-12): parado en el selector de pestañas NVDA
+        solo decía "módulo" sin el nombre concreto, y Ctrl+Tab no anunciaba
+        nada en absoluto. Causa: nombre_accesible(self.notebook, "Módulos")
+        fija ese nombre fijo para el control de pestañas completo —
+        GetName() en _SoloNombreAccesible (accesibilidad.py) ignora el
+        childId, así que también pisa el nombre de cada pestaña individual
+        en vez de dejar pasar "Casos"/"Calculadora de Crédito" al control
+        nativo. Ctrl+Tab, además, cambia de página sin mover el foco al
+        control de pestañas, así que ni siquiera ese anuncio nativo (mal)
+        llegaba a dispararse. Se usa anunciar_voz_nvda() en vez de intentar
+        arreglar el nombre nativo del control: EVT_NOTEBOOK_PAGE_CHANGED
+        dispara para cualquier forma de cambiar de página (clic, flechas en
+        el selector, o Ctrl+Tab), así que un único anuncio explícito acá
+        cubre los tres casos por igual, sin depender de en qué control haya
+        quedado el foco — mismo criterio que ya se usa en el resto de la
+        app para anuncios que resultaron no ser confiables por la vía
+        nativa (ver docstring de anunciar_voz_nvda).
+
+        Confirmado con el usuario y su NVDA real: solo el nombre de la
+        pestaña ("Casos", "Calculadora de Crédito"), sin anteponer la
+        palabra "Módulo" — la primera versión sí funcionaba pero sonaba
+        redundante repetida en cada cambio."""
+        indice = event.GetSelection()
+        pagina = self.notebook.GetPage(indice)
         if pagina is self.casos_panel:
             self.casos_panel.recargar()
         elif pagina is self.calculadora_panel:
             self.calculadora_panel.recargar()
+        anunciar_voz_nvda(self.notebook.GetPageText(indice))
         event.Skip()
 
     def SetStatusText(self, texto):
