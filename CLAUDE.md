@@ -612,14 +612,15 @@ Judgment calls made while building this that are worth the user's attention:
 
 A second, independent module (2026-07-11) that replicates the calculation engine of a reference
 Excel workbook the user supplied, `recursos/calculadora.xlsx` (git-ignored, real client data —
-same treatment as `MachoteBaseDeDatos.xlsx`): given a caso's salary, hire date, requested amount,
-term and payment frequency, it computes labor liability (pasivo laboral), net salary, the level
-loan installment, labor-liability coverage, and debt-to-income ratio — the same numbers a loan
-officer used to work out by hand in that spreadsheet.
+same treatment as `MachoteBaseDeDatos.xlsx`): given a salary, hire date, requested credit amount,
+term and payment frequency — all typed by hand, every time — it computes labor liability (pasivo
+laboral), net salary, the level loan installment, labor-liability coverage, and debt-to-income
+ratio — the same numbers a loan officer used to work out by hand in that spreadsheet.
 
 **Explicitly kept separate from Casos** — user's words: "en el panel actual no se debe añadir
 absolutamente nada [...] esto debe ir separado e independiente para no saturar ni mezclar las
-funciones." No file under `casos_panel.py`'s reach references it.
+funciones." No file under `casos_panel.py`'s reach references it, and (see "Reverted to a fully
+standalone calculator" below) the reverse is also true: this panel doesn't reach into Casos either.
 
 **Navigation went through two iterations, worth knowing if a similar report comes up again**:
 1. First built as a menu-triggered modal dialog (`_PanelDialog`, exact same mechanism as
@@ -697,25 +698,72 @@ future `Enable(False)` on a *block* of input controls in this app**: don't — i
 Tab navigation, which for a screen-reader user is indistinguishable from the controls not existing.
 Gating a single terminal action button on prior state is the established, accepted pattern instead.
 
-**Flow**: Buscar caso (reuses `buscar_casos()` from Casos — cédula/nombre, same
-`clasificar_termino_busqueda()` rules) → selecting a result row prefills Empresa/Tasa (best-effort
-`FindString` match against `caso.empresa_convenio`; if it doesn't match anything in
-`convenio_tasa`, left unselected rather than guessing — see "Empresa is a `wx.Choice`, not
-read-only" below) and Monto (from `caso.monto_solicitado`, always USD, confirmed by the user) →
-if a simulation was already saved for that caso (`calculo_credito`, see below), ALL fields reload
-from it instead, so the officer picks up exactly where they left off → Calcular (pure, no DB
-write, can be pressed repeatedly while trying different montos/plazos) → Guardar simulación en
-este caso (the deliberate write step, separate button, same "calculate freely, save on purpose"
-pattern as the rest of the app).
+**Reverted to a fully standalone calculator, no caso/cliente/cédula linkage at all (2026-07-12)**:
+the panel used to have a "Buscar caso" section (reusing `buscar_casos()` from Casos to prefill
+Empresa/Monto) and a "Guardar simulación en este caso" button writing to `calculo_credito`. The
+user explicitly rejected this: *"no estoy de acuerdo con la vinculación que estás haciendo...
+elimina por completo cualquier intento de tomar datos de las solicitudes o de la lógica de las
+cédulas... este módulo debe ser estrictamente una calculadora de crédito independiente y nada
+más."* Both were removed completely — `calculadora_panel.py` no longer imports `buscar_casos` or
+anything from `db/calculo_credito.py`. `db/calculo_credito.py` and the `calculo_credito` table
+(see Base de datos below) still exist in the codebase — nothing was asked to be deleted there —
+but nothing in the UI calls them anymore; they're dead code until/unless a future,
+explicitly-requested feature reconnects them. Empresa (`wx.Choice`) is a completely free
+selection now, same reason it always had to allow manual override (a caso's `empresa_convenio`
+could read `"CAFE LAS FLORES CHAIN"` while the convenio table's real name was `"CAFE LAS FLORES"`
+— see `db/convenios.py:obtener_tasa`) — just with no caso to auto-select from anymore.
 
-**Empresa is a `wx.Choice`, not read-only auto-filled from `caso.empresa_convenio`**: initially
-designed as read-only, corrected before implementation — the Excel's own "Empresa Actual" (B5)
-was always a manually-typed field, never a formula, and real data shows why: a real caso's
-`empresa_convenio` can read `"CAFE LAS FLORES CHAIN"` while the convenio table's actual name is
-`"CAFE LAS FLORES"` — not just whitespace, a genuinely different string that `TRIM()` alone can't
-reconcile (see `db/convenios.py:obtener_tasa`). Auto-selecting when there's an exact match and
-leaving it unselected otherwise (with a status-bar note) lets the officer manually correct a
-mismatch instead of silently calculating against the wrong rate.
+**Flow (current)**: the officer types every field by hand, every time — empresa (resolves tasa),
+fecha de ingreso + salario (pasivo laboral, live — see below), ingresos extra, monto/plazo/
+periodicidad/deuda activa (the rest of the credit terms) — then presses Calcular. Nothing is
+persisted; this is a scratch tool for exploring scenarios, not a record.
+
+**Pasivo laboral calculates live, without pressing Calcular (2026-07-12)** — user's words: *"no
+puedo esperar a presionar un botón de Calcular al final para conocer este dato... con ese valor
+determino cuánto dinero tiene disponible el cliente y si es viable ofrecerle un crédito."*
+`_actualizar_pasivo_laboral_en_vivo()` is bound to `EVT_TEXT` on `fecha_ingreso_texto` and
+`salario_texto` (the only two cells Calculadora!B8 actually depends on — see
+`pasivo_laboral.py`) and recomputes on every keystroke, independent of every other field
+(empresa/monto/plazo/etc. can all be empty). It's also the single source of truth for the
+`resultado_pasivo_laboral` label and for what Ctrl+Shift+Q announces (see below) — `_on_calcular`
+calls this same function instead of computing pasivo laboral a second time from
+`evaluar_capacidad()`'s result, so there's never a risk of the live value and the
+post-Calcular value disagreeing. If fecha/salario are missing or invalid, the label falls back to
+"Pasivo laboral: —" rather than showing a stale number.
+
+**Voice-only shortcuts, Ctrl+Shift+Q / Ctrl+Shift+W (2026-07-12)** — user's words: *"para agilizar
+la usabilidad... y evitar que el flujo de tabulación se vuelva lento o invasivo con demasiados
+campos informativos."* Bound via `wx.EVT_CHAR_HOOK` on the panel itself (same mechanism as the
+`filtro_alerta_choice` Enter workaround in `casos_panel.py`, but here deliberately WITHOUT a
+`FindFocus()` check — it must fire no matter which control currently has focus):
+- **Ctrl+Shift+Q**: speaks the current pasivo laboral (dólares y córdobas) via `anunciar_voz_nvda()`
+  — the same live-tracked value described above, not a stale one from the last Calcular.
+- **Ctrl+Shift+W**: speaks the salario con deducciones from the last Calcular (`_ultimo_resultado`
+  — this one is NOT live yet, only Pasivo laboral was asked to be; flag if the user wants Ctrl+Shift+W
+  to become live too).
+Neither moves keyboard focus — `anunciar_voz_nvda()` calls straight into NVDA's speech API, it
+doesn't touch any control — which was the explicit point: read a result out loud without losing
+your place in the form. The result boxes ("Resultados") stay visible on screen for sighted users;
+these shortcuts are purely an additional, faster path for screen-reader use, not a replacement.
+
+**Tipo de cambio is a fixed constant, not a field (2026-07-12)** — user's words: *"por el momento
+es estrictamente fijo... no va a variar... por ahora déjalo fijo internamente en el código."*
+`TIPO_CAMBIO_FIJO = 36.6243` at the top of `calculadora_panel.py` replaces what used to be a
+`tipo_cambio_texto` `wx.TextCtrl` the officer typed on every calculation — removed from the UI
+entirely (one less field to tab through). The user was explicit this is temporary: a future
+Configuración module (not yet requested/built) is meant to let the exchange rate — along with
+empresas and tasas por convenio — be edited from one place; don't move `TIPO_CAMBIO_FIJO` there
+preemptively before that's actually asked for.
+
+**No thousands separator anywhere in this panel's output (2026-07-12)** — user's words (testing
+with real NVDA): *"mi lector de pantalla lee las comas de una manera muy incómoda y frena el flujo
+de trabajo... en lugar de mostrar 16,523.23, el formato debe salir estrictamente como 16523.23."*
+Every monetary value in `calculadora_panel.py` uses plain `f"{valor:.2f}"` (decimal point only,
+digits run together) instead of `f"{valor:,.2f}"` — applies to every result label, the spoken
+Calcular summary, and both voice shortcuts. **Scoped to this panel only** (the user's ask was
+about "todas las salidas de texto y cajas de resultado de la calculadora", not the app in general)
+— `casos_panel.py`'s monto formatting (`f"{monto_solicitado:,.2f}"`) still uses commas and wasn't
+touched; don't assume this rule generalizes to the rest of the app without being told.
 
 **Validation errors on Calcular** (missing/invalid fields, empresa with no tasa configured) use
 `wx.MessageBox`, matching this app's one established exception to "no popups" — same reasoning as
@@ -753,7 +801,10 @@ calculo_credito(id, caso_id UNIQUE REFERENCES caso(id), empresa_convenio, tasa_i
   (`ON CONFLICT(caso_id) DO UPDATE`). It stores inputs AND outputs together, not just the result —
   if a rate or the calculation logic changes later, an already-saved simulation still shows
   exactly what was calculated when it was saved, instead of silently drifting if it were
-  recomputed from live data.
+  recomputed from live data. **Currently unused** (2026-07-12): the panel's "Guardar simulación en
+  este caso" button and its caso search were removed entirely (see "Reverted to a fully standalone
+  calculator" above) — this table and `db/calculo_credito.py` still exist, untouched, but nothing
+  writes to or reads from them anymore. Left in place since removing them wasn't asked for.
 - A separate table rather than new columns on `caso`: keeps `caso` focused on the MIDESA-driven
   workflow (per the Domain model section above) instead of a dozen mostly-NULL columns for casos
   that never get simulated. Confirmed with the user as the preferred design (2026-07-11).

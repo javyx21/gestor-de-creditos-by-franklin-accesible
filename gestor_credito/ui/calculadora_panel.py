@@ -5,11 +5,22 @@ import wx.lib.scrolledpanel as scrolledpanel
 
 from gestor_credito.calculo.amortizacion import PERIODICIDADES_VALIDAS
 from gestor_credito.calculo.capacidad import evaluar_capacidad
-from gestor_credito.db.convenios import guardar_tasa, listar_convenios
+from gestor_credito.calculo.pasivo_laboral import calcular_pasivo_laboral
+from gestor_credito.db.convenios import listar_convenios
 from gestor_credito.db.database import get_connection
 from gestor_credito.ui.accesibilidad import activar_con_enter, anunciar_voz_nvda, nombre_accesible
 from gestor_credito.ui.fechas import parsear_fecha_ui
 from gestor_credito.ui.logo import AppLogo
+
+# Fijo a pedido explícito del usuario (2026-07-12): "por el momento es
+# estrictamente fijo... no va a variar". Antes era un campo editable
+# (tipo_cambio_texto) que el oficial tipeaba cada vez — se sacó de la
+# interfaz por completo para no ocupar espacio de tabulación con un dato
+# que ya no cambia. Cuando exista un módulo de Configuración para tasas de
+# interés/empresas/tipo de cambio (mencionado por el usuario como trabajo
+# futuro, todavía no pedido), este valor debería migrar ahí en vez de
+# quedar hardcodeado — no hacerlo antes de que se pida explícitamente.
+TIPO_CAMBIO_FIJO = 36.6243
 
 
 class CalculadoraPanel(scrolledpanel.ScrolledPanel):
@@ -42,9 +53,11 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
 
     Replica el flujo de recursos/calculadora.xlsx (ver CLAUDE.md para el
     análisis completo de esa hoja, celda por celda): el oficial tipea la
-    empresa (resuelve la tasa por convenio), la premisa del pasivo laboral
-    (fecha de ingreso + salario), los ingresos extra, y las condiciones del
-    crédito (monto, plazo, periodicidad, tipo de cambio, deudas activas) —
+    empresa (resuelve la tasa por convenio, solo lectura acá — ver
+    "Empresas / tasas por convenio" más abajo), la premisa del pasivo
+    laboral (fecha de ingreso + salario, calculado en vivo), los ingresos
+    extra, y las condiciones del crédito (monto, plazo, periodicidad,
+    deudas activas — el tipo de cambio es fijo, TIPO_CAMBIO_FIJO arriba) —
     Calcular (gestor_credito/calculo/) muestra pasivo laboral, salario neto,
     cuota, cobertura de pasivo laboral y nivel de endeudamiento. Nada se
     guarda: es una herramienta de cálculo del momento, para explorar
@@ -54,6 +67,12 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         super().__init__(parent)
 
         self._convenios = {}
+        self._ultimo_resultado = None
+        # Pasivo laboral: se rastrea aparte del resto de "Resultados" porque
+        # se actualiza en vivo (ver _actualizar_pasivo_laboral_en_vivo), sin
+        # esperar a Calcular — pedido explícito del usuario (2026-07-12).
+        self._pasivo_laboral_cordobas = None
+        self._pasivo_laboral_usd = None
 
         sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(AppLogo(self), 0, wx.ALIGN_LEFT | wx.ALL, 4)
@@ -64,7 +83,19 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
 
         sizer.Add(self._crear_entradas(), 0, wx.EXPAND | wx.ALL, 8)
         sizer.Add(self._crear_resultados(), 0, wx.EXPAND | wx.ALL, 8)
-        sizer.Add(self._crear_seccion_tasas(), 0, wx.EXPAND | wx.ALL, 8)
+
+        # Atajos de verbalización pura (pedido explícito del usuario,
+        # 2026-07-12): Ctrl+Shift+Q/W anuncian Pasivo laboral / Salario con
+        # deducciones por voz SIN mover el foco ni tabular hasta el cuadro de
+        # Resultados — para no obligar a NVDA a recorrer todos los campos
+        # informativos cada vez que solo hace falta un dato puntual. Mismo
+        # mecanismo EVT_CHAR_HOOK a nivel de panel que ya usa CasosPanel para
+        # el combo "Filtrar por alerta" (necesario porque, a diferencia de un
+        # wx.Dialog, un wx.Panel dentro de un wx.Notebook no recibe atajos de
+        # teclado "globales" por ningún otro medio) — pero acá SIN el chequeo
+        # de FindFocus() de ese caso, a propósito: el pedido es que funcione
+        # sin importar qué control del panel tenga el foco en ese momento.
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_atajo_verbalizacion)
 
         self.SetSizer(sizer)
         self.SetupScrolling(scroll_x=False, scroll_y=True)
@@ -94,12 +125,17 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         grilla.Add(wx.StaticText(contenedor, label=""))
 
         # B6/B7: premisa del pasivo laboral (fecha de ingreso + salario bruto).
+        # Se escuchan en vivo (EVT_TEXT) para actualizar el Pasivo laboral en
+        # pantalla sin esperar a Calcular — ver
+        # _actualizar_pasivo_laboral_en_vivo.
         fecha_ingreso_label = wx.StaticText(contenedor, label="Fecha de ingreso a la empresa (DD/MM/AAAA):")
         self.fecha_ingreso_texto = wx.TextCtrl(contenedor)
         nombre_accesible(self.fecha_ingreso_texto, "Fecha de ingreso a la empresa")
+        self.fecha_ingreso_texto.Bind(wx.EVT_TEXT, self._actualizar_pasivo_laboral_en_vivo)
         salario_label = wx.StaticText(contenedor, label="Salario bruto mensual (C$):")
         self.salario_texto = wx.TextCtrl(contenedor)
         nombre_accesible(self.salario_texto, "Salario bruto mensual en Córdobas")
+        self.salario_texto.Bind(wx.EVT_TEXT, self._actualizar_pasivo_laboral_en_vivo)
         grilla.Add(fecha_ingreso_label, 0, wx.ALIGN_CENTER_VERTICAL)
         grilla.Add(self.fecha_ingreso_texto, 0, wx.EXPAND)
         grilla.Add(salario_label, 0, wx.ALIGN_CENTER_VERTICAL)
@@ -131,21 +167,17 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         grilla.Add(periodicidad_label, 0, wx.ALIGN_CENTER_VERTICAL)
         grilla.Add(self.periodicidad_choice, 0, wx.EXPAND)
 
-        # Tipo de cambio: no es una celda propia del Excel (ahí vivía junto a
-        # la consulta de cédula que este panel ya no usa) — queda como campo
-        # manual, se tipea cada vez (ver CLAUDE.md, pregunta abierta sobre si
-        # debería vivir en Configuración en su lugar). C15: cuotas de deudas
-        # activas externas (la etiqueta "Cuotas de Deudas Activas" es B15).
-        tipo_cambio_label = wx.StaticText(contenedor, label="Tipo de cambio (C$ por US$):")
-        self.tipo_cambio_texto = wx.TextCtrl(contenedor)
-        nombre_accesible(self.tipo_cambio_texto, "Tipo de cambio, Córdobas por Dólar")
+        # Tipo de cambio: a pedido explícito del usuario (2026-07-12) ya NO
+        # es un campo editable — ver TIPO_CAMBIO_FIJO al principio del
+        # archivo. C15: cuotas de deudas activas externas (la etiqueta
+        # "Cuotas de Deudas Activas" es B15).
         deuda_label = wx.StaticText(contenedor, label="Cuotas de deudas activas externas (C$, opcional):")
         self.deuda_texto = wx.TextCtrl(contenedor, value="0")
         nombre_accesible(self.deuda_texto, "Cuotas de deudas activas externas en Córdobas")
-        grilla.Add(tipo_cambio_label, 0, wx.ALIGN_CENTER_VERTICAL)
-        grilla.Add(self.tipo_cambio_texto, 0, wx.EXPAND)
         grilla.Add(deuda_label, 0, wx.ALIGN_CENTER_VERTICAL)
         grilla.Add(self.deuda_texto, 0, wx.EXPAND)
+        grilla.Add(wx.StaticText(contenedor, label=""))
+        grilla.Add(wx.StaticText(contenedor, label=""))
 
         box.Add(grilla, 0, wx.EXPAND | wx.BOTTOM, 8)
 
@@ -185,13 +217,43 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
 
         return box
 
-    def _limpiar_resultados(self):
-        self.resultado_salario_bruto.SetLabel("Salario bruto: —")
-        self.resultado_pasivo_laboral.SetLabel("Pasivo laboral: —")
-        self.resultado_salario_neto.SetLabel("Salario neto mensual: —")
-        self.resultado_cuota.SetLabel("Cuota calculada: —")
-        self.resultado_cobertura.SetLabel("Cobertura de pasivo laboral: —")
-        self.resultado_endeudamiento.SetLabel("Nivel de endeudamiento: —")
+    def _actualizar_pasivo_laboral_en_vivo(self, event=None):
+        """Pedido explícito del usuario (2026-07-12): el pasivo laboral no
+        puede esperar a que se llene el resto del formulario y se presione
+        Calcular — en su flujo de trabajo es el primer dato que necesita
+        para saber si el cliente tiene margen para un crédito. Se recalcula
+        solo con Fecha de ingreso + Salario bruto (Calculadora!B6/B7, las
+        únicas dos celdas de las que depende — ver pasivo_laboral.py), sin
+        tocar ni exigir el resto de los campos (empresa, monto, plazo...).
+        La conversión a Dólares usa TIPO_CAMBIO_FIJO (ya no hay campo de
+        tipo de cambio que pueda faltar).
+
+        Atado a EVT_TEXT de fecha_ingreso_texto/salario_texto, y llamado
+        también desde _on_calcular para que "Calcular" no dependa de una
+        segunda fórmula: esta función es la única fuente de verdad de
+        resultado_pasivo_laboral y de los valores que anuncia Ctrl+Shift+Q
+        (ver _anunciar_pasivo_laboral)."""
+        fecha_ingreso_iso = parsear_fecha_ui(self.fecha_ingreso_texto.GetValue())
+        try:
+            salario = float(self.salario_texto.GetValue().replace(",", ""))
+        except ValueError:
+            salario = None
+
+        if fecha_ingreso_iso is None or salario is None or salario <= 0:
+            self._pasivo_laboral_cordobas = None
+            self._pasivo_laboral_usd = None
+            self.resultado_pasivo_laboral.SetLabel("Pasivo laboral: —")
+            return
+
+        pasivo_cordobas = calcular_pasivo_laboral(
+            date.fromisoformat(fecha_ingreso_iso), salario, date.today()
+        )
+
+        self._pasivo_laboral_cordobas = pasivo_cordobas
+        self._pasivo_laboral_usd = pasivo_cordobas / TIPO_CAMBIO_FIJO
+        self.resultado_pasivo_laboral.SetLabel(
+            f"Pasivo laboral: C${pasivo_cordobas:.2f} (US${self._pasivo_laboral_usd:.2f})"
+        )
 
     def _leer_entradas(self):
         """Valida y convierte todos los campos de entrada. Devuelve
@@ -205,10 +267,7 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
             return None, "Elegí una empresa convenio."
         tasa = self._convenios.get(empresa)
         if tasa is None:
-            return None, (
-                f"«{empresa}» no tiene una tasa de interés configurada. "
-                "Asignale una tasa en la sección \"Tasas por convenio\" antes de calcular."
-            )
+            return None, f"«{empresa}» no tiene una tasa de interés configurada todavía."
 
         fecha_ingreso_iso = parsear_fecha_ui(self.fecha_ingreso_texto.GetValue())
         if fecha_ingreso_iso is None:
@@ -219,13 +278,12 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
             extra = float(self.extra_texto.GetValue().replace(",", "") or 0)
             monto = float(self.monto_texto.GetValue().replace(",", ""))
             plazo = int(self.plazo_texto.GetValue())
-            tipo_cambio = float(self.tipo_cambio_texto.GetValue().replace(",", ""))
             deuda = float(self.deuda_texto.GetValue().replace(",", "") or 0)
         except ValueError:
-            return None, "Revisá los campos numéricos: salario, ingresos extra, monto, plazo, tipo de cambio y deuda deben ser números."
+            return None, "Revisá los campos numéricos: salario, ingresos extra, monto, plazo y deuda deben ser números."
 
-        if salario <= 0 or monto <= 0 or plazo <= 0 or tipo_cambio <= 0:
-            return None, "Salario, monto, plazo y tipo de cambio deben ser mayores que cero."
+        if salario <= 0 or monto <= 0 or plazo <= 0:
+            return None, "Salario, monto y plazo deben ser mayores que cero."
 
         periodicidad = self.periodicidad_choice.GetStringSelection()
 
@@ -238,7 +296,7 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
             "monto_credito_usd": monto,
             "plazo_meses": plazo,
             "periodicidad": periodicidad,
-            "tipo_cambio": tipo_cambio,
+            "tipo_cambio": TIPO_CAMBIO_FIJO,
             "deuda_activa_cordobas": deuda,
         }, None
 
@@ -260,6 +318,19 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
             deuda_activa_cordobas=entradas["deuda_activa_cordobas"],
         )
 
+        # Se guarda para el atajo de verbalización Ctrl+Shift+W (salario con
+        # deducciones) y para el resumen hablado de más abajo — ver
+        # _on_atajo_verbalizacion. El pasivo laboral NO se lee de acá: se
+        # actualiza en vivo por separado, ver _actualizar_pasivo_laboral_en_vivo.
+        self._ultimo_resultado = resultado
+
+        # Ya debería estar al día por el listener EVT_TEXT de fecha/salario/
+        # tipo de cambio, pero se vuelve a llamar acá para que sea la única
+        # fuente de verdad de esa etiqueta — evita que Calcular y la
+        # actualización en vivo puedan mostrar dos números calculados por
+        # dos caminos de código distintos.
+        self._actualizar_pasivo_laboral_en_vivo()
+
         # Calculadora!C7 = B7/C2 — conversión trivial, no vive en
         # evaluar_capacidad() porque es solo informativa (nada más la usa),
         # pero el usuario pidió explícitamente que el salario bruto en
@@ -267,18 +338,14 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         salario_bruto_usd = entradas["salario_bruto_cordobas"] / entradas["tipo_cambio"]
 
         self.resultado_salario_bruto.SetLabel(
-            f"Salario bruto: C${entradas['salario_bruto_cordobas']:,.2f} (US${salario_bruto_usd:,.2f})"
-        )
-        self.resultado_pasivo_laboral.SetLabel(
-            f"Pasivo laboral: C${resultado.pasivo_laboral_cordobas:,.2f} "
-            f"(US${resultado.pasivo_laboral_usd:,.2f})"
+            f"Salario bruto: C${entradas['salario_bruto_cordobas']:.2f} (US${salario_bruto_usd:.2f})"
         )
         self.resultado_salario_neto.SetLabel(
-            f"Salario neto mensual: C${resultado.salario_neto_cordobas:,.2f} "
-            f"(US${resultado.salario_neto_usd:,.2f})"
+            f"Salario neto mensual: C${resultado.salario_neto_cordobas:.2f} "
+            f"(US${resultado.salario_neto_usd:.2f})"
         )
         self.resultado_cuota.SetLabel(
-            f"Cuota calculada: US${resultado.cuota_usd:,.2f} (C${resultado.cuota_cordobas:,.2f})"
+            f"Cuota calculada: US${resultado.cuota_usd:.2f} (C${resultado.cuota_cordobas:.2f})"
         )
         self.resultado_cobertura.SetLabel(
             f"Cobertura de pasivo laboral: {resultado.cobertura_pasivo_laboral:.0%}"
@@ -288,7 +355,7 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         )
 
         mensaje = (
-            f"Pasivo laboral: {resultado.pasivo_laboral_cordobas:,.2f} córdobas. "
+            f"Pasivo laboral: {resultado.pasivo_laboral_cordobas:.2f} córdobas. "
             f"Cuota calculada: {resultado.cuota_usd:.2f} dólares. "
             f"Nivel de endeudamiento: {resultado.nivel_endeudamiento:.0%}."
         )
@@ -301,36 +368,56 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         # usuario, para el que se construyó esa función.
         anunciar_voz_nvda(mensaje)
 
-    # ---- Tasas por convenio --------------------------------------------
+    # ---- Atajos de verbalización pura (Ctrl+Shift+Q/W) -------------------
 
-    def _crear_seccion_tasas(self):
-        box = wx.StaticBoxSizer(wx.VERTICAL, self, "Tasas por convenio")
-        contenedor = box.GetStaticBox()
+    def _on_atajo_verbalizacion(self, event):
+        if event.ControlDown() and event.ShiftDown() and not event.AltDown():
+            codigo = event.GetKeyCode()
+            if codigo == ord("Q"):
+                self._anunciar_pasivo_laboral()
+                return
+            if codigo == ord("W"):
+                self._anunciar_salario_neto()
+                return
+        event.Skip()
 
-        self.tasas_lista = wx.ListCtrl(contenedor, style=wx.LC_REPORT | wx.LC_SINGLE_SEL, size=(-1, 150))
-        nombre_accesible(self.tasas_lista, "Tasas por convenio")
-        self.tasas_lista.InsertColumn(0, "Empresa")
-        self.tasas_lista.InsertColumn(1, "Tasa")
-        self.tasas_lista.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_seleccionar_tasa)
-        box.Add(self.tasas_lista, 0, wx.EXPAND | wx.BOTTOM, 8)
+    def _anunciar_pasivo_laboral(self):
+        """Ctrl+Shift+Q: habla el pasivo laboral (el mismo número que está en
+        el cuadro "Resultados", actualizado en vivo — ver
+        _actualizar_pasivo_laboral_en_vivo) sin mover el foco ni tabular
+        hasta ahí — ver anunciar_voz_nvda, que llama directo a la API de
+        NVDA para esto en vez de depender de que el usuario navegue hasta
+        el control."""
+        if self._pasivo_laboral_cordobas is None:
+            anunciar_voz_nvda("Todavía no se puede calcular el pasivo laboral: falta la fecha de ingreso o el salario.")
+            return
+        anunciar_voz_nvda(
+            f"Pasivo laboral: {self._pasivo_laboral_usd:.2f} dólares y "
+            f"{self._pasivo_laboral_cordobas:.2f} córdobas."
+        )
 
-        fila = wx.BoxSizer(wx.HORIZONTAL)
-        label = wx.StaticText(contenedor, label="Nueva tasa para la empresa seleccionada (%, ej. 36):")
-        self.nueva_tasa_texto = wx.TextCtrl(contenedor)
-        nombre_accesible(self.nueva_tasa_texto, "Nueva tasa para la empresa seleccionada, en porcentaje")
-        actualizar_btn = wx.Button(contenedor, label="&Actualizar tasa")
-        actualizar_btn.Bind(wx.EVT_BUTTON, self._on_actualizar_tasa)
-        activar_con_enter(actualizar_btn)
+    def _anunciar_salario_neto(self):
+        """Ctrl+Shift+W: igual que _anunciar_pasivo_laboral pero para el
+        salario con deducciones aplicadas (INSS + IR + ingresos extra)."""
+        if self._ultimo_resultado is None:
+            anunciar_voz_nvda("Todavía no se calculó el salario con deducciones. Presioná Alt+C para calcular primero.")
+            return
+        r = self._ultimo_resultado
+        anunciar_voz_nvda(
+            f"Salario con deducciones: {r.salario_neto_usd:.2f} dólares y {r.salario_neto_cordobas:.2f} córdobas."
+        )
 
-        for control in (label, self.nueva_tasa_texto, actualizar_btn):
-            fila.Add(control, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-        box.Add(fila, 0)
-
-        return box
+    # ---- Empresas / tasas por convenio ---------------------------------
+    # Solo lectura acá — pedido explícito del usuario (2026-07-12): editar
+    # tasas, agregar empresas o cambiar el tipo de cambio es trabajo futuro
+    # de un módulo aparte en Configuración, todavía no construido. Este
+    # panel solo consume `convenio_tasa` (vía listar_convenios) para poblar
+    # el wx.Choice de Empresa; no la edita.
 
     def recargar(self):
         """Se llama al entrar a esta pestaña (ver MainFrame._on_cambiar_pestana)
-        para que una tasa actualizada en otra sesión/pestaña se refleje sin
+        para que una tasa actualizada en otro lado (hoy: directo en la base;
+        más adelante, desde el futuro módulo de Configuración) se refleje sin
         recargar a mano. A propósito NO toca los datos ya escritos en el
         formulario — solo refresca la lista de empresas/tasas (ver
         _cargar_empresas, que preserva la empresa elegida si sigue
@@ -354,46 +441,3 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
             if indice != wx.NOT_FOUND:
                 self.empresa_choice.SetSelection(indice)
                 self._actualizar_tasa_mostrada()
-
-        self.tasas_lista.DeleteAllItems()
-        for indice, (empresa, tasa) in enumerate(convenios):
-            self.tasas_lista.InsertItem(indice, empresa)
-            self.tasas_lista.SetItem(indice, 1, "sin configurar" if tasa is None else f"{tasa:.0%}")
-        for columna in range(2):
-            self.tasas_lista.SetColumnWidth(columna, wx.LIST_AUTOSIZE_USEHEADER)
-
-    def _on_seleccionar_tasa(self, event):
-        empresa, tasa = self._filas_tasas()[event.GetIndex()]
-        self.nueva_tasa_texto.SetValue("" if tasa is None else f"{tasa * 100:.0f}")
-
-    def _filas_tasas(self):
-        return sorted(self._convenios.items())
-
-    def _on_actualizar_tasa(self, event):
-        indice = self.tasas_lista.GetFirstSelected()
-        if indice == wx.NOT_FOUND:
-            wx.MessageBox(
-                "Seleccioná una empresa de la lista antes de actualizar su tasa.",
-                "Ninguna empresa seleccionada", wx.OK | wx.ICON_ERROR, self,
-            )
-            return
-
-        empresa, _tasa_actual = self._filas_tasas()[indice]
-        try:
-            porcentaje = float(self.nueva_tasa_texto.GetValue().replace(",", "."))
-        except ValueError:
-            wx.MessageBox(
-                "La tasa debe ser un número (por ejemplo 36 para 36%).",
-                "Tasa inválida", wx.OK | wx.ICON_ERROR, self,
-            )
-            return
-
-        conn = get_connection()
-        try:
-            guardar_tasa(conn, empresa, porcentaje / 100)
-        finally:
-            conn.close()
-
-        self._cargar_empresas()
-        mensaje = f"Tasa de «{empresa}» actualizada a {porcentaje:.0f}%."
-        self.GetTopLevelParent().SetStatusText(mensaje)

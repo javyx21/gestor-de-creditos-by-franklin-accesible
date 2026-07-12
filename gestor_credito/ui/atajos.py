@@ -120,8 +120,15 @@ ATAJOS = [
         None,
     ),
     (
-        None, None, "Alt+A", "Calculadora",
-        "Actualizar la tasa de la empresa seleccionada en \"Tasas por convenio\"",
+        None, None, "Ctrl+Shift+Q", "Calculadora",
+        "Anunciar por voz el pasivo laboral ya calculado (dólares y córdobas), sin mover "
+        "el foco ni tabular hasta el cuadro de Resultados",
+        None,
+    ),
+    (
+        None, None, "Ctrl+Shift+W", "Calculadora",
+        "Anunciar por voz el salario con deducciones ya calculado (dólares y córdobas), "
+        "sin mover el foco ni tabular hasta el cuadro de Resultados",
         None,
     ),
     (
