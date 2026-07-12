@@ -1,9 +1,10 @@
 import wx
 
 from gestor_credito.db.database import init_db
-from gestor_credito.ui.accesibilidad import anunciar_texto_estado
+from gestor_credito.ui.accesibilidad import anunciar_texto_estado, nombre_accesible
 from gestor_credito.ui.atajos import ATAJOS
 from gestor_credito.ui.ayuda_panel import AyudaPanel
+from gestor_credito.ui.calculadora_panel import CalculadoraPanel
 from gestor_credito.ui.casos_panel import CasosPanel
 from gestor_credito.ui.configuracion_panel import ConfiguracionPanel
 from gestor_credito.ui.notificaciones_panel import NotificacionesPanel
@@ -23,9 +24,9 @@ class _PanelDialog(wx.Dialog):
     expone SetStatusText() para que ese código no necesite cambiar.
     """
 
-    def __init__(self, parent, titulo, panel_cls):
+    def __init__(self, parent, titulo, panel_cls, size=(760, 560)):
         super().__init__(
-            parent, title=titulo, size=(760, 560),
+            parent, title=titulo, size=size,
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
         )
 
@@ -74,17 +75,53 @@ class MainFrame(wx.Frame):
         self.CreateStatusBar()
         self.SetStatusText("Listo")
 
-        # Ventana principal = directamente Casos, sin pestañas: Notificaciones
-        # y Configuración pasan a ser diálogos que se abren desde un menú
-        # clásico de Windows (Alt + flechas), en vez de wx.Notebook — pedido
-        # explícito del usuario por cómo navega con NVDA.
-        self.casos_panel = CasosPanel(self)
+        # Notificaciones/Configuración/Ayuda siguen como diálogos modales
+        # desde el menú (pedido explícito del usuario por cómo navega con
+        # NVDA, ver CLAUDE.md) — son herramientas de configuración/consulta
+        # puntual, no algo que se use en el flujo de trabajo día a día.
+        #
+        # La Calculadora es distinta: pedido explícito del usuario
+        # (2026-07-11), después de probar la primera versión como diálogo de
+        # menú: "esto es una función no una configuración", tiene que ser un
+        # módulo de primer nivel igual que Casos, no algo escondido en un
+        # menú. Por eso acá SÍ vuelve un wx.Notebook con dos pestañas
+        # (Casos, Calculadora) — la única pestaña real de la app, todo lo
+        # demás sigue siendo diálogo modal.
+        self.notebook = wx.Notebook(self)
+        nombre_accesible(self.notebook, "Módulos")
+
+        # wx.Notebook exige que cada página tenga al notebook como parent
+        # directo (AssertionError real si no: "notebook pages must have
+        # notebook as parent") — por eso CasosPanel/CalculadoraPanel se
+        # construyen con self.notebook, no con self (MainFrame), a pesar de
+        # que casos_panel.py sigue llamando self.GetTopLevelParent() para la
+        # barra de estado: eso sube toda la cadena de parents hasta el
+        # Frame real sin importar cuántos niveles de Notebook haya en el medio.
+        self.casos_panel = CasosPanel(self.notebook)
+        self.notebook.AddPage(self.casos_panel, "Casos")
+        self.calculadora_panel = CalculadoraPanel(self.notebook)
+        self.notebook.AddPage(self.calculadora_panel, "Calculadora de Crédito")
+        self.notebook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, self._on_cambiar_pestana)
+
         sizer = wx.BoxSizer(wx.VERTICAL)
-        sizer.Add(self.casos_panel, 1, wx.EXPAND)
+        sizer.Add(self.notebook, 1, wx.EXPAND)
         self.SetSizer(sizer)
 
         self._crear_menu()
         self._crear_atajos()
+
+    def _on_cambiar_pestana(self, event):
+        """Igual que el patrón documentado que tenía la app cuando todo era
+        wx.Notebook: cada pestaña recarga sus datos en vivo al entrar, para
+        que un cambio hecho en la otra pestaña o en un diálogo (agente
+        configurado, tasa de convenio actualizada) se vea sin tener que
+        recargar a mano."""
+        pagina = self.notebook.GetPage(event.GetSelection())
+        if pagina is self.casos_panel:
+            self.casos_panel.recargar()
+        elif pagina is self.calculadora_panel:
+            self.calculadora_panel.recargar()
+        event.Skip()
 
     def SetStatusText(self, texto):
         """Override sobre wx.Frame.SetStatusText: además de mostrar el texto,
@@ -159,8 +196,8 @@ class MainFrame(wx.Frame):
     def _on_abrir_ayuda(self, event):
         self._abrir_dialogo("Ayuda", AyudaPanel)
 
-    def _abrir_dialogo(self, titulo, panel_cls):
-        with _PanelDialog(self, titulo, panel_cls) as dialogo:
+    def _abrir_dialogo(self, titulo, panel_cls, size=(760, 560)):
+        with _PanelDialog(self, titulo, panel_cls, size=size) as dialogo:
             dialogo.ShowModal()
 
         # Al cerrar, Casos se recarga siempre: un cambio de agente en

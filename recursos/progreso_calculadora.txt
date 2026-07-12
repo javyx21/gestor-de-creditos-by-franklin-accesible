@@ -1,0 +1,415 @@
+PROGRESO — Calculadora de Crédito
+Última actualización: 2026-07-11 (fin de sesión, a pedido del usuario, antes de abrir sesión nueva)
+
+===========================================================================
+ESTADO ACTUAL EN UNA FRASE
+===========================================================================
+El motor de cálculo (matemática financiera) está terminado y verificado a
+fondo contra el Excel real. La base de datos está lista. El panel de UI
+existe y el flujo funciona de punta a punta quando lo manejo por código
+(sin lector de pantalla) — pero el usuario (ciego, usa NVDA) reportó que al
+entrar a la pestaña con Ctrl+Tab, con su lector de pantalla real SOLO
+percibe el campo de tasa de interés, no el resto del formulario (salario,
+plazo, monto, botón Calcular). Ese es el problema abierto más urgente para
+la próxima sesión — ver "BUG ABIERTO" más abajo, es lo primero a resolver.
+
+===========================================================================
+1. QUÉ SE PIDIÓ ORIGINALMENTE
+===========================================================================
+El usuario pidió replicar en la app un Excel de referencia
+(recursos/calculadora.xlsx, git-ignored, datos reales de un cliente) que un
+oficial de crédito usaba a mano para calcular, dado el salario y fecha de
+ingreso de un colaborador, más el monto/plazo del crédito solicitado:
+  - Pasivo laboral (indemnización acumulada del colaborador)
+  - Salario neto (con INSS e IR ya descontados)
+  - Cuota del crédito (pago nivelado)
+  - Cobertura de pasivo laboral (Monto / Pasivo laboral)
+  - Nivel de endeudamiento (Cuota + deudas externas / Salario neto)
+
+Pidió explícitamente: "no se trata de replicar fórmulas a ciegas... quiero
+que comprendas la lógica financiera detrás de cada celda". Por eso cada
+pieza del motor está verificada contra el Excel real vía Excel COM
+automation (win32com), no solo leída/copiada.
+
+===========================================================================
+2. EL EXCEL DE REFERENCIA — QUÉ TIENE CADA HOJA
+===========================================================================
+recursos/calculadora.xlsx tiene 4 hojas:
+
+- "Calculadora": panel de captura + resultados (lo que el oficial ve y
+  llena). Celdas clave: B5 empresa (tipeada a mano, NO fórmula), B6 fecha
+  de ingreso, B7 salario bruto (C$)/C7 en US$, B8 pasivo laboral (C$)/C8 en
+  US$, B9 salario neto total, B10 monto (US$), B11 plazo (SIEMPRE en
+  MESES, incluso si la periodicidad es Quincenal — ver más abajo), B12 tasa
+  (VLOOKUP contra la hoja Convenios por B5), B13 periodicidad
+  (Quincenal/Mensual, único dropdown validado), B14 cuota (US$)/C14 en C$,
+  B15 cuota+deudas activas, B16 nivel de endeudamiento, B19 cobertura de
+  pasivo laboral, B23-B27 INSS/IR.
+
+- "Calculo Plan de pago": el motor real. Genera el cronograma cuota a
+  cuota (fechas reales de calendario, no meses de 30 días parejos) y de ahí
+  sale la cuota nivelada que usa B14. Filas 12 en adelante, una por cuota.
+
+- "Convenios": tabla simple Empresa -> Tasa de interés, 29 empresas reales.
+
+- "DB Social": NO es parte del motor de cálculo — es una consulta externa
+  (Power Query) contra una fuente de datos de nómina/INSS, para
+  autocompletar nombre/empresa buscando por cédula en el flujo del Excel.
+  Como la app YA tiene esos datos (importados de MIDESA), esta hoja se
+  ignoró por completo, no se replicó nada de ella.
+
+===========================================================================
+3. LA LÓGICA FINANCIERA, EXPLICADA (no solo la fórmula)
+===========================================================================
+
+--- Pasivo laboral (B8) ---
+Aproximación de la indemnización por antigüedad nicaragüense (Código del
+Trabajo, Arto. 45):
+  - Primeros 3 años: 1 mes de salario por año completo (proporcional si
+    lleva menos de 3 años)
+  - Años adicionales (más de 3): 20/30 de mes por año adicional (no el mes
+    completo)
+  - Tope legal: nunca más de 5 meses de salario en total
+Usa DAYS360 de Excel (método US/NASD) para contar los años de antigüedad —
+Python no tiene esa función en su librería estándar, se reconstruyó a mano
+y se verificó con 11 pares de fechas reales corridos en Excel vía COM
+(cubriendo 31 de mes, fin de febrero en año bisiesto/no bisiesto, etc.).
+
+--- INSS e IR (B23-B27, salario neto) ---
+- INSS laboral: 7% fijo sobre el salario bruto.
+- IR anual: bandas progresivas sobre el salario ANUAL ya neto de INSS —
+  exento hasta C$100,000; 15% de 100k a 200k; 20% de 200k a 350k; 25% de
+  350k a 500k; 30% de ahí en adelante (con los acumulados de las bandas
+  previas sumados). Son tasas de LEY que pueden cambiar — quedaron como
+  constantes con nombre (TASA_INSS_LABORAL, BANDAS_IR_ANUAL), no enterradas
+  en la fórmula.
+- Salario neto mensual = bruto - INSS - (IR_anual/12) + ingresos extra.
+
+--- Tasa por convenio (B12) ---
+Trivial: VLOOKUP(empresa, Convenios). Ya está en la base de datos
+(convenio_tasa), sembrada con las 29 empresas reales — el usuario confirmó
+(2026-07-11) que las tasas siguen vigentes.
+
+--- Motor de cuota nivelada (la parte más compleja) ---
+NO es un PMT() de manual. Es una anualidad de cuota nivelada usando DÍAS
+REALES de calendario entre pagos (no meses de 30 días parejos), con tasa
+efectiva por período = días_del_período × (tasa_anual / 360) — interés
+simple por período, compuesto entre períodos.
+
+Fórmula de la cuota (reconstruida a mano desde el método del Excel, que la
+resuelve distinto — con productos y sumas de columnas auxiliares — y
+verificada numéricamente que da el mismo resultado):
+
+    Cuota = Principal / Σ(t=1..n) [ 1 / Π(k=1..t) (1+E_k) ]
+
+    donde E_k = días_k × (tasa_anual/360)
+
+Verificado cuota-por-cuota (capital, interés, saldo, Y LA FECHA) contra un
+cronograma real de 24 cuotas leído directamente de Excel vía COM — no solo
+el número final de la cuota.
+
+Lógica de "próxima fecha de pago" (nada trivial, tiene su propio bug de
+Excel replicado a propósito):
+  - Quincenal: +15 días corridos; si esa fecha cae domingo, +16 en su lugar
+    (corre al lunes).
+  - Mensual: EDATE (mismo día del mes) un mes adelante; si esa fecha cae
+    domingo, se corre un día. Truco no obvio, verificado contra un
+    cronograma real de 24 cuotas: cuando una cuota fue corrida por caer
+    domingo, su día del mes queda en "día_ancla + 1" — si no se corrigiera,
+    el próximo EDATE partiría de ese día corrido y el "día ancla" se
+    desplazaría un día para siempre. Por eso, si la fecha anterior tiene
+    día = día_ancla + 1, el EDATE del próximo mes se calcula desde
+    (fecha_anterior - 1 día) en vez de fecha_anterior directamente.
+  - La PRIMERA cuota (B17 del Excel) es un caso aparte: desembolso + 30
+    días (Mensual) o +15 (Quincenal), fecha fija, no alineada a "mismo día
+    del mes" — el día de ESA fecha es el "día ancla" para todo lo demás.
+
+Solo Quincenal/Mensual están implementados — es lo único que el Excel
+permite elegir (validación de datos real), aunque la hoja interna del
+Excel sabe de más periodicidades (Semanal, Bimensual, etc.). No se
+agregaron esas otras sin un caso real para verificar contra Excel — el
+usuario pidió explícitamente evitar "replicar fórmulas a ciegas".
+
+--- UN BUG QUE ATRAPÉ GRACIAS A VERIFICAR CONTRA EXCEL, NO SOLO LEER LA FÓRMULA ---
+Calculadora!B14 (la cuota que se muestra/usa) NO es la cuota nivelada
+cruda del cronograma — le suma un margen fijo en Dólares antes de
+mostrarla: +US$1 por cuota si es Quincenal, +US$2 si es Mensual. Este
+margen NO se propaga al cronograma interno (los cálculos de capital/saldo
+siguen usando la cuota SIN el margen) — es puramente lo que se
+cotiza/cobra por encima del monto matemáticamente exacto. No hay ninguna
+pista en el Excel de por qué existe (¿redondeo? ¿colchón de cobranza?) —
+se replicó tal cual porque así se cotiza hoy, PERO ES UNA PREGUNTA
+ABIERTA PARA EL USUARIO, nunca se confirmó el motivo, solo que "así es
+como se cotiza hoy".
+
+Otro detalle no obvio: Calculadora!B11 ("Plazo") SIEMPRE está en MESES,
+nunca en número de cuotas, incluso si la periodicidad es Quincenal — para
+Quincenal el número real de cuotas es el doble (2 pagos por mes). Esto se
+maneja en capacidad.py (_numero_de_cuotas), no en el motor de bajo nivel
+(amortizacion.py), que se mantiene "unit-agnostic" (recibe directamente el
+número de cuotas real).
+
+Cosas que el Excel soporta pero se dejaron FUERA de esta primera versión
+(a pedido explícito del usuario, "completamente fuera del programa por el
+momento, en esta primera versión nos enfocaremos exclusivamente en la
+estructura base"):
+  - Seguro (SVD), Comisión, Gasto Legal
+  - Sistemas de amortización "Decreciente" y "Vencimiento" (solo
+    "Nivelada" está implementado)
+  - El bloque de TIR/TCEA (costo efectivo del crédito) — ni siquiera
+    alimenta la cuota en el Excel original, es un cálculo aparte para
+    transparencia/divulgación regulatoria que no se tocó.
+
+===========================================================================
+4. ARQUITECTURA DEL CÓDIGO
+===========================================================================
+
+gestor_credito/calculo/  — motor puro, sin DB ni UI (igual que export/)
+  dias360.py         — Excel DAYS360 (US/NASD), verificado con 11 casos reales
+  pasivo_laboral.py  — indemnización Art. 45
+  deducciones.py     — INSS + IR
+  amortizacion.py    — cuota nivelada + fechas de pago (el motor real)
+  capacidad.py        — orquesta todo en evaluar_capacidad(), maneja
+                        plazo-en-meses -> número de cuotas y el margen +US$1/+US$2
+
+gestor_credito/db/
+  convenios.py        — CRUD de convenio_tasa (empresa -> tasa)
+  calculo_credito.py  — guardar/obtener la ÚLTIMA simulación por caso (sin
+                        historial, upsert por caso_id — confirmado con el
+                        usuario: "por el momento solo la última simulación
+                        vale")
+
+gestor_credito/db/database.py — SCHEMA ampliado con dos tablas nuevas:
+  convenio_tasa(empresa_convenio PK, tasa_interes, fecha_actualizacion)
+    - sembrada con INSERT OR IGNORE (nunca pisa una tasa editada a mano)
+    - 29 empresas reales extraídas de la hoja Convenios del Excel
+    - 2 de esas 29 (GRUPO TALSE, LABORATORIOS ROMAN) tienen tasa_interes
+      NULL a propósito — tampoco tenían tasa en el Excel original, no se
+      inventó un valor.
+  calculo_credito(id, caso_id UNIQUE FK->caso, empresa_convenio,
+    tasa_interes, fecha_ingreso_empresa, salario_bruto_cordobas,
+    ingresos_extra_cordobas, monto_credito_usd, plazo_meses, periodicidad,
+    tipo_cambio, deuda_activa_cordobas, pasivo_laboral_cordobas,
+    salario_neto_cordobas, cuota_usd, cobertura_pasivo_laboral,
+    nivel_endeudamiento, fecha_calculo)
+    - Guarda ENTRADAS y RESULTADOS juntos, no solo el resultado — así una
+      simulación vieja no cambia sola si después se edita una tasa o la
+      fórmula.
+  NADA se tocó en las tablas cliente/caso existentes.
+
+gestor_credito/ui/calculadora_panel.py — CalculadoraPanel(ScrolledPanel)
+  Secciones (todas apiladas verticalmente dentro de un
+  wx.lib.scrolledpanel.ScrolledPanel, ver bug de scroll más abajo):
+  1. "Buscar caso" — cédula o nombre, reutiliza buscar_casos() de Casos
+     (misma clasificar_termino_busqueda). Selecciono una fila -> carga el
+     caso.
+  2. "Datos para calcular" — Empresa (wx.Choice, NO de solo lectura — ver
+     por qué abajo) + Tasa (se actualiza sola al cambiar empresa), Fecha de
+     ingreso, Salario bruto, Ingresos extra, Monto (US$), Plazo (meses),
+     Periodicidad, Tipo de cambio, Deuda activa externa. Botones Calcular
+     (no escribe nada, se puede repetir) y Guardar simulación en este caso
+     (sí persiste, pisa la anterior).
+  3. "Resultados" — 5 wx.StaticText de solo lectura (pasivo laboral,
+     salario neto, cuota, cobertura, endeudamiento), se llenan al Calcular.
+  4. "Tasas por convenio" — lista editable de las 29 empresas + su tasa,
+     con un campo para actualizar la tasa de la seleccionada.
+
+  Por qué Empresa es un wx.Choice editable y NO de solo lectura
+  auto-rellenado desde caso.empresa_convenio: un caso real tiene
+  empresa_convenio="CAFE LAS FLORES CHAIN" mientras que en convenio_tasa la
+  empresa real es "CAFE LAS FLORES" — no es solo un espacio de más, es un
+  string genuinamente distinto que TRIM() no arregla. Se auto-selecciona
+  SOLO si hay coincidencia exacta; si no, queda sin seleccionar y el
+  oficial elige a mano de la lista.
+
+  Si ya existe una simulación guardada para el caso seleccionado, se
+  recargan TODOS los campos desde ahí (no solo empresa/monto) para que el
+  oficial siga exactamente donde quedó.
+
+  Anuncios de voz: los errores de validación al Calcular (campos
+  incompletos, empresa sin tasa configurada) usan wx.MessageBox (mismo
+  patrón ya establecido en toda la app). Un cálculo EXITOSO no usa
+  MessageBox — llena los wx.StaticText de resultado Y además llama
+  anunciar_voz_nvda() (habla directo vía NVDA, ver accesibilidad.py) con un
+  resumen ("Cuota calculada: X dólares. Nivel de endeudamiento: Y%") — se
+  usó esa función en vez de la barra de estado porque ya se había
+  confirmado con el usuario que el anuncio por región viva de la barra de
+  estado no se escucha de forma confiable.
+
+===========================================================================
+5. HISTORIAL DE NAVEGACIÓN — por qué está donde está ahora
+===========================================================================
+1. Primero se construyó como diálogo modal de menú (mismo patrón que
+   Notificaciones/Configuración/Ayuda) — parecía consistente con el resto
+   de la app.
+2. El usuario lo probó y no lo encontró (un 4to menú se le pasaba de largo
+   con las flechas acostumbradas a 3), y además pidió el cambio de fondo:
+   "esto es una función no una configuración, por eso si o si tiene que
+   estar en un apartado extra... lo quiero como otra pestaña".
+3. FIX ACTUAL: MainFrame ahora tiene un wx.Notebook con 2 páginas: "Casos"
+   y "Calculadora de Crédito" — las únicas pestañas de la app.
+   Notificaciones/Configuración/Ayuda siguen igual, como diálogos de menú
+   (esos SÍ son configuración/consulta puntual, según la distinción que
+   hizo el usuario).
+4. IMPORTANTE — tensión sin resolver: esta misma app YA había usado
+   wx.Notebook antes (Casos/Notificaciones/Configuración como pestañas) y
+   se cambió a menú+diálogo específicamente "por cómo navega el usuario con
+   NVDA" (así quedó escrito en el código, pero el motivo puntual nunca se
+   detalló en ningún documento). Confirmado por el usuario (2026-07-11):
+   con Ctrl+Tab SÍ logra cambiar de pestaña y escucha "Módulos" al entrar —
+   eso funciona. Pero lo que pasa DESPUÉS de entrar a la pestaña es el
+   BUG ABIERTO de la sección siguiente.
+
+===========================================================================
+6. BUG DE SCROLL — RESUELTO
+===========================================================================
+Reporte real del usuario: al entrar a la Calculadora (cuando todavía era
+diálogo modal de 820x760), solo veía la sección "Tasas por convenio", no
+el resto. Medido directo: el contenido medía 858px de alto contra 438px
+visibles. Con un wx.Panel liso, el contenido que no entra simplemente se
+recorta, sin scrollbar y sin forma de llegar ahí ni con Tab.
+
+FIX: CalculadoraPanel ahora hereda de wx.lib.scrolledpanel.ScrolledPanel en
+vez de wx.Panel, con self.SetupScrolling(scroll_x=False, scroll_y=True)
+después de SetSizer(). Verificado con la app real: dentro de la pestaña del
+Notebook, GetVirtualSize()=(834, 858) contra GetClientSize()=(619, 390) —
+efectivamente necesita scroll y wx lo está reportando bien. Todos los
+controles del formulario existen, están shown=True y tienen tamaño/
+posición válidos (verificado programáticamente uno por uno) — el layout en
+sí NO está roto.
+
+===========================================================================
+7. *** BUG ABIERTO — LO MÁS URGENTE PARA LA PRÓXIMA SESIÓN ***
+===========================================================================
+Reporte real del usuario, la sesión que se acaba de cerrar (2026-07-11):
+logró cambiar a la pestaña Calculadora con Ctrl+Tab (confirmado, funciona,
+escucha "Módulos"), PERO una vez adentro, con su NVDA real, dice: "solo me
+aparece el campo para seleccionar la tasa de interés. No se muestra ningún
+elemento de la interfaz para ingresar el salario, los plazos, el monto ni
+el botón para calcular el crédito."
+
+Lo que YA investigué esta sesión, antes de que el usuario pidiera cerrarla:
+  - Verificado programáticamente (sin NVDA, inspección directa de wx) que
+    TODOS los controles (busqueda_texto, empresa_choice, salario_texto,
+    monto_texto, plazo_texto, calcular_btn, etc.) existen, están
+    shown=True, y tienen tamaño/posición correctos dentro del sizer. El
+    layout NO está vacío ni roto a nivel de wx.
+  - Verificado que tras cambiar de pestaña con SetSelection(1) (equivalente
+    a Ctrl+Tab), el foco de teclado (wx.Window.FindFocus()) se queda en el
+    propio control wx.Notebook (nombre accesible "Módulos"), NO entra solo
+    al primer control de la página nueva. Esto es plausible que sea
+    NORMAL/esperado (así se comportan la mayoría de los controles de
+    pestañas nativos de Windows: Ctrl+Tab cambia de página pero no mueve el
+    foco adentro solo, hace falta un Tab más) — pero no se confirmó con
+    NVDA real si eso es lo que está pasando o si hay algo más.
+  - Intenté simular un Tab adicional con notebook.Navigate(...) y el foco
+    NO se movió fuera del control Notebook en esa simulación — pero esto
+    puede ser una limitación de simular Navigate() por código en vez de un
+    keypress real de Windows, no necesariamente representa lo que pasa con
+    un Tab real de teclado. NO CONFIABLE COMO DIAGNÓSTICO FINAL.
+
+HIPÓTESIS (sin confirmar, en orden de sospecha):
+  1. Más probable: el usuario está escuchando la sección "Tasas por
+     convenio" (que tiene un campo de texto llamado "Nueva tasa para la
+     empresa seleccionada, en porcentaje") y piensa que ES el selector de
+     tasa de interés del cálculo — cuando en realidad son dos cosas
+     distintas: el wx.Choice "Empresa convenio" (que resuelve la tasa
+     automáticamente) está en la sección de arriba ("Datos para
+     calcular"), separada de "Tasas por convenio" (que es para EDITAR
+     tasas, no para elegir la del cálculo). Si el foco cae primero en la
+     sección de abajo (Tasas por convenio) en vez de arriba (Buscar
+     caso/Datos), el usuario podría estar navegando solo esa sección sin
+     darse cuenta de que hay más arriba — sobre todo si algo hace que el
+     scroll conserve una posición inicial que no es el tope de la página.
+  2. Menos probable pero posible: el orden de tabulación (TAB ORDER) real
+     de wx no sigue el orden en que los controles se agregaron al sizer, y
+     salta directo a alguna sección intermedia. wx normalmente respeta
+     orden de creación salvo que se toque explícitamente
+     (MoveBeforeInTabOrder/MoveAfterInTabOrder) — este código NO los toca,
+     así que en teoría el orden debería ser: busqueda_texto,
+     busqueda_lista, buscar_btn, empresa_choice, fecha_ingreso_texto,
+     salario_texto, ..., calcular_btn, guardar_btn, tasas_lista,
+     nueva_tasa_texto, actualizar_btn. Pero no se verificó el orden real
+     con una prueba de Tab-por-Tab.
+  3. Posible: el ScrolledPanel, al recibir el foco desde el Notebook, no
+     hace scroll automático al tope — si por algún motivo arranca con el
+     scroll ya movido hacia abajo (por ejemplo, si SetupScrolling() calculó
+     mal la posición inicial, o si algo dejó el scroll en la posición de
+     una sesión anterior), el usuario podría aterrizar visualmente/
+     lógicamente cerca de "Tasas por convenio" (la última sección) en vez
+     del principio.
+
+PRÓXIMO PASO SUGERIDO: pedirle al usuario, con NVDA real, que:
+  a) Entre a la pestaña Calculadora con Ctrl+Tab
+  b) Presione Tab UNA vez y diga qué anuncia NVDA
+  c) Seguir presionando Tab y anotar la secuencia completa de controles que
+     va anunciando, hasta dar la vuelta completa
+  Con esa secuencia real se puede saber si es un problema de orden de
+  tabulación, de scroll, o de que el usuario simplemente no vio que había
+  más arriba de donde aterrizó.
+
+===========================================================================
+8. TESTS — TODOS VERDES
+===========================================================================
+125 tests en total (78 que ya existían antes de esta sesión + 47 nuevos):
+  tests/test_dias360.py        (11) — contra Excel real vía COM
+  tests/test_pasivo_laboral.py (6)
+  tests/test_deducciones.py    (6)
+  tests/test_amortizacion.py   (10) — cronograma de 24 cuotas real vía COM
+  tests/test_capacidad.py      (4)  — orquestación completa
+  tests/test_convenios.py      (7)
+  tests/test_calculo_credito.py (3)
+
+Todos los "golden values" (números esperados) vienen de correr el Excel
+real vía win32com, no de cálculos hechos a mano — ver
+tests/fixtures/golden_cases.json y golden_cronogramas.json.
+
+Comando: cd al proyecto, `python -m pytest tests/ -q`
+
+===========================================================================
+9. ARCHIVOS NUEVOS/MODIFICADOS ESTA SESIÓN (sin commitear aún)
+===========================================================================
+Nuevos:
+  gestor_credito/calculo/ (paquete completo: __init__, dias360, pasivo_laboral,
+    deducciones, amortizacion, capacidad)
+  gestor_credito/db/convenios.py
+  gestor_credito/db/calculo_credito.py
+  gestor_credito/ui/calculadora_panel.py
+  tests/test_dias360.py, test_pasivo_laboral.py, test_deducciones.py,
+    test_amortizacion.py, test_capacidad.py, test_convenios.py,
+    test_calculo_credito.py
+  tests/fixtures/golden_cases.json, golden_cronogramas.json
+  recursos/ (carpeta nueva del usuario, con calculadora.xlsx y este mismo
+    archivo)
+
+Modificados:
+  CLAUDE.md (documentación completa de todo lo de arriba)
+  gestor_credito/db/database.py (2 tablas nuevas + seed de convenios)
+  gestor_credito/ui/main_frame.py (wx.Notebook con Casos + Calculadora)
+  gestor_credito/ui/atajos.py (entradas de teclado de la Calculadora)
+
+NADA de esto está commiteado a git todavía (sesión anterior sí se
+commiteó el trabajo de accesibilidad de NVDA — ver commit 3384d96 — pero
+todo lo de la Calculadora es posterior a ese commit y sigue sin
+commitear). Si la próxima sesión quiere empezar limpio, puede confirmar
+con el usuario si commitear esto ahora o después de resolver el bug
+abierto de la sección 7.
+
+===========================================================================
+10. PARA LA PRÓXIMA SESIÓN — RETOMAR ACÁ
+===========================================================================
+1. Leer este archivo completo primero.
+2. Pedirle al usuario la secuencia de Tab-por-Tab real con NVDA (sección 7)
+   para diagnosticar el bug abierto — es lo más urgente, la funcionalidad
+   ya está lista pero inutilizable si no se puede navegar el formulario.
+3. Una vez resuelto ese bug, falta:
+   - Confirmar con el usuario el motivo del margen +US$1/+US$2 en la cuota
+     (sección 3, "un bug que atrapé") — sigue sin confirmar si es
+     intencional.
+   - Decidir si el tipo de cambio debería ser un campo de Configuración en
+     vez de tipearse en cada cálculo (quedó como "se tipea cada vez", mi
+     recomendación original, nunca confirmado explícitamente por el
+     usuario).
+   - Probar con NVDA real el resto del flujo (buscar caso, calcular,
+     guardar, editar tasas) una vez que la navegación básica funcione.
+   - Decidir si se commitea el trabajo a git.

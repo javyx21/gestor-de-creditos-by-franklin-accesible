@@ -608,6 +608,237 @@ Judgment calls made while building this that are worth the user's attention:
   scope for this accessibility-audit pass; ask the user before doing that rewrite since it's a
   sizable, separate edit.
 
+## Calculadora de Crédito
+
+A second, independent module (2026-07-11) that replicates the calculation engine of a reference
+Excel workbook the user supplied, `recursos/calculadora.xlsx` (git-ignored, real client data —
+same treatment as `MachoteBaseDeDatos.xlsx`): given a caso's salary, hire date, requested amount,
+term and payment frequency, it computes labor liability (pasivo laboral), net salary, the level
+loan installment, labor-liability coverage, and debt-to-income ratio — the same numbers a loan
+officer used to work out by hand in that spreadsheet.
+
+**Explicitly kept separate from Casos** — user's words: "en el panel actual no se debe añadir
+absolutamente nada [...] esto debe ir separado e independiente para no saturar ni mezclar las
+funciones." No file under `casos_panel.py`'s reach references it.
+
+**Navigation went through two iterations, worth knowing if a similar report comes up again**:
+1. First built as a menu-triggered modal dialog (`_PanelDialog`, exact same mechanism as
+   Notificaciones/Configuración/Ayuda) — seemed consistent with the rest of the app's established
+   "no notebook tabs, classic menu bar" pattern (see Architecture note above).
+2. **Real user report after trying it**: couldn't find the feature at first (a 4th top-level menu
+   easily gets arrow-keyed past when you're used to 3), and separately hit a real bug once found
+   (see "Scroll bug" below). User's explicit follow-up request: "lo quiero como otra pestaña no
+   como una opción en el menú [...] esto es una función no una configuración, por eso si o si
+   tiene que estar en un apartado extra." The user draws a real distinction: Notificaciones/
+   Configuración/Ayuda are setup/lookup tools, fine tucked in a menu; the Calculadora is something
+   used routinely, so it needs to be a first-class module like Casos itself.
+   **Fix**: `MainFrame` now hosts a `wx.Notebook` (`self.notebook`) with exactly two pages, `Casos`
+   and `Calculadora de Crédito` — the only tabs in the app; Notificaciones/Configuración/Ayuda stay
+   exactly as modal dialogs, unchanged. Both `CasosPanel` and `CalculadoraPanel` must be
+   constructed with `self.notebook` as their `parent` (not `self`/MainFrame) — wx.Notebook asserts
+   `pPage->GetParent() == this` on `AddPage()`, a real error hit while wiring this up. Switching
+   tabs fires `EVT_NOTEBOOK_PAGE_CHANGED`, which calls `recargar()` on whichever panel became
+   active — same live-refresh-on-entry pattern documented for the old Casos/Notificaciones
+   notebook setup before it was replaced by dialogs. `CalculadoraPanel.recargar()` is deliberately
+   light: it only re-reads `convenio_tasa` (in case a rate changed elsewhere) and preserves the
+   currently-selected empresa/tasa and every other in-progress field — it must NOT wipe out data
+   the user is mid-typing just because they tabbed over to check something in Casos and came back.
+   **This reintroduces the exact `wx.Notebook` mechanism the app moved away from once already**
+   (see Architecture note above — that move was also "pedido explícito del usuario por cómo navega
+   con NVDA", but the specific complaint was never spelled out in this file). Flagging this
+   tension rather than assuming it's risk-free: this hasn't been confirmed against the user's real
+   NVDA yet the way the dialog-based navigation was. If tab-switching (Ctrl+Tab/Ctrl+Shift+Tab, or
+   arrowing the tab strip) turns out to have the same friction that motivated the original move
+   away from notebooks, that needs a real report before assuming it's fine.
+
+**Scroll bug, found via real user report (2026-07-11)**: the panel stacks four sections (buscar
+caso, datos para calcular, resultados, tasas por convenio) inside a plain `wx.Panel` sized to the
+dialog's fixed 820×760 — measured directly (`GetVirtualSize()` vs `GetClientSize()`): content was
+858px tall against only 438px of visible client area once title bar/status bar/borders were
+subtracted. With a plain `wx.Panel`, content taller than the visible area is just clipped — no
+scrollbar, and controls below the fold were effectively unreachable, which is what the user hit
+("ahí sale solo como las tasas de interés... donde hago el cálculo?"). **Fix**: `CalculadoraPanel`
+now subclasses `wx.lib.scrolledpanel.ScrolledPanel` instead of `wx.Panel`, with
+`self.SetupScrolling(scroll_x=False, scroll_y=True)` called right after `SetSizer()`. Don't revert
+this to a plain `wx.Panel` even if the notebook page ends up taller than 820×760 in practice —
+there's no guarantee every future addition to this panel fits in one screen, and clipped/
+unreachable content is a real accessibility failure (WCAG 2.1.1), not just a cosmetic issue.
+
+**Second occurrence of the same symptom, different root cause (found + fixed 2026-07-12)**: after
+the panel moved from modal dialog to notebook tab (see Navigation history above), the user reported
+with real NVDA that entering the tab with Ctrl+Tab and then Tabbing through it, the only reachable
+control was the interest-rate field — "solo me aparece el campo para seleccionar la tasa de
+interés... no se muestra ningún elemento de la interfaz para ingresar el salario, los plazos, el
+monto ni el botón para calcular el crédito" — nearly the same wording as the 2026-07-11 scroll bug
+above, but this time `GetVirtualSize()`/`GetClientSize()` and `Shown`/position were all verified
+correct (not a layout/scroll problem). Root cause: `__init__` called
+`self._habilitar_entradas(False)` on the nine "Datos para calcular" inputs (empresa, fecha de
+ingreso, salario, ingresos extra, monto, plazo, periodicidad, tipo de cambio, deuda activa) plus
+`calcular_btn`, only re-enabling them once a caso was selected via search. **A disabled `wx.Window`
+does not receive keyboard focus, so Windows Tab navigation silently skips it entirely** — with
+nothing selected yet, Tab jumped straight from "Buscar caso" past the entire (disabled)
+"Datos para calcular" section and the (non-focusable, plain `wx.StaticText`) "Resultados" section,
+landing on "Tasas por convenio", which is always enabled — exactly matching what the user described
+as "the only thing I can reach". This wasn't caught earlier because verification only checked
+`Shown`/position/size, never `Enabled`, and the app hadn't been tested with a fresh CalculadoraPanel
+where no caso had been selected yet. **Fix**: removed `_habilitar_entradas()`/`_controles_entrada`
+entirely — the nine input fields and `calcular_btn` are now always enabled/reachable, matching the
+pattern already used (and already NVDA-verified) in `casos_panel.py`'s edit panel, where
+`estado_choice`/`etapa_choice` are never disabled and only the terminal "commit" buttons
+(`guardar_btn`/`eliminar_btn`) are gated on selection. `guardar_btn` here keeps the same
+single-button gating (still starts `Disable()`d, only `Enable()`d after a successful Calcular) since
+that mirrors the established, already-tested pattern and is a single control, not a whole section —
+but it's now also gated on having an actual `caso_id` (`self.guardar_btn.Enable(self._caso_seleccionado_id
+is not None)`), since `calculo_credito.caso_id` requires one; Calcular itself never required a caso
+(it's pure — see Flow below), so that part was always fine. When Calcular succeeds without a caso
+selected, the spoken/status message now adds "Para guardar esta simulación, primero buscá y
+seleccioná un caso." so the user isn't left wondering why Guardar stayed disabled. **Lesson for any
+future `Enable(False)` on a *block* of input controls in this app**: don't — it removes them from
+Tab navigation, which for a screen-reader user is indistinguishable from the controls not existing.
+Gating a single terminal action button on prior state is the established, accepted pattern instead.
+
+**Flow**: Buscar caso (reuses `buscar_casos()` from Casos — cédula/nombre, same
+`clasificar_termino_busqueda()` rules) → selecting a result row prefills Empresa/Tasa (best-effort
+`FindString` match against `caso.empresa_convenio`; if it doesn't match anything in
+`convenio_tasa`, left unselected rather than guessing — see "Empresa is a `wx.Choice`, not
+read-only" below) and Monto (from `caso.monto_solicitado`, always USD, confirmed by the user) →
+if a simulation was already saved for that caso (`calculo_credito`, see below), ALL fields reload
+from it instead, so the officer picks up exactly where they left off → Calcular (pure, no DB
+write, can be pressed repeatedly while trying different montos/plazos) → Guardar simulación en
+este caso (the deliberate write step, separate button, same "calculate freely, save on purpose"
+pattern as the rest of the app).
+
+**Empresa is a `wx.Choice`, not read-only auto-filled from `caso.empresa_convenio`**: initially
+designed as read-only, corrected before implementation — the Excel's own "Empresa Actual" (B5)
+was always a manually-typed field, never a formula, and real data shows why: a real caso's
+`empresa_convenio` can read `"CAFE LAS FLORES CHAIN"` while the convenio table's actual name is
+`"CAFE LAS FLORES"` — not just whitespace, a genuinely different string that `TRIM()` alone can't
+reconcile (see `db/convenios.py:obtener_tasa`). Auto-selecting when there's an exact match and
+leaving it unselected otherwise (with a status-bar note) lets the officer manually correct a
+mismatch instead of silently calculating against the wrong rate.
+
+**Validation errors on Calcular** (missing/invalid fields, empresa with no tasa configured) use
+`wx.MessageBox`, matching this app's one established exception to "no popups" — same reasoning as
+everywhere else it's used: an inline label wouldn't be proactively announced by NVDA, and this is
+the sole indication something's wrong. A **successful** Calcular is different: results go into the
+visible result labels AND get spoken directly via `anunciar_voz_nvda()` (not just
+`anunciar_texto_estado`'s status-bar live region) — this module was built right after that live
+region was confirmed unreliable for exactly this kind of "user pressed a button, needs to hear the
+real number back" interaction (see the NVDA speech section under Accessibility below), so it uses
+the more reliable mechanism from the start rather than the older, weaker one.
+
+### Base de datos
+
+Two new tables, `caso` untouched:
+
+```sql
+convenio_tasa(empresa_convenio PRIMARY KEY, tasa_interes REAL, fecha_actualizacion)
+calculo_credito(id, caso_id UNIQUE REFERENCES caso(id), empresa_convenio, tasa_interes,
+                fecha_ingreso_empresa, salario_bruto_cordobas, ingresos_extra_cordobas,
+                monto_credito_usd, plazo_meses, periodicidad, tipo_cambio, deuda_activa_cordobas,
+                pasivo_laboral_cordobas, salario_neto_cordobas, cuota_usd,
+                cobertura_pasivo_laboral, nivel_endeudamiento, fecha_calculo)
+```
+
+- `convenio_tasa` replaces the Excel's "Convenios" sheet — seeded once (`INSERT OR IGNORE`, so a
+  manually-edited rate is never clobbered on restart) with the 29 real companies/rates extracted
+  from that sheet; user confirmed (2026-07-11) they're still current. Two of those 29
+  (`GRUPO TALSE`, `LABORATORIOS ROMAN`) had no rate in the source Excel either — seeded with
+  `tasa_interes = NULL` on purpose rather than inventing a number; `obtener_tasa()` returns `None`
+  for "empresa known but no rate assigned" same as "empresa not known at all", and the panel
+  refuses to Calcular until the officer assigns one via the "Tasas por convenio" section.
+- `calculo_credito` is **one row per caso** (`UNIQUE(caso_id)`), no history — confirmed with the
+  user (2026-07-11): "por el momento solo la última simulación vale... más adelante evaluaremos
+  cómo avanzar con esa funcionalidad." `db/calculo_credito.py:guardar_simulacion()` is an upsert
+  (`ON CONFLICT(caso_id) DO UPDATE`). It stores inputs AND outputs together, not just the result —
+  if a rate or the calculation logic changes later, an already-saved simulation still shows
+  exactly what was calculated when it was saved, instead of silently drifting if it were
+  recomputed from live data.
+- A separate table rather than new columns on `caso`: keeps `caso` focused on the MIDESA-driven
+  workflow (per the Domain model section above) instead of a dozen mostly-NULL columns for casos
+  that never get simulated. Confirmed with the user as the preferred design (2026-07-11).
+
+### Motor de cálculo — `gestor_credito/calculo/`
+
+Pure functions, no DB/UI dependency (same separation-of-concerns principle as `export/`), each one
+a direct port of a specific part of `recursos/calculadora.xlsx`'s "Calculadora" and "Calculo Plan
+de pago" sheets — reconstructed by reading the actual formulas (not guessed from the visible
+numbers) and validated against the real workbook opened via Excel COM automation (`win32com`), not
+just eyeballed. Every module below has a pytest file with "golden" values taken directly from that
+real Excel, not hand-computed:
+
+- `dias360.py` — Excel `DAYS360` (US/NASD method). No such function in Python's stdlib; the two
+  adjustment rules (day 31 → 30, last-day-of-February → 30) were verified against 11 real date
+  pairs run through actual Excel via COM, covering the edge cases (leap/non-leap February, double
+  31sts, chained 30/31-day months) — not just Microsoft's prose documentation, which alone wasn't
+  enough to get right on the first attempt.
+- `pasivo_laboral.py` — Nicaraguan Labor Code Art. 45 severance approximation (1 month/year for
+  the first 3 years, 20/30 of a month/year beyond that, capped at 5 months total). Replicated
+  literally, including the Excel formula's slightly unusual mixed use of `INT()` in the
+  "additional years" term — the business already makes credit decisions off this exact number, so
+  bit-for-bit fidelity to the current Excel behavior mattered more than a textbook-clean rewrite.
+- `deducciones.py` — INSS laboral (7% flat) and IR anual (progressive brackets, exempt up to
+  C$100k then 15/20/25/30% marginal bands up to and beyond C$500k). These are legal rates that can
+  change — kept as named constants (`TASA_INSS_LABORAL`, `BANDAS_IR_ANUAL`), not buried in
+  formulas, so updating them later doesn't mean re-deriving the math.
+- `amortizacion.py` — the real engine: a level-payment (cuota nivelada) loan schedule using actual
+  calendar days between payments (not fixed 30-day months) and simple per-period interest
+  (`E_t = días_t × tasa_anual/360`). The level payment itself is the classic variable-period
+  annuity formula, `Cuota = Principal / Σ(t=1..n)[1 / Π(k=1..t)(1+E_k)]` — arrived at by
+  reconstructing the Excel's own (differently-shaped, column-based) method by hand and confirming
+  numerically that both give identical results. Also replicates the next-payment-date logic
+  (`siguiente_fecha_pago`): Quincenal is +15 days, +16 if that lands on a Sunday; Mensual is
+  `EDATE` (same day-of-month) with a Sunday push too, PLUS a drift-correction (if the previous
+  payment's day-of-month is exactly the anchor day + 1 — meaning it was pushed by a prior Sunday
+  adjustment — the next `EDATE` is computed from `previous_date - 1 day` instead, to stop that
+  +1 drift from compounding forever). This whole date engine, dates AND capital/interest amounts
+  together, was verified against a real 24-installment schedule pulled from Excel via COM — not
+  just the final cuota number — because this is exactly the kind of subtle date-arithmetic bug
+  that a smaller test wouldn't have caught: the 24-row case was specifically chosen because it
+  naturally hits both the Sunday-push and the drift-correction in real data.
+  Only `Quincenal`/`Mensual` are implemented (`PERIODICIDADES_VALIDAS`) — the Excel's own data
+  validation on that field only allows those two, even though the underlying "Calculo Plan de
+  pago" sheet's lookup table knows about more (Semanal, Bimensual, etc.); adding those without a
+  real case to verify against would be exactly the "replicating formulas blindly" the user asked
+  to avoid.
+  Deliberately does NOT support Seguro (SVD), Comisión, or Gasto Legal, nor the "Decreciente"/
+  "Vencimiento" amortization systems the Excel also supports — all off in the real case analyzed,
+  and the user confirmed (2026-07-11) to leave them out of this first version entirely.
+- `capacidad.py` — orchestrates the above into `evaluar_capacidad()`, matching
+  `Calculadora!B8:B19`. Two things here that weren't obvious from reading the Excel's formulas at
+  a glance, both caught by the golden-value tests failing and then investigating why:
+  - **`Calculadora!B14` (cuota) is NOT the raw level payment.** It adds a flat surcharge before
+    display/use — **+US$1 per cuota if Quincenal, +US$2 if Mensual** (`MARGEN_CUOTA_USD`). This
+    surcharge does NOT feed back into the internal schedule (`F12:F108` in the Excel still use the
+    raw `$P$12` cuota) — it's purely what gets quoted/used for endeudamiento on top of the
+    mathematically exact number. **Confirmed with the user (2026-07-12)**: this is the cost of a
+    funeral-assistance service (asistencia funeraria), US$2/month total — charged in full (+2) when
+    the cuota is Mensual, or split in half (+1) per cuota when Quincenal, since that periodicity has
+    two cuotas per month. Not a rounding convention or collection buffer, and not signaled anywhere
+    in the Excel itself — the business reason came from the user directly, not from the spreadsheet.
+  - **`Calculadora!B11` ("Plazo") is always in MONTHS**, never in number-of-installments, even
+    when Periodicidad is Quincenal — `'Calculo Plan de pago'!F4` doubles it for Quincenal to get
+    the real installment count. `capacidad.py`'s `plazo_meses` parameter and `_numero_de_cuotas()`
+    keep this conversion at the orchestration layer; `amortizacion.py` itself stays unit-agnostic
+    (takes a literal installment count) so the low-level engine doesn't need to know about this
+    months-vs-periodicidad business rule.
+
+All of the above — `calculo/`, `db/convenios.py`, `db/calculo_credito.py` — were verified against
+real Excel output (COM automation) before being trusted, following the same empirical standard
+the rest of this project's accessibility fixes already use ("verificado empíricamente" is the bar,
+not "looks right").
+
+**A real mistake made while doing this verification, worth remembering**: driving
+`recursos/calculadora.xlsx` via Excel COM for testing actually **wrote test values into that real
+file on disk**, even though every script called `wb.Close(SaveChanges=False)` — because the file
+lives inside a OneDrive-synced folder, AutoSave persisted the changes regardless of the explicit
+"don't save" close. Caught by re-reading the file afterward and noticing the last test scenario's
+values were sitting in cells that should have held the original real client's data; fixed by
+reopening and restoring the exact original values (cross-checked cell-by-cell against the very
+first dump taken of that file). Lesson applied going forward: open reference files like this one
+`ReadOnly=True` via COM, don't rely on `SaveChanges=False` alone when the file is inside OneDrive/
+SharePoint.
+
 ## Commands
 
 ```
@@ -652,20 +883,33 @@ gestor_credito/
   assets/
     logo.png                     # real logo, 2048x2048px — AppLogo scales it down for display
     sonidos/                      # .wav alert sounds, supplied by the user (not generated by Claude)
+    nvda/                          # nvdaControllerClient(32|64).dll — see anunciar_voz_nvda in accesibilidad.py
+  calculo/                       # pure calculation engine for Calculadora de Crédito, no DB/UI — see that section above
+    dias360.py                     # Excel DAYS360 (US/NASD) replica
+    pasivo_laboral.py               # Nicaraguan labor-liability approximation
+    deducciones.py                  # INSS/IR
+    amortizacion.py                 # cuota nivelada + payment schedule/dates
+    capacidad.py                    # orchestrates the above into evaluar_capacidad()
   ui/
-    main_frame.py                # wx.Frame with the wx.Notebook that hosts every tab
-    logo.py                       # AppLogo — the accessible logo shown on every tab
+    main_frame.py                # wx.Frame; hosts a 2-page wx.Notebook (Casos, Calculadora de Crédito) — everything
+                                   # else (Notificaciones/Configuración/Ayuda) stays a menu-triggered modal dialog
+    logo.py                       # AppLogo — the accessible logo shown on every tab/dialog
     sonido.py                     # reproducir_sonido() — plays a .wav from assets/sonidos/ via wx.adv.Sound
     fechas.py                     # ISO <-> DD/MM/AAAA date formatting for the UI boundary
-    accesibilidad.py               # activar_con_enter() — apply to every wx.Button, see below
+    accesibilidad.py               # nombre_accesible/activar_con_enter/anunciar_texto_estado/anunciar_voz_nvda
+    atajos.py                      # central registry of every documented keyboard shortcut
     casos_panel.py                 # "Casos" tab (search/list/manually edit)
-    notificaciones_panel.py         # "Notificaciones" tab (alert list, see Alerts/workflow)
-    configuracion_panel.py          # "Configuración" tab (agente actual + importar Excel)
+    calculadora_panel.py            # "Calculadora de Crédito" tab — see that section above
+    notificaciones_panel.py         # Notificaciones dialog (alert list, see Alerts/workflow)
+    configuracion_panel.py          # Configuración dialog (agente actual + importar Excel)
+    ayuda_panel.py                  # Ayuda dialog (keyboard shortcut reference, from atajos.py)
   db/
     database.py                  # sqlite3 connection + schema management
     casos.py                      # queries/updates for the caso entity (search, filter, edit)
     configuracion.py              # get/set for the configuracion key-value table
     alertas.py                     # live alert queries (documentos/constancia pendiente/en mano)
+    convenios.py                   # convenio_tasa CRUD (empresa -> tasa), for Calculadora de Crédito
+    calculo_credito.py              # last-saved-simulation-per-caso CRUD, for Calculadora de Crédito
   importer/
     excel_importer.py             # reads the MIDESA bitácora, upserts cliente/caso
   export/

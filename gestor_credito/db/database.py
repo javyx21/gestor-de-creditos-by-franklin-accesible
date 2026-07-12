@@ -112,7 +112,93 @@ CREATE TABLE IF NOT EXISTS configuracion (
 CREATE INDEX IF NOT EXISTS idx_caso_ejecutivo ON caso(ejecutivo);
 CREATE INDEX IF NOT EXISTS idx_caso_fecha_registro ON caso(fecha_registro);
 CREATE INDEX IF NOT EXISTS idx_caso_estado_solicitud ON caso(estado_solicitud);
+
+-- Tasa de interés anual por empresa convenio, para la Calculadora de crédito
+-- (panel independiente, ver ui/calculadora_panel.py) — reemplaza la hoja
+-- "Convenios" del Excel de referencia (recursos/calculadora.xlsx). tasa_interes
+-- puede ser NULL: dos empresas reales del Excel de origen (GRUPO TALSE,
+-- LABORATORIOS ROMAN) no tenían tasa definida ahí tampoco — se preserva ese
+-- vacío en vez de inventar un valor, ver db/convenios.py.
+CREATE TABLE IF NOT EXISTS convenio_tasa (
+    empresa_convenio TEXT PRIMARY KEY,
+    tasa_interes REAL,
+    fecha_actualizacion TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Última simulación de capacidad crediticia por caso (panel Calculadora,
+-- completamente separado de Casos — no se referencia desde casos_panel.py a
+-- propósito, ver CLAUDE.md). UNIQUE(caso_id): a propósito NO se guarda
+-- historial, "Guardar simulación" pisa la fila anterior de ese caso. Se
+-- guardan las ENTRADAS junto con los RESULTADOS calculados en su momento,
+-- no solo el resultado — así, si más adelante cambia una tasa o la fórmula,
+-- una simulación guardada sigue reflejando lo que realmente se calculó
+-- cuando se guardó, en vez de derivar (y posiblemente cambiar) un resultado
+-- recalculado con datos nuevos.
+CREATE TABLE IF NOT EXISTS calculo_credito (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    caso_id INTEGER NOT NULL UNIQUE REFERENCES caso(id),
+
+    empresa_convenio TEXT NOT NULL,
+    tasa_interes REAL NOT NULL,
+    fecha_ingreso_empresa TEXT NOT NULL,
+    salario_bruto_cordobas REAL NOT NULL,
+    ingresos_extra_cordobas REAL NOT NULL DEFAULT 0,
+    monto_credito_usd REAL NOT NULL,
+    plazo_meses INTEGER NOT NULL,
+    periodicidad TEXT NOT NULL,
+    tipo_cambio REAL NOT NULL,
+    deuda_activa_cordobas REAL NOT NULL DEFAULT 0,
+
+    pasivo_laboral_cordobas REAL NOT NULL,
+    salario_neto_cordobas REAL NOT NULL,
+    cuota_usd REAL NOT NULL,
+    cobertura_pasivo_laboral REAL NOT NULL,
+    nivel_endeudamiento REAL NOT NULL,
+
+    fecha_calculo TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
+
+# Tasas reales extraídas de la hoja "Convenios" del Excel de referencia
+# (recursos/calculadora.xlsx) — el usuario confirmó (2026-07-11) que siguen
+# vigentes. Se siembran con INSERT OR IGNORE: solo llenan la tabla si está
+# vacía para esa empresa, nunca pisan una tasa que ya se haya editado a mano
+# desde la app (ver db/convenios.py:guardar_tasa). None = la empresa no
+# tenía tasa definida en el Excel de origen tampoco (ver comentario en
+# CREATE TABLE convenio_tasa arriba) — se siembra igual, con NULL, en vez de
+# omitirla, para que aparezca en la lista y quede claro que falta asignarle
+# una tasa.
+CONVENIOS_INICIALES = [
+    ("ACEITERA EL REAL", 0.33),
+    ("AGROSACO", 0.41),
+    ("AIRTEC", 0.41),
+    ("BLP", 0.45),
+    ("CAFE LAS FLORES", 0.36),
+    ("CLUB TERRAZA", 0.45),
+    ("CASCO SAFETY", 0.36),
+    ("DIVECO", 0.45),
+    ("EL HALCON", 0.45),
+    ("EL ZOCALO", 0.36),
+    ("FORMUNICA", 0.45),
+    ("GRUPO TALSE", None),
+    ("GSQ Nicaragua", 0.36),
+    ("HANTER METALS", 0.45),
+    ("IMMSA", 0.36),
+    ("INDENICSA", 0.33),
+    ("JOHN MAY", 0.45),
+    ("LA NANI CAFÉ", 0.36),
+    ("LABORATORIOS ROMAN", None),
+    ("LALA", 0.45),
+    ("MANPOWER", 0.45),
+    ("MI VIEJO RANCHITO", 0.36),
+    ("MULTIPERFILES", 0.45),
+    ("PANADERIA LA NANI", 0.45),
+    ("RAPIDITO TO GO", 0.45),
+    ("REPSA", 0.36),
+    ("SPORT LINE", 0.45),
+    ("MIDESA", 0.18),
+    ("NICAES", 0.60),
+]
 
 
 def get_connection():
@@ -126,6 +212,10 @@ def init_db():
     conn = get_connection()
     try:
         conn.executescript(SCHEMA)
+        conn.executemany(
+            "INSERT OR IGNORE INTO convenio_tasa (empresa_convenio, tasa_interes) VALUES (?, ?)",
+            CONVENIOS_INICIALES,
+        )
         conn.commit()
     finally:
         conn.close()

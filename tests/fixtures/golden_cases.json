@@ -1,0 +1,110 @@
+[
+  {
+    "entrada": {
+      "empresa": "IMMSA",
+      "fecha_ingreso": "2020-03-15",
+      "salario": 15000,
+      "tipo_cambio": 36.6243,
+      "monto": 1500,
+      "plazo": 12,
+      "periodicidad": "Mensual",
+      "extra": 0,
+      "deuda": 0
+    },
+    "salida": {
+      "pasivo_laboral_cordobas": "75000",
+      "pasivo_laboral_usd": 2047.820709201268,
+      "salario_neto_total_cordobas": "13107.5",
+      "cuota_usd": 153.04233725830363,
+      "cuota_cordobas": "5605.0685",
+      "endeudamiento": 0.4276229999961312,
+      "cobertura_pasivo": 0.732486,
+      "antiguedad": "6 años y 3 meses",
+      "inss": 1050.0,
+      "salario_neto_inss": "13950",
+      "ir_anual": "10110",
+      "tasa": 0.36
+    }
+  },
+  {
+    "entrada": {
+      "empresa": "LALA",
+      "fecha_ingreso": "2023-01-10",
+      "salario": 8500,
+      "tipo_cambio": 36.6243,
+      "monto": 600,
+      "plazo": 6,
+      "periodicidad": "Quincenal",
+      "extra": 0,
+      "deuda": 0
+    },
+    "salida": {
+      "pasivo_laboral_cordobas": "28349.0741",
+      "pasivo_laboral_usd": 774.0509463409287,
+      "salario_neto_total_cordobas": "7905",
+      "cuota_usd": 57.328015849994905,
+      "cuota_cordobas": "2099.5985",
+      "endeudamiento": 0.5312077042112506,
+      "cobertura_pasivo": 0.7751427768886566,
+      "antiguedad": "3 años y 6 meses",
+      "inss": 595.0,
+      "salario_neto_inss": "7905",
+      "ir_anual": "0",
+      "tasa": 0.45
+    }
+  },
+  {
+    "entrada": {
+      "empresa": "MIDESA",
+      "fecha_ingreso": "2018-06-01",
+      "salario": 25000,
+      "tipo_cambio": 36.6243,
+      "monto": 3000,
+      "plazo": 24,
+      "periodicidad": "Mensual",
+      "extra": 1000,
+      "deuda": 50
+    },
+    "salida": {
+      "pasivo_laboral_cordobas": "125000",
+      "pasivo_laboral_usd": 3413.034515335447,
+      "salario_neto_total_cordobas": "21683.3333",
+      "cuota_usd": 152.1340992439371,
+      "cuota_cordobas": "5571.8049",
+      "endeudamiento": 0.259268480750487,
+      "cobertura_pasivo": 0.8789832,
+      "antiguedad": "8 años y 1 meses",
+      "inss": 1750.0000000000002,
+      "salario_neto_inss": "23250",
+      "ir_anual": "30800",
+      "tasa": 0.18
+    }
+  },
+  {
+    "entrada": {
+      "empresa": "NICAES",
+      "fecha_ingreso": "2025-05-01",
+      "salario": 12000,
+      "tipo_cambio": 36.5,
+      "monto": 800,
+      "plazo": 4,
+      "periodicidad": "Quincenal",
+      "extra": 0,
+      "deuda": 0
+    },
+    "salida": {
+      "pasivo_laboral_cordobas": "14333.3333",
+      "pasivo_laboral_usd": 392.69406392694066,
+      "salario_neto_total_cordobas": "10736",
+      "cuota_usd": 112.59461358000551,
+      "cuota_cordobas": "4109.7034",
+      "endeudamiento": 0.7655930319802908,
+      "cobertura_pasivo": 2.0372093023255813,
+      "antiguedad": "1 años y 2 meses",
+      "inss": 840.0000000000001,
+      "salario_neto_inss": "11160",
+      "ir_anual": "5088",
+      "tasa": 0.6
+    }
+  }
+]

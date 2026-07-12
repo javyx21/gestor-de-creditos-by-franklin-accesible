@@ -108,6 +108,23 @@ ATAJOS = [
         None,
     ),
     (
+        None, None, "Ctrl+Tab / Ctrl+Shift+Tab", "Calculadora",
+        "Alternar entre las pestañas Casos y Calculadora de Crédito — la Calculadora es "
+        "una pestaña de primer nivel, no un diálogo de menú (pedido explícito del "
+        "usuario, 2026-07-11: \"esto es una función no una configuración\")",
+        None,
+    ),
+    (
+        None, None, "Alt+C", "Calculadora",
+        "Calcular pasivo laboral, salario neto, cuota y endeudamiento con los datos ingresados",
+        None,
+    ),
+    (
+        None, None, "Alt+A", "Calculadora",
+        "Actualizar la tasa de la empresa seleccionada en \"Tasas por convenio\"",
+        None,
+    ),
+    (
         None, None, "Esc", "General",
         "Cerrar el diálogo abierto (Notificaciones/Configuración/Ayuda) y volver a Casos",
         None,
