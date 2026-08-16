@@ -946,6 +946,145 @@ first dump taken of that file). Lesson applied going forward: open reference fil
 `ReadOnly=True` via COM, don't rely on `SaveChanges=False` alone when the file is inside OneDrive/
 SharePoint.
 
+## Historial de Créditos
+
+A third, independent module (2026-07-12) — same independence principle already established for
+Calculadora de Crédito (kept apart from Casos, no FK to `cliente`/`caso`): a read-only search
+screen over a periodic external export, `recursos/reporte.xlsx` (git-ignored, real client data —
+same treatment as `MachoteBaseDeDatos.xlsx`/`calculadora.xlsx`), listing every credit already
+disbursed and its current collection status (Corriente, Cancelado, Saneado, Vencido, Trámite).
+Purely for lookup — the user's ask was "buscar un cliente y ver el estatus de su crédito / su
+historial", not edit the report from the app.
+
+**Schema** (`gestor_credito/db/database.py`):
+
+```sql
+reporte_credito(id, no_credito TEXT NOT NULL UNIQUE, cedula TEXT NOT NULL,
+                 nombre_cliente TEXT NOT NULL, fecha_desembolso, fecha_vencimiento,
+                 monto_desembolsado REAL, estado_credito, empresa_convenio,
+                 plazo_credito INTEGER, cuotas_pagadas INTEGER, fecha_actualizacion_registro)
+```
+
+One table, **no FK to `cliente`/`caso`** — `cedula`/`nombre_cliente` are this report's own columns,
+deliberately not joined against the MIDESA-driven `cliente` table, same reasoning already used for
+`convenio_tasa`/`calculo_credito`. `no_credito` is the real identity key from the source Excel
+(UNIQUE) — a periodic reimport updates the existing row instead of duplicating it, the same
+`clave_caso` pattern the bitácora import already uses.
+
+**Import** (`gestor_credito/importer/reporte_creditos_importer.py`, `import_reporte_creditos()`),
+triggered from **Configuración → "Configuración de Reporte de Créditos"** (a third category in the
+tree alongside Casos/Calculadora — importing is a setup action, same reasoning as the MIDESA
+bitácora import living in Configuración, not in the daily-use tab):
+- Real headers (`recursos/reporte.xlsx`, sheet "REPORTE DE DATOS DE CREDITOS") are clean —
+  underscore-separated (`NO_CREDITO`, `NO_IDENTIFICACION`), no embedded newlines or `(Manual)`/
+  `(Auto)` suffixes unlike the MIDESA bitácora — but `_normalize_header()` still converts `_` to a
+  space before matching `COLUMN_ALIASES`, so header variants with spaces or the wording the user
+  originally used when requesting the module ("NOMBRE del CLIENTE", "PLAZO del CREDITO") also
+  match. Only `no_credito`/`cedula`/`nombre_cliente` are mapped from the columns that matter to this
+  module; extra real columns (`SALDO_PRINCIPAL`, `MONTO_GARANTIA`, `NUMERO_CUOTAS`,
+  `PRODUCTO_CREDITO`, `NO_CLIENTE_SIAF`) are present in the real file but intentionally unmapped —
+  ignored, not an error.
+- A row missing `no_credito`, `cedula`, or `nombre_cliente` is skipped (`filas_omitidas`), same
+  no-hard-fail pattern as the bitácora importer.
+- **Per-row errors no longer abort the whole import (fixed 2026-08-16, real user report of silent
+  data loss)**. Originally, the only two guarded conditions were missing `no_credito`/`cedula`; a row
+  with a non-numeric value in `PLAZO_CREDITO`/`CUOTAS_PAGADAS`/`MONTO_DESEMBOLSADO` (uncaught
+  `ValueError` from `_to_int`/`_to_float`) or a blank `NOMBRE_CLIENTE` (uncaught
+  `sqlite3.IntegrityError` — `nombre_cliente TEXT NOT NULL` in the schema, but never checked before
+  the earlier version's upsert) would raise out of the per-row loop before `conn.commit()` — which
+  only runs once, after the loop — silently rolling back every row already processed in that
+  import, not just the offending one. Fixed two ways: `nombre_cliente` is now validated up front
+  next to `no_credito`/`cedula` (same `filas_omitidas` path, no DB round-trip needed to discover the
+  problem), and the whole per-row body is wrapped in `try/except (ValueError, TypeError,
+  sqlite3.Error)`, recording the error text into `filas_omitidas` and moving on to the next row —
+  same principle as the bitácora importer's row-level tolerance, just made to actually hold under a
+  real invalid value instead of only under a missing one.
+- **`no_credito` matching is now format-tolerant on reimport (fixed 2026-08-16, real user report)**.
+  `_row_to_dict()` coerces `no_credito` to `str(value).strip()` regardless of what type openpyxl
+  handed back — same defensive cast excel_importer.py already applies to `No. Presolicitud` — but if
+  Excel itself delivers the cell as a raw number in one export and as zero-padded text in another
+  (e.g. `"0012456"` vs `12456`), the two reimports produce two different literal strings for what is
+  the same real credit. `_upsert_credito()`'s original lookup (`WHERE no_credito = ?`, exact text
+  match) missed the existing row in that case and inserted a duplicate instead of updating it —
+  which is what "Historial de Créditos" then showed as the same credit appearing twice for one
+  client. Fixed with a fallback lookup, only reached when the exact match misses and the incoming
+  `no_credito` is purely digits (`no_credito.isdigit()` — guards against ever reaching this for a
+  hypothetical future non-numeric `no_credito`, since SQLite's `CAST(... AS INTEGER)` silently
+  yields `0` for non-numeric text instead of erroring): `WHERE no_credito != ? AND CAST(no_credito
+  AS INTEGER) = CAST(? AS INTEGER)`, comparing the numeric value with leading zeros ignored. The
+  match's `no_credito` column is never rewritten on `UPDATE` (only `CREDITO_COLUMNS` are), so
+  whichever text form was imported *first* for a given credit stays its permanent identity in the
+  database — later reimports with a different digit-formatting only update the other fields, they
+  never change the stored `no_credito` text itself.
+- `.xls` is accepted in the file picker's filter alongside `.xlsx` (user's explicit ask) even though
+  `openpyxl` can't actually read the legacy binary format — the real reference file is already
+  `.xlsx`; if a genuine `.xls` ever gets picked, `import_reporte_creditos()`'s failure to open it is
+  caught and surfaced the same way any other import error already is, in `_on_importar_creditos()`.
+
+**Query** (`gestor_credito/db/reporte_creditos.py`, `buscar_creditos()`):
+- No search term → default view, only `estado_credito == ESTADO_CREDITO_ACTIVO` ("Corriente" — the
+  real Excel has no literal "Activo" value; confirmed with the user this is the equivalent).
+- A term → same `clasificar_termino_busqueda()` cédula-vs-nombre classification already used by
+  `buscar_casos()` (`db/casos.py`), and both comparisons are done in Python with `str.upper()`, not
+  SQLite's ASCII-only `UPPER()` — same reasoning/same real bug already documented for Casos (a
+  cédula stored uppercase wasn't found typed lowercase). A term search **ignores the default
+  Corriente-only filter** and returns the client's full history across every `estado_credito`, so an
+  already Cancelado/Saneado/Vencido credit can still be looked up — this is the "historial" part of
+  the module's name.
+- Both paths order `fecha_desembolso DESC, id DESC` — most recent credit first, explicit user
+  request for a client with more than one credit over time.
+
+**UI** (`gestor_credito/ui/creditos_panel.py`, `CreditosPanel`) mirrors `CasosPanel`'s established
+NVDA-tested patterns rather than inventing new ones: one combined cédula-or-nombre search box, a
+10-column `wx.ListCtrl` (Fecha Desembolso, Fecha Vencimiento, No. Crédito, Monto Desembolsado,
+Nombre del Cliente, Identificación, Empresa Convenio, Estado del Crédito, Plazo del Crédito, Número
+de Cuotas — must stay in sync with `buscar_creditos()`'s `SELECT` order, same coupling already
+called out for Casos), `CELDA_VACIA = "Celda vacía"` placeholder text for blank cells (same NVDA
+reasoning as Casos — a truly empty cell reads as just the repeated column header with nothing
+after it), and `Freeze()`/`Thaw()` around list rebuilds plus a column width set once in `__init__`
+rather than on every refresh (same measured perf pattern as Casos, worth it here too since the real
+report is already ~4800 rows). Selecting a row shows a one-line summary ("{nombre} — Cédula {x} —
+Crédito No. {y} — Estado: {estado}") — read-only, no edit fields, consistent with this module being
+lookup-only.
+
+**Third notebook tab, and shortcuts became tab-aware (2026-07-12)** — adding this module grew
+`MainFrame`'s `wx.Notebook` from the 2 pages described under Calculadora de Crédito above (Casos,
+Calculadora de Crédito) to 3 (**Casos, Calculadora de Crédito, Historial de Créditos**). Before this,
+Ctrl+F/Ctrl+R/Alt+L were wired directly to `CasosPanel`'s methods regardless of which tab was
+active, so on Calculadora (already a 2nd tab at that point) Alt+L had no visible effect — a real gap
+that only got noticed once a 3rd tab made the pattern obviously wrong. Fixed by making all three
+shortcuts dispatch on the active notebook page instead of a fixed target:
+- **Ctrl+F** (focus search) / **Ctrl+R** (focus results list): Casos and Historial de Créditos each
+  focus their own search box / results list; Calculadora de Crédito has neither concept (no search,
+  no list), so these two are simply no-ops there.
+- **Alt+L** ("Limpiar"/clear) means something different per tab, all confirmed with the user
+  2026-07-12: on Casos, it clears the **edit panel** (the search box itself was moved to a new local
+  button, "&Vaciar búsqueda"/Alt+V, so Alt+L and Alt+V are no longer the same action there — a
+  deliberate split, not an oversight); on Calculadora, it clears the input form **while preserving
+  the currently-selected empresa** (re-picking the rate every time was the friction reported); on
+  Historial de Créditos, it clears the search box and returns to the default Corriente-only view —
+  same action as its own local "Vaciar búsqueda" button, since this tab has no separate edit panel
+  to distinguish it from.
+- Every one of these clear actions now also plays the delete-confirmation sound (`SONIDO_BORRAR`)
+  — explicit user request: "la acción de borrar siempre tiene que hacer llamado al sonido", applied
+  uniformly across all three tabs' clear actions, not just the one that prompted the request.
+- Dispatch is three separate hand-written `if`/`elif` chains in `main_frame.py`, keyed on which
+  panel is the active notebook page — no generic per-panel interface yet. Adding a 4th tab means
+  remembering to extend all three chains (plus `_on_cambiar_pestana`'s `recargar()` list); nothing
+  currently enforces that at compile time, flag it if a shortcut silently stops working on a future
+  new tab.
+
+**Reused/verified case-insensitive-cédula fix applied here too**: the same real bug already fixed
+for Casos (a cédula saved uppercase, typed lowercase, not found — SQLite's `UPPER()` is ASCII-only
+and doesn't fold `Ñ`/accented vowels) got the identical fix in `buscar_creditos()` the same day,
+since this module's cédula search has the exact same failure mode.
+
+**Note**: the "Architecture note, found while doing this audit" further up (under "UI implemented
+so far") predates both this module and the Calculadora de Crédito one — it still describes
+`MainFrame` hosting Casos alone with no notebook. That's doubly stale now: the notebook holds 3
+tabs (Casos, Calculadora de Crédito, Historial de Créditos), not 0 or 2 — see the `ui/main_frame.py`
+line in the Architecture tree below for the current state.
+
 ## Commands
 
 ```
@@ -998,8 +1137,10 @@ gestor_credito/
     amortizacion.py                 # cuota nivelada + payment schedule/dates
     capacidad.py                    # orchestrates the above into evaluar_capacidad()
   ui/
-    main_frame.py                # wx.Frame; hosts a 2-page wx.Notebook (Casos, Calculadora de Crédito) — everything
-                                   # else (Notificaciones/Configuración/Ayuda) stays a menu-triggered modal dialog
+    main_frame.py                # wx.Frame; hosts a 3-page wx.Notebook (Casos, Calculadora de Crédito,
+                                   # Historial de Créditos) — everything else (Notificaciones/Configuración/
+                                   # Ayuda) stays a menu-triggered modal dialog. Also dispatches Ctrl+F/
+                                   # Ctrl+R/Alt+L per active tab — see Historial de Créditos section above
     logo.py                       # AppLogo — the accessible logo shown on every tab/dialog
     sonido.py                     # reproducir_sonido() — plays a .wav from assets/sonidos/ via wx.adv.Sound
     fechas.py                     # ISO <-> DD/MM/AAAA date formatting for the UI boundary
@@ -1007,8 +1148,9 @@ gestor_credito/
     atajos.py                      # central registry of every documented keyboard shortcut
     casos_panel.py                 # "Casos" tab (search/list/manually edit)
     calculadora_panel.py            # "Calculadora de Crédito" tab — see that section above
+    creditos_panel.py               # "Historial de Créditos" tab — see that section above
     notificaciones_panel.py         # Notificaciones dialog (alert list, see Alerts/workflow)
-    configuracion_panel.py          # Configuración dialog (agente actual + importar Excel)
+    configuracion_panel.py          # Configuración dialog (agente actual + importar Excel de bitácora/reporte)
     ayuda_panel.py                  # Ayuda dialog (keyboard shortcut reference, from atajos.py)
   db/
     database.py                  # sqlite3 connection + schema management
@@ -1017,8 +1159,10 @@ gestor_credito/
     alertas.py                     # live alert queries (documentos/constancia pendiente/en mano)
     convenios.py                   # convenio_tasa CRUD (empresa -> tasa), for Calculadora de Crédito
     calculo_credito.py              # last-saved-simulation-per-caso CRUD, for Calculadora de Crédito
+    reporte_creditos.py             # buscar_creditos(), for Historial de Créditos
   importer/
     excel_importer.py             # reads the MIDESA bitácora, upserts cliente/caso
+    reporte_creditos_importer.py    # reads recursos/reporte.xlsx, upserts reporte_credito
   export/
     excel_export.py              # openpyxl-based report export
     word_export.py                # python-docx-based document export

@@ -161,6 +161,69 @@ def test_falta_columna_obligatoria_lanza_error(db, tmp_path):
         import_reporte_creditos(excel_path)
 
 
+def test_fila_sin_nombre_cliente_se_omite(db, tmp_path):
+    excel_path = tmp_path / "reporte.xlsx"
+    _escribir_excel(excel_path, [_fila(NOMBRE_CLIENTE="")])
+
+    resumen = import_reporte_creditos(excel_path)
+
+    assert resumen.creditos_nuevos == 0
+    assert len(resumen.filas_omitidas) == 1
+
+
+def test_reimportar_con_no_credito_sin_ceros_actualiza_no_duplica(db, tmp_path):
+    """Reporte real del usuario (2026-08-16): un reimport puede traer
+    NO_CREDITO con un formato numérico distinto al ya guardado (p. ej. si
+    Excel entregó la celda como número en vez de texto), y antes esto creaba
+    un crédito duplicado en vez de actualizar el existente."""
+    excel_path = tmp_path / "reporte.xlsx"
+    _escribir_excel(excel_path, [_fila(NO_CREDITO="001985", ESTADO_CREDITO="Corriente")])
+    import_reporte_creditos(excel_path)
+
+    _escribir_excel(excel_path, [_fila(NO_CREDITO="1985", ESTADO_CREDITO="Cancelado")])
+    resumen = import_reporte_creditos(excel_path)
+
+    assert resumen.creditos_nuevos == 0
+    assert resumen.creditos_actualizados == 1
+
+    conn = db.get_connection()
+    try:
+        filas = conn.execute("SELECT no_credito, estado_credito FROM reporte_credito").fetchall()
+    finally:
+        conn.close()
+
+    # Se mantiene un solo crédito, con el no_credito original ("001985", con
+    # ceros) intacto — la reimportación solo actualiza los demás campos.
+    assert filas == [("001985", "Cancelado")]
+
+
+def test_fila_con_dato_invalido_no_pierde_las_demas_filas_del_lote(db, tmp_path):
+    """Reporte real del usuario (2026-08-16): antes, una excepción sin
+    capturar en una sola fila (p. ej. texto no numérico en PLAZO_CREDITO)
+    revertía TODA la importación al propagarse hasta afuera del bucle, ya
+    que conn.commit() solo ocurre una vez al final."""
+    excel_path = tmp_path / "reporte.xlsx"
+    _escribir_excel(excel_path, [
+        _fila(NO_CREDITO="001"),
+        _fila(NO_CREDITO="002", PLAZO_CREDITO="no aplica"),
+        _fila(NO_CREDITO="003"),
+    ])
+
+    resumen = import_reporte_creditos(excel_path)
+
+    assert resumen.creditos_nuevos == 2
+    assert len(resumen.filas_omitidas) == 1
+    assert resumen.filas_omitidas[0][0] == 3  # fila 2 de datos = fila 3 del Excel
+
+    conn = db.get_connection()
+    try:
+        total = conn.execute("SELECT COUNT(*) FROM reporte_credito").fetchone()[0]
+    finally:
+        conn.close()
+
+    assert total == 2
+
+
 def test_encabezados_con_espacio_en_vez_de_guion_bajo_tambien_matchean(db, tmp_path):
     """_normalize_header() convierte "_" a espacio antes de buscar el alias,
     así que encabezados con espacio en vez de guion bajo (o las variantes con

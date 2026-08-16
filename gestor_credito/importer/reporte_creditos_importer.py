@@ -1,4 +1,5 @@
 import re
+import sqlite3
 from datetime import date, datetime
 
 import openpyxl
@@ -80,19 +81,33 @@ def import_reporte_creditos(file_path):
     conn = get_connection()
     try:
         for row_number, row in enumerate(sheet.iter_rows(min_row=2), start=2):
-            data = _row_to_dict(row, headers)
-            no_credito = (data.get("no_credito") or "").strip()
-            cedula = (data.get("cedula") or "").strip()
+            try:
+                data = _row_to_dict(row, headers)
+                no_credito = (data.get("no_credito") or "").strip()
+                cedula = (data.get("cedula") or "").strip()
+                nombre_cliente = (data.get("nombre_cliente") or "").strip()
 
-            if not no_credito or not cedula:
-                resumen.filas_omitidas.append((row_number, "falta No. Crédito o Cédula"))
-                continue
+                if not no_credito or not cedula or not nombre_cliente:
+                    resumen.filas_omitidas.append(
+                        (row_number, "falta No. Crédito, Cédula o Nombre del Cliente")
+                    )
+                    continue
 
-            nuevo = _upsert_credito(conn, no_credito, data)
-            if nuevo:
-                resumen.creditos_nuevos += 1
-            else:
-                resumen.creditos_actualizados += 1
+                nuevo = _upsert_credito(conn, no_credito, data)
+                if nuevo:
+                    resumen.creditos_nuevos += 1
+                else:
+                    resumen.creditos_actualizados += 1
+            except (ValueError, TypeError, sqlite3.Error) as error:
+                # Una fila con un dato inválido (p. ej. texto no numérico en
+                # PLAZO_CREDITO/CUOTAS_PAGADAS/MONTO_DESEMBOLSADO) no debe
+                # perder TODO el lote: antes, una excepción sin capturar acá
+                # se propagaba hasta afuera del bucle, y como conn.commit()
+                # solo ocurre una vez al final, ninguna fila ya procesada en
+                # esta importación quedaba guardada. Se omite solo esta fila,
+                # igual que el caso de datos faltantes arriba, y se sigue con
+                # las demás (reporte real del usuario, 2026-08-16).
+                resumen.filas_omitidas.append((row_number, f"dato inválido: {error}"))
 
         conn.commit()
     finally:
@@ -164,6 +179,27 @@ def _upsert_credito(conn, no_credito, data):
     existing = conn.execute(
         "SELECT id FROM reporte_credito WHERE no_credito = ?", (no_credito,)
     ).fetchone()
+
+    if existing is None and no_credito.isdigit():
+        # El mismo crédito puede llegar con distinto formato de texto entre
+        # reimportaciones de reporte.xlsx: si Excel entrega la celda NO_CREDITO
+        # como número en vez de texto (ver _row_to_dict), "0012456" de un
+        # reporte se vuelve "12456" en el siguiente. La comparación exacta de
+        # arriba no encuentra la fila ya existente y el upsert insertaba un
+        # crédito duplicado — "Historial de Créditos" luego mostraba el mismo
+        # crédito dos veces para el mismo cliente (reporte real del usuario,
+        # 2026-08-16). CAST a INTEGER compara el valor numérico ignorando
+        # ceros a la izquierda; no_credito.isdigit() evita este camino si
+        # algún no_credito futuro trae letras (no ocurre en los datos reales
+        # verificados, pero CAST silenciosamente da 0 con texto no numérico).
+        # No se sobreescribe no_credito en el UPDATE de más abajo, así que el
+        # primer formato de texto importado para un crédito es el que queda
+        # guardado permanentemente como su identidad.
+        existing = conn.execute(
+            "SELECT id FROM reporte_credito "
+            "WHERE no_credito != ? AND CAST(no_credito AS INTEGER) = CAST(? AS INTEGER)",
+            (no_credito, no_credito),
+        ).fetchone()
 
     valores = {column: data.get(column) for column in CREDITO_COLUMNS}
 
