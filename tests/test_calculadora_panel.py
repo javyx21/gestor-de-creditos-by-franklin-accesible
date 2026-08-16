@@ -556,3 +556,151 @@ def test_limpiar_formulario_limpia_tambien_el_salario_neto_en_vivo(calc, conn):
 
     assert calc._salario_neto_cordobas is None
     assert calc.resultado_salario_neto.GetLabel() == "Salario neto mensual: —"
+
+
+# ---- Copiado rápido de resumen, Ctrl+T / Ctrl+Shift+T (pedido explícito ---
+# ---- del usuario, 2026-08-16) ---------------------------------------------
+#
+# La mayoría de estas pruebas reemplaza _copiar_al_portapapeles() por una
+# versión que solo guarda el texto en una lista, en vez de tocar el
+# portapapeles real de Windows — verificado empíricamente que el portapapeles
+# real es genuinamente inestable en pruebas automatizadas (sin una
+# wx.MainLoop real corriendo entre operaciones, y con frames creándose y
+# destruyéndose test tras test): a veces Open() devuelve True pero GetData()
+# trae texto vacío, incluso con reintentos generosos. El mecanismo real
+# (TheClipboard.Open/SetData/Close) igual queda cubierto, una sola vez, por
+# test_copiar_al_portapapeles_usa_el_portapapeles_real_de_windows más abajo —
+# mismo criterio ya aplicado a ejecutar_en_segundo_plano en
+# tests/test_accesibilidad.py: la lógica de negocio se prueba con un doble
+# liviano, el mecanismo real se prueba aparte, una sola vez.
+
+def _simular_portapapeles(calc, monkeypatch):
+    """Reemplaza CalculadoraPanel._copiar_al_portapapeles por una versión que
+    solo registra el texto recibido. Devuelve la lista donde se acumulan los
+    textos "copiados", en orden."""
+    copiados = []
+    monkeypatch.setattr(calc, "_copiar_al_portapapeles", lambda texto: copiados.append(texto) or True)
+    return copiados
+
+
+def test_ctrl_t_copia_resumen_con_cuota_quincenal(calc, conn, monkeypatch):
+    copiados = _simular_portapapeles(calc, monkeypatch)
+    _llenar_formulario(calc, periodicidad_indice=0)  # "Mensual" elegido en el combo
+    _elegir_empresa(calc, "MIDESA")  # 0.18
+
+    calc._copiar_resumen_quincenal()
+
+    cuota_quincenal = _cuota_esperada(calc, 0.18, periodicidad="Quincenal")
+    assert copiados == [
+        "monto de USD $1140.00\n"
+        "plazo de 24 meses \n"
+        f"cuota quincenal aproximada de USD ${cuota_quincenal:.2f}"
+    ]
+
+
+def test_ctrl_shift_t_copia_resumen_con_cuota_mensual(calc, conn, monkeypatch):
+    copiados = _simular_portapapeles(calc, monkeypatch)
+    _llenar_formulario(calc, periodicidad_indice=1)  # "Quincenal" elegido en el combo
+    _elegir_empresa(calc, "MIDESA")
+
+    calc._copiar_resumen_mensual()
+
+    cuota_mensual = _cuota_esperada(calc, 0.18, periodicidad="Mensual")
+    assert copiados == [
+        "monto de USD $1140.00\n"
+        "plazo de 24 meses \n"
+        f"cuota mensual aproximada de USD ${cuota_mensual:.2f}"
+    ]
+
+
+def test_copiar_resumen_ignora_la_periodicidad_elegida_en_el_combo(calc, conn, monkeypatch):
+    # Pedido explícito del usuario: Ctrl+T siempre da la quincenal y
+    # Ctrl+Shift+T siempre la mensual, sin importar qué esté seleccionado en
+    # el combo Periodicidad — no hace falta cambiarlo ni volver a calcular
+    # para conseguir la otra variante.
+    copiados = _simular_portapapeles(calc, monkeypatch)
+    _llenar_formulario(calc, periodicidad_indice=0)  # "Mensual"
+    _elegir_empresa(calc, "MIDESA")
+
+    calc._copiar_resumen_quincenal()
+    calc._copiar_resumen_mensual()
+
+    assert len(copiados) == 2
+    assert "cuota quincenal aproximada" in copiados[0]
+    assert "cuota mensual aproximada" in copiados[1]
+    assert copiados[0] != copiados[1]
+
+
+def test_copiar_resumen_anuncia_por_voz(calc, conn, monkeypatch):
+    _simular_portapapeles(calc, monkeypatch)
+    llamadas = []
+    monkeypatch.setattr(
+        "gestor_credito.ui.calculadora_panel.anunciar_voz_nvda",
+        lambda texto: llamadas.append(texto),
+    )
+    _llenar_formulario(calc)
+    _elegir_empresa(calc, "MIDESA")
+
+    calc._copiar_resumen_quincenal()
+    assert len(llamadas) == 1
+    assert "quincenal" in llamadas[0]
+    assert "copiado al portapapeles" in llamadas[0]
+
+    calc._copiar_resumen_mensual()
+    assert len(llamadas) == 2
+    assert "mensual" in llamadas[1]
+    assert "copiado al portapapeles" in llamadas[1]
+
+
+def test_copiar_resumen_con_datos_incompletos_no_copia_ni_revienta(calc, conn, monkeypatch):
+    copiados = _simular_portapapeles(calc, monkeypatch)
+    llamadas_mensaje = []
+    llamadas_voz = []
+    monkeypatch.setattr(wx, "MessageBox", lambda *a, **k: llamadas_mensaje.append(a) or wx.OK)
+    monkeypatch.setattr(
+        "gestor_credito.ui.calculadora_panel.anunciar_voz_nvda",
+        lambda texto: llamadas_voz.append(texto),
+    )
+    # Sin empresa elegida ni datos cargados.
+
+    calc._copiar_resumen_quincenal()
+
+    assert len(llamadas_mensaje) == 1
+    assert llamadas_voz == []
+    assert copiados == []
+
+
+def test_copiar_resumen_no_depende_de_haber_presionado_calcular(calc, conn, monkeypatch):
+    # Mismo criterio que el pasivo laboral/salario neto en vivo: no hace
+    # falta pasar por Calcular primero, alcanza con tener el formulario
+    # completo.
+    copiados = _simular_portapapeles(calc, monkeypatch)
+    _llenar_formulario(calc)
+    _elegir_empresa(calc, "MIDESA")
+    assert calc._ultimo_resultado is None
+
+    calc._copiar_resumen_quincenal()
+
+    assert calc._ultimo_resultado is None  # copiar no dispara un Calcular completo
+    assert "cuota quincenal aproximada" in copiados[0]
+
+
+def test_copiar_al_portapapeles_usa_el_portapapeles_real_de_windows(calc, conn):
+    # Única prueba de este archivo que toca el portapapeles real — el resto
+    # usa _simular_portapapeles() (ver comentario al inicio de esta sección).
+    assert calc._copiar_al_portapapeles("prueba real de portapapeles") is True
+
+    for _intento in range(10):
+        wx.YieldIfNeeded()
+        if wx.TheClipboard.Open():
+            obj = wx.TextDataObject()
+            try:
+                wx.TheClipboard.GetData(obj)
+            finally:
+                wx.TheClipboard.Close()
+            if obj.GetText():
+                assert obj.GetText() == "prueba real de portapapeles"
+                return
+        wx.MilliSleep(20)
+
+    pytest.fail("no se pudo leer de vuelta el portapapeles real de Windows")

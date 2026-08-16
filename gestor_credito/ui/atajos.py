@@ -252,6 +252,21 @@ ATAJOS = [
         None,
     ),
     (
+        None, None, "Ctrl+T", "Calculadora",
+        "Copiar al portapapeles el resumen de la operación calculada (monto, plazo y "
+        "cuota QUINCENAL aproximada) y anunciar por voz que se copió — la cuota se "
+        "calcula siempre con periodicidad Quincenal para este resumen, sin importar qué "
+        "esté elegido en el combo Periodicidad del formulario; exige los mismos datos "
+        "completos que \"Calcular\" (empresa con tasa, fecha de ingreso, salario, monto, "
+        "plazo)",
+        None,
+    ),
+    (
+        None, None, "Ctrl+Shift+T", "Calculadora",
+        "Igual que Ctrl+T, pero con la cuota MENSUAL aproximada en vez de la quincenal",
+        None,
+    ),
+    (
         None, None, "Alt+B (en Historial de Créditos)", "Historial de Créditos",
         "Ejecutar la búsqueda con el término escrito (botón Buscar)",
         None,

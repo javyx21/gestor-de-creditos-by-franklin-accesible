@@ -801,6 +801,62 @@ focus landing on `fecha_ingreso_texto`) both via a real `wx.App`/`MainFrame` and
 test. Scoped to Calculadora only — Casos'/Historial de Créditos' own clear actions weren't asked to
 move focus anywhere and were left as-is.
 
+**Quick-copy credit summary, Ctrl+T / Ctrl+Shift+T (2026-08-16)** — explicit user request: copy a
+ready-to-paste credit summary to the clipboard, for pasting straight into a message to the client,
+without building it by hand or tabbing through the result labels. Both bound in
+`_on_atajo_verbalizacion()` alongside the existing Ctrl+Shift+Q/W/E/R family (same panel-level
+`EVT_CHAR_HOOK`, no `FindFocus()` check — fires regardless of which control has focus):
+- **Ctrl+T**: copies the summary with the **quincenal** cuota.
+- **Ctrl+Shift+T**: copies the same structure with the **mensual** cuota instead.
+
+Exact format, user's own words (the trailing space at the end of the plazo line is intentional, not
+a typo — preserved literally):
+```
+monto de USD $[Monto]
+plazo de [Plazo] meses 
+cuota quincenal aproximada de USD $[Cuota]
+```
+(Ctrl+Shift+T swaps "quincenal" for "mensual".) `[Monto]`/`[Cuota]` are formatted `.2f`, no thousands
+separator — same convention already established for every other monetary value in this panel (see
+"No thousands separator..." above); `[Plazo]` is the plain integer months, untouched.
+
+`_resumen_credito(periodicidad, etiqueta_periodicidad)` builds this text: it reuses
+`_leer_entradas()` (same validation, same `wx.MessageBox` "Datos incompletos" error as Calcular —
+empresa with a configured tasa, valid fecha de ingreso, salario, monto, plazo all required, since
+there's no cuota to report without them) but **always calls `evaluar_capacidad()` with the
+`periodicidad` the caller forces**, ignoring whatever `periodicidad_choice` currently has selected.
+This is deliberate: the two shortcuts are meant to hand back "the quincenal number" and "the mensual
+number" on demand, without making the officer flip the Periodicidad combo and recalculate twice just
+to get both variants of the same message. Doesn't require a prior Calcular either — same
+independence already established for pasivo laboral/salario neto en vivo, just computed on demand
+at the moment of the keypress instead of tracked continuously on every keystroke (a full
+`evaluar_capacidad()` call is cheap enough here to not need live tracking, since it only runs once
+per keypress, not once per character typed in an entrada field).
+
+`_copiar_al_portapapeles()` wraps `wx.TheClipboard.Open()/SetData()/Close()` with a short retry (5
+attempts, 20ms apart) — **verified empirically** that `Open()` can fail transiently on Windows if
+another process (or even another automated test) has the clipboard open at that exact instant; only
+after all retries fail does it show a real `wx.MessageBox` error. Both shortcuts announce success via
+`anunciar_voz_nvda()` (per the user's explicit ask: *"emite un anuncio por voz... indicando que el
+texto formateado fue copiado al portapapeles"*) — **not** `SONIDO_BORRAR` or any other `.wav`: that
+sound's meaning is established throughout this app specifically as "something was cleared/deleted"
+(`reproducir_sonido(SONIDO_BORRAR)` in every `limpiar_*`/`eliminar_*` action), and reusing it here for
+"copied" would contradict that existing convention.
+
+**Testing note**: the real Windows clipboard turned out to be genuinely flaky under automated,
+back-to-back access with no real `wx.MainLoop` pumping between operations (confirmed empirically:
+`Open()` returning `True` but the immediately-following `GetData()` still coming back empty,
+independent of retry count on `Open()` alone) — a testing-harness artifact, not something a real
+interactive user hits (a human's keystrokes are naturally spaced out by an always-running
+`MainLoop`, confirmed by the real `MainFrame`/`wx.App` end-to-end check that never showed this
+issue). `tests/test_calculadora_panel.py`'s Ctrl+T/Ctrl+Shift+T tests therefore monkeypatch
+`CalculadoraPanel._copiar_al_portapapeles` to capture the text instead of touching the real OS
+clipboard for all but one test — same "mock the mechanism, test the logic separately" split already
+used for `ejecutar_en_segundo_plano` (see `tests/test_accesibilidad.py`). Exactly one test,
+`test_copiar_al_portapapeles_usa_el_portapapeles_real_de_windows`, still exercises the real
+`wx.TheClipboard` round-trip (with its own generous retry-on-empty-read loop) to keep the actual
+mechanism covered.
+
 **Tipo de cambio is a fixed constant, not a field (2026-07-12)** — user's words: *"por el momento
 es estrictamente fijo... no va a variar... por ahora déjalo fijo internamente en el código."*
 `TIPO_CAMBIO_FIJO = 36.6243` at the top of `calculadora_panel.py` replaces what used to be a

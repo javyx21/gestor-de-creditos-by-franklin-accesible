@@ -3,7 +3,11 @@ from datetime import date
 import wx
 import wx.lib.scrolledpanel as scrolledpanel
 
-from gestor_credito.calculo.amortizacion import PERIODICIDADES_VALIDAS
+from gestor_credito.calculo.amortizacion import (
+    PERIODICIDAD_MENSUAL,
+    PERIODICIDAD_QUINCENAL,
+    PERIODICIDADES_VALIDAS,
+)
 from gestor_credito.calculo.capacidad import evaluar_capacidad
 from gestor_credito.calculo.deducciones import calcular_salario_neto_mensual
 from gestor_credito.calculo.pasivo_laboral import calcular_pasivo_laboral
@@ -664,6 +668,18 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
                 # calcular.
                 self._on_calcular(None)
                 return
+            if codigo == ord("T"):
+                # Ctrl+Shift+T: copia el resumen con la cuota MENSUAL — ver
+                # Ctrl+T (rama de abajo, sin Shift) para la quincenal.
+                self._copiar_resumen_mensual()
+                return
+        elif event.ControlDown() and not event.ShiftDown() and not event.AltDown():
+            if event.GetKeyCode() == ord("T"):
+                # Ctrl+T: copia el resumen con la cuota QUINCENAL — pedido
+                # explícito del usuario (2026-08-16), ver
+                # _copiar_resumen_quincenal/_resumen_credito.
+                self._copiar_resumen_quincenal()
+                return
         elif (
             not event.ControlDown() and not event.ShiftDown() and not event.AltDown()
             and event.GetKeyCode() in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER, wx.WXK_SPACE)
@@ -680,6 +696,106 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
             self._anunciar_empresa_confirmada()
             return
         event.Skip()
+
+    # ---- Copiado rápido de resumen (Ctrl+T / Ctrl+Shift+T) -----------------
+    # Pedido explícito del usuario (2026-08-16): copiar al portapapeles un
+    # resumen de la operación calculada, listo para pegar en un mensaje al
+    # cliente, sin tener que armarlo a mano ni tabular hasta los resultados.
+
+    def _resumen_credito(self, periodicidad, etiqueta_periodicidad):
+        """Arma el texto de resumen para Ctrl+T/Ctrl+Shift+T. Reutiliza
+        _leer_entradas() para exigir el mismo conjunto completo de datos que
+        ya exige "Calcular" (empresa con tasa configurada, fecha de ingreso,
+        salario, monto, plazo) — sin eso no hay cuota que copiar, mismo
+        mensaje de error ("Datos incompletos") que ya usa _on_calcular.
+
+        La cuota SIEMPRE se calcula acá con `periodicidad` forzada por el
+        llamador, sin importar qué tenga elegido periodicidad_choice en ese
+        momento — así Ctrl+T da la cuota quincenal y Ctrl+Shift+T la
+        mensual sin que el oficial tenga que cambiar el combo y volver a
+        calcular para conseguir la otra variante. Monto y cuota van con dos
+        decimales y sin separador de miles, mismo criterio ya establecido
+        para toda salida de texto de este panel (ver "No thousands
+        separator..." en CLAUDE.md); plazo va tal cual, en meses enteros.
+
+        Devuelve None (sin armar ningún texto) si los datos no alcanzan —
+        el llamador ya se encarga de avisar el error, acá no hace falta
+        repetirlo."""
+        entradas, error = self._leer_entradas()
+        if error:
+            wx.MessageBox(error, "Datos incompletos", wx.OK | wx.ICON_ERROR, self)
+            return None
+
+        resultado = evaluar_capacidad(
+            fecha_ingreso=entradas["fecha_ingreso"],
+            salario_bruto_mensual_cordobas=entradas["salario_bruto_cordobas"],
+            ingresos_extra_cordobas=entradas["ingresos_extra_cordobas"],
+            monto_credito_usd=entradas["monto_credito_usd"],
+            plazo_meses=entradas["plazo_meses"],
+            periodicidad=periodicidad,
+            tasa_anual=entradas["tasa_interes"],
+            tipo_cambio=entradas["tipo_cambio"],
+            deuda_activa_cordobas=entradas["deuda_activa_cordobas"],
+        )
+
+        # Formato exacto pedido por el usuario, incluida la línea de plazo
+        # con un espacio final antes del salto de línea — no es un error de
+        # tipeo, se preserva tal cual se pidió.
+        return (
+            f"monto de USD ${entradas['monto_credito_usd']:.2f}\n"
+            f"plazo de {entradas['plazo_meses']} meses \n"
+            f"cuota {etiqueta_periodicidad} aproximada de USD ${resultado.cuota_usd:.2f}"
+        )
+
+    def _copiar_al_portapapeles(self, texto):
+        """wx.TheClipboard.Open() puede fallar de forma transitoria en
+        Windows si otro proceso (o incluso otra prueba automatizada) tiene
+        el portapapeles abierto en ese instante exacto — comprobado
+        empíricamente: la batería de pruebas de este panel falló de forma
+        intermitente por esto mismo antes de agregar el reintento. Windows
+        no da ninguna garantía de que un solo intento alcance; unos pocos
+        reintentos cortos son la práctica estándar recomendada para
+        OpenClipboard. Recién si los 5 intentos fallan se avisa el error de
+        verdad — un fallo genuino y persistente (no uno transitorio)."""
+        for _intento in range(5):
+            if wx.TheClipboard.Open():
+                break
+            wx.MilliSleep(20)
+        else:
+            wx.MessageBox(
+                "No se pudo acceder al portapapeles. Intentá de nuevo.",
+                "Error al copiar", wx.OK | wx.ICON_ERROR, self,
+            )
+            return False
+        try:
+            wx.TheClipboard.SetData(wx.TextDataObject(texto))
+        finally:
+            wx.TheClipboard.Close()
+        return True
+
+    def _copiar_resumen_quincenal(self):
+        """Ctrl+T: copia al portapapeles el resumen de la operación
+        calculada con la cuota QUINCENAL, y anuncia por voz que se copió
+        (pedido explícito del usuario: "emite un anuncio por voz... del
+        texto formateado que fue copiado al portapapeles") — mismo
+        mecanismo anunciar_voz_nvda() que ya usan Ctrl+Shift+Q/W/E, no roba
+        el foco ni tabula a ningún control."""
+        texto = self._resumen_credito(PERIODICIDAD_QUINCENAL, "quincenal")
+        if texto is None:
+            return
+        if not self._copiar_al_portapapeles(texto):
+            return
+        anunciar_voz_nvda("Resumen quincenal copiado al portapapeles.")
+
+    def _copiar_resumen_mensual(self):
+        """Ctrl+Shift+T: igual que _copiar_resumen_quincenal, pero con la
+        cuota MENSUAL."""
+        texto = self._resumen_credito(PERIODICIDAD_MENSUAL, "mensual")
+        if texto is None:
+            return
+        if not self._copiar_al_portapapeles(texto):
+            return
+        anunciar_voz_nvda("Resumen mensual copiado al portapapeles.")
 
     def _anunciar_pasivo_laboral(self):
         """Ctrl+Shift+Q: habla el pasivo laboral (el mismo número que está en
