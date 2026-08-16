@@ -962,7 +962,8 @@ historial", not edit the report from the app.
 reporte_credito(id, no_credito TEXT NOT NULL UNIQUE, cedula TEXT NOT NULL,
                  nombre_cliente TEXT NOT NULL, fecha_desembolso, fecha_vencimiento,
                  monto_desembolsado REAL, estado_credito, empresa_convenio,
-                 plazo_credito INTEGER, cuotas_pagadas INTEGER, fecha_actualizacion_registro)
+                 plazo_credito INTEGER, numero_cuotas INTEGER, cuotas_pagadas INTEGER,
+                 estado_credito_fecha_cambio TEXT NOT NULL, fecha_actualizacion_registro)
 ```
 
 One table, **no FK to `cliente`/`caso`** — `cedula`/`nombre_cliente` are this report's own columns,
@@ -970,6 +971,32 @@ deliberately not joined against the MIDESA-driven `cliente` table, same reasonin
 `convenio_tasa`/`calculo_credito`. `no_credito` is the real identity key from the source Excel
 (UNIQUE) — a periodic reimport updates the existing row instead of duplicating it, the same
 `clave_caso` pattern the bitácora import already uses.
+
+`numero_cuotas` and `estado_credito_fecha_cambio` were added 2026-08-16, for the filtering features
+below — see "Filtros y vista de finalizados" further down. **`numero_cuotas` is the TOTAL number of
+installments, not to be confused with `plazo_credito`** (which is in months — same distinction
+already documented for `Calculadora!B11` under Calculadora de Crédito above): a credit's real
+installment count is `numero_cuotas`, and "cuotas pendientes" is always `numero_cuotas -
+cuotas_pagadas`, never derived from `plazo_credito`. `estado_credito_fecha_cambio` mirrors
+`caso.estado_solicitud_fecha_cambio` exactly (see Domain model) — stamped at INSERT and reset only
+when `estado_credito` actually changes, never on a reimport that leaves it the same; used to order
+the "Finalizados" view by most-recently-paid-off rather than by `fecha_desembolso` (which is when
+the credit *started*, a different date). **Migrating an existing database that predates these two
+columns hits a real SQLite restriction**: `ALTER TABLE ... ADD COLUMN ... DEFAULT (datetime('now'))`
+is rejected outright — "Cannot add a column with non-constant default" (confirmed empirically) —
+unlike `CREATE TABLE`, which allows it freely (already used all over this schema, e.g.
+`caso.fecha_creacion_registro`). `_migrar_reporte_credito()` in `database.py`, called from
+`init_db()` right after `executescript(SCHEMA)`, works around this by adding
+`estado_credito_fecha_cambio` with no default (nullable) and backfilling it with a single
+`UPDATE ... datetime('now')` pass instead — same "backfill once" precedent already used for
+`documentos_completos_fecha` (see Alerts/workflow). `numero_cuotas` is added nullable and left NULL
+for every pre-existing row (no way to reconstruct it from what was already imported); it only
+populates from the next reimport onward. Both are then always explicitly written by application
+code in `_upsert_credito()` (never relying on the schema's own `DEFAULT`), so the fresh-install
+vs. migrated-install schema difference (`NOT NULL DEFAULT (...)` vs. plain nullable) has no
+behavioral effect. **Verified against a copy of the user's real database** (4833 rows, pre-migration
+schema): migration completes cleanly, row count unchanged, `estado_credito_fecha_cambio` backfilled
+for all 4833 rows, `numero_cuotas` NULL as expected until reimport.
 
 **Import** (`gestor_credito/importer/reporte_creditos_importer.py`, `import_reporte_creditos()`),
 triggered from **Configuración → "Configuración de Reporte de Créditos"** (a third category in the
@@ -980,10 +1007,10 @@ bitácora import living in Configuración, not in the daily-use tab):
   `(Auto)` suffixes unlike the MIDESA bitácora — but `_normalize_header()` still converts `_` to a
   space before matching `COLUMN_ALIASES`, so header variants with spaces or the wording the user
   originally used when requesting the module ("NOMBRE del CLIENTE", "PLAZO del CREDITO") also
-  match. Only `no_credito`/`cedula`/`nombre_cliente` are mapped from the columns that matter to this
-  module; extra real columns (`SALDO_PRINCIPAL`, `MONTO_GARANTIA`, `NUMERO_CUOTAS`,
-  `PRODUCTO_CREDITO`, `NO_CLIENTE_SIAF`) are present in the real file but intentionally unmapped —
-  ignored, not an error.
+  match. `no_credito`/`cedula`/`nombre_cliente`/`numero_cuotas` (added 2026-08-16 — previously
+  unmapped, see above) plus the other `CREDITO_COLUMNS` are mapped; extra real columns
+  (`SALDO_PRINCIPAL`, `MONTO_GARANTIA`, `PRODUCTO_CREDITO`, `NO_CLIENTE_SIAF`) are present in the
+  real file but intentionally unmapped — ignored, not an error.
 - A row missing `no_credito`, `cedula`, or `nombre_cliente` is skipped (`filas_omitidas`), same
   no-hard-fail pattern as the bitácora importer.
 - **Per-row errors no longer abort the whole import (fixed 2026-08-16, real user report of silent
@@ -1022,30 +1049,164 @@ bitácora import living in Configuración, not in the daily-use tab):
   caught and surfaced the same way any other import error already is, in `_on_importar_creditos()`.
 
 **Query** (`gestor_credito/db/reporte_creditos.py`, `buscar_creditos()`):
-- No search term → default view, only `estado_credito == ESTADO_CREDITO_ACTIVO` ("Corriente" — the
-  real Excel has no literal "Activo" value; confirmed with the user this is the equivalent).
-- A term → same `clasificar_termino_busqueda()` cédula-vs-nombre classification already used by
+- `termino` → same `clasificar_termino_busqueda()` cédula-vs-nombre classification already used by
   `buscar_casos()` (`db/casos.py`), and both comparisons are done in Python with `str.upper()`, not
   SQLite's ASCII-only `UPPER()` — same reasoning/same real bug already documented for Casos (a
-  cédula stored uppercase wasn't found typed lowercase). A term search **ignores the default
-  Corriente-only filter** and returns the client's full history across every `estado_credito`, so an
-  already Cancelado/Saneado/Vencido credit can still be looked up — this is the "historial" part of
-  the module's name.
-- Both paths order `fecha_desembolso DESC, id DESC` — most recent credit first, explicit user
-  request for a client with more than one credit over time.
+  cédula stored uppercase wasn't found typed lowercase).
+- `estado` (default `ESTADO_CREDITO_ACTIVO`, i.e. "Corriente") — filters `estado_credito` exactly
+  for a literal value like `ESTADO_CREDITO_ACTIVO`. Pass `ESTADO_CREDITO_FINALIZADO` for the
+  finalizados view — **not** a literal equality check, see "Próximos a finalizar..." below for the
+  compound OR condition it actually applies — or the sentinel `ESTADO_TODOS` for no estado filter at
+  all (see "Filtros y vista de finalizados" below for why this is a distinct sentinel and not just
+  `None`/omitting the argument).
+- `empresa` (default `None`) — exact match on `empresa_convenio`.
+- `cuotas_pendientes_maximo` (default `None`) — **`<=`, not exact match** (changed same-day, see
+  "Próximos a finalizar" below) against `numero_cuotas - cuotas_pagadas`; a row missing either of
+  those two never matches (no way to compute how many cuotas it has left).
+- All four filters combine with AND. Ordering is `fecha_desembolso DESC, id DESC` (most recent
+  credit first) **except** when `estado == ESTADO_CREDITO_FINALIZADO`, which orders by
+  `estado_credito_fecha_cambio DESC, id DESC` instead — see the schema note above for why
+  (fecha_desembolso is when the credit *started*, not when it finished).
 
 **UI** (`gestor_credito/ui/creditos_panel.py`, `CreditosPanel`) mirrors `CasosPanel`'s established
 NVDA-tested patterns rather than inventing new ones: one combined cédula-or-nombre search box, a
-10-column `wx.ListCtrl` (Fecha Desembolso, Fecha Vencimiento, No. Crédito, Monto Desembolsado,
+12-column `wx.ListCtrl` (Fecha Desembolso, Fecha Vencimiento, No. Crédito, Monto Desembolsado,
 Nombre del Cliente, Identificación, Empresa Convenio, Estado del Crédito, Plazo del Crédito, Número
-de Cuotas — must stay in sync with `buscar_creditos()`'s `SELECT` order, same coupling already
-called out for Casos), `CELDA_VACIA = "Celda vacía"` placeholder text for blank cells (same NVDA
-reasoning as Casos — a truly empty cell reads as just the repeated column header with nothing
-after it), and `Freeze()`/`Thaw()` around list rebuilds plus a column width set once in `__init__`
-rather than on every refresh (same measured perf pattern as Casos, worth it here too since the real
-report is already ~4800 rows). Selecting a row shows a one-line summary ("{nombre} — Cédula {x} —
-Crédito No. {y} — Estado: {estado}") — read-only, no edit fields, consistent with this module being
-lookup-only.
+de Cuotas, Cuotas Pagadas, Cuotas Pendientes — must stay in sync with `buscar_creditos()`'s `SELECT`
+order, same coupling already called out for Casos), `CELDA_VACIA = "Celda vacía"` placeholder text
+for blank cells (same NVDA reasoning as Casos — a truly empty cell reads as just the repeated
+column header with nothing after it), and `Freeze()`/`Thaw()` around list rebuilds plus a column
+width set once in `__init__` rather than on every refresh (same measured perf pattern as Casos,
+worth it here too since the real report is already ~4800 rows). Selecting a row shows a one-line
+summary ("{nombre} — Cédula {x} — Crédito No. {y} — Estado: {estado} — Cuotas pendientes: {n}") —
+read-only, no edit fields, consistent with this module being lookup-only. **The 10th column used to
+be mislabeled**: before 2026-08-16 it was called "Número de Cuotas" but actually displayed
+`cuotas_pagadas` (there was no `numero_cuotas` column yet) — fixed by adding the real `numero_cuotas`
+column/data and splitting the display into three honest columns (Número de Cuotas, Cuotas Pagadas,
+Cuotas Pendientes) instead of one mislabeled one.
+
+**Filtros y vista de finalizados (2026-08-16)** — three explicit user requests, all in
+`_crear_filtros()`/`_cargar_creditos()` in `creditos_panel.py`:
+1. **Filtro "Cuotas pendientes (máximo)"**: a free-text `wx.TextCtrl` — label spells out "(máximo,
+   ej. 2 o 3 — 'Próximos a finalizar')" so the field is self-documenting. **Comparison is `<=`, not
+   exact match** (changed in a same-day follow-up round — see "Próximos a finalizar" below for why).
+   Validated as a non-negative integer or empty; an invalid value shows a `wx.MessageBox` (same
+   "invalid input" pattern already established for a bad cédula/nombre term) instead of guessing
+   what was meant. Applied via the same "Buscar" button/Enter as the cédula/nombre search
+   (`EVT_TEXT_ENTER` bound the same way), since it's free text, not a `wx.Choice`.
+2. **Filtro "Empresa"**: a `wx.Choice` populated from `obtener_empresas_convenio()` — the distinct
+   `empresa_convenio` values **actually present in `reporte_credito`**, not the 29-company global
+   catalog in `convenio_tasa` (which can include companies with zero credits in this report, or
+   name them differently — see the "CAFE LAS FLORES CHAIN" vs. "CAFE LAS FLORES" mismatch already
+   documented under Calculadora de Crédito). Explicit user requirement: "evitando listar todas las
+   empresas globalmente". First option is always "Todas las empresas" (no filter); reloaded by
+   `_cargar_empresas()` both at `__init__` and from `recargar()`, so a company that only appears
+   after a fresh reimport shows up without restarting the app. Selection tracked by index into a
+   parallel `self._empresas` list (same `_empresa_seleccionada()`-by-index pattern already used for
+   `empresa_choice` in `calculadora_panel.py`, for the same reason: the choice's displayed text must
+   stay a plain company name here, but the pattern of resolving by index instead of
+   `GetStringSelection()` is reused regardless). Combines with every other filter/vista below, e.g.
+   "Próximos a finalizar en IMMSA" = Estado Activos + Empresa "IMMSA" + Cuotas pendientes (máximo).
+3. **Vista "Estado" con Finalizados**: a third `wx.Choice` — "Activos (Corriente)" (default),
+   "Finalizados (para reenganche)", "Todos los estados" — for browsing clients who already paid off
+   their credit in full, explicitly for reengagement/new-credit campaigns (user's own framing).
+   Ordered by most-recently-finalized first (see `estado_credito_fecha_cambio` above), so the
+   campaign list naturally leads with the newest payoffs.
+
+All three combine (AND) with each other and with the cédula/nombre search box. `estado_choice` and
+`empresa_choice` reload the list live on `EVT_CHOICE` (silent, matches `filtro_alerta_choice` in
+`casos_panel.py`) and additionally announce the resulting count via `anunciar_voz_nvda()` when
+confirmed with Enter (same `EVT_CHAR_HOOK` + `wx.Window.FindFocus()` workaround already established
+for `filtro_alerta_choice`/`agentes_choice`/`empresa_choice` in Calculadora — a `wx.Choice`'s native
+Win32 combobox swallows Enter before a plain `EVT_KEY_DOWN` ever sees it). `limpiar_busqueda()`
+(Alt+L / "Vaciar búsqueda") now resets all three filters back to their defaults, not just the search
+box, and still plays `SONIDO_BORRAR` on every clear as already established.
+
+**"Próximos a finalizar" and a broader "Créditos finalizados" (same-day follow-up round,
+2026-08-16)** — two explicit refinements to the business logic above, both in
+`buscar_creditos()`/`ESTADO_CREDITO_FINALIZADO` (`db/reporte_creditos.py`):
+- **"Próximos a finalizar" has no dedicated control** — it's the existing "Cuotas pendientes"
+  filter (now `<=`, previously exact match) combined with the Estado selector's own default
+  ("Activos"). The user's own examples ("<= 2 cuotas", "<= 3 cuotas") are a threshold, not a single
+  exact count, so the field's comparison changed from `=` to `<=` to match — this is a deliberate
+  reuse of the control built earlier the same day rather than adding a fourth filter widget, per
+  this project's own established accessibility principle of not padding the tab order with more
+  controls than needed (see the "evitar que el flujo de tabulación se vuelva lento o invasivo"
+  quote under Calculadora de Crédito). The field's label spells out "'Próximos a finalizar'" so
+  this mapping is discoverable without reading source code.
+- **`ESTADO_CREDITO_FINALIZADO` changed from a literal `"Cancelado"` string to a sentinel
+  triggering a compound OR condition**: `estado_credito IN ('Cancelado', 'Finalizado') OR
+  (numero_cuotas - cuotas_pagadas) <= 0`. Explicit user ask: "clientes cuyos créditos tengan 0
+  cuotas pendientes **o** cuyo estado sea 'Cancelado' / 'Finalizado'". `'Finalizado'` is included in
+  the `IN (...)` even though no row in the verified real report ever uses that literal value today
+  (the real `ESTADO_CREDITO` values are Corriente/Cancelado/Saneado/Vencido/Trámite) — included
+  defensively per the user's explicit wording, harmless if it never matches anything. The `<= 0`
+  branch is the one with a real, verified payoff: of the real report's rows, 22 have
+  `cuotas_pagadas >= numero_cuotas` (i.e. functionally paid off) while `estado_credito` still reads
+  "Trámite" — the source system (MIDESA) hadn't caught up to "Cancelado" yet for those. Without the
+  cuotas-based branch, those 22 real clients would stay invisible to the reengagement campaign view
+  until a future reimport eventually flips their `estado_credito` — which could be a long wait, or
+  never, if nobody at MIDESA revisits them. `ESTADO_CREDITO_FINALIZADO`'s value itself is now an
+  internal sentinel string, not something callers should compare against `"Cancelado"` directly.
+
+**Carga asíncrona de la lista y de empresas — corrección de accesibilidad (2026-08-16, mismo día)**
+— real user report: opening/using the filters ("el cajón de filtros") made "la lectura o salida por
+voz" (NVDA speech) freeze momentarily. Root cause: `_cargar_creditos()`/`_cargar_empresas()` ran
+their SQLite queries directly on the UI thread — while a query is in flight, wx/Windows doesn't pump
+the window's message loop, and NVDA's own speech depends on that pump continuing (it's an external
+process synchronized via Windows messages/MSAA), so any pending announcement stalls until the query
+returns. This got materially worse once this tab started running *two* DB round-trips per load
+(empresas + créditos) instead of one, and once `estado_choice`/`empresa_choice` began re-querying on
+every arrow key (`EVT_CHOICE`, same live-reload pattern as `filtro_alerta_choice` in Casos).
+**Fixed** with `ejecutar_en_segundo_plano(trabajo, callback)`, a new small helper in
+`ui/accesibilidad.py`: runs `trabajo()` (the DB query) on a background `threading.Thread`, then
+delivers its return value to `callback` back on the main thread via `wx.CallAfter` — the UI thread,
+and therefore Windows' message pump and NVDA's speech, stay free the entire time the query runs.
+Both `_cargar_creditos()` and `_cargar_empresas()` in `creditos_panel.py` now dispatch through this
+helper instead of querying inline. A few things worth knowing about the implementation:
+- **A version counter (`_version_creditos`/`_version_empresas`) guards against stale results.**
+  Going async means two overlapping loads are now possible (e.g. two fast arrow presses on
+  `estado_choice` each spawn their own background query) — without a guard, a slower older query
+  could finish *after* a newer one and silently overwrite the screen with stale data. Each load
+  increments its counter before dispatching and captures that value; the callback checks it's still
+  current before touching any UI state, discarding itself otherwise.
+- **Immediate synchronous status-bar feedback ("Buscando…") before dispatching.** The async fix
+  alone doesn't address the *feeling* of a freeze if the status bar stays silent for the whole
+  round-trip; this line is cheap/instant and gives the user something to read while the real query
+  runs in the background.
+- **`ValueError` from an invalid search term can no longer just propagate** the way it could when
+  the query ran inline — an exception raised inside the background thread never reaches anywhere if
+  left uncaught (see the same lesson already learned for `reporte_creditos_importer.py`'s per-row
+  errors). `trabajo()` now catches it itself and returns `(False, mensaje)` instead of `(True,
+  filas)`; the callback branches on that tuple to show the same `wx.MessageBox` as before.
+  `cuotas_pendientes`'s own validation stays synchronous (no DB access, so no need to defer it) — it
+  still runs and can still short-circuit before ever dispatching a background thread.
+- **Testability**: `ejecutar_en_segundo_plano` is a module-level function (not a method) specifically
+  so `tests/test_creditos_panel.py` can monkeypatch it to run synchronously
+  (`lambda trabajo, callback: callback(trabajo())`) via an `autouse` fixture — real threads plus
+  `wx.CallAfter` would need the event loop pumped and the thread awaited in every single test
+  otherwise, which is slow and flaky in a headless test with no `wx.MainLoop()` running. The real
+  threading path is separately covered by `tests/test_accesibilidad.py`, which verifies against the
+  actual mechanism (real thread, real `wx.CallAfter`, manually pumped via `wx.YieldIfNeeded()`) that
+  `trabajo()` runs off the calling thread, `callback` runs back on it, and the call returns
+  immediately without waiting for `trabajo()` to finish.
+- **Not yet applied elsewhere.** Casos' `_cargar_casos()`/Calculadora's DB calls still run inline —
+  they weren't reported as freezing (Casos already pushes its filter to SQL and was specifically
+  perf-tested at 25k rows/0.158s, see Filters and reporting), and this fix was scoped to the concrete
+  report. If a similar "voice freezes" report comes up for another tab, `ejecutar_en_segundo_plano`
+  is the fix to reach for there too.
+
+**This deliberately supersedes the search behavior described above under "Query"**: previously (see
+the original 2026-07-12 design further up), typing a cédula/nombre term automatically ignored the
+Corriente-only default and showed the client's entire history across every `estado_credito` — there
+was no way to search a specific client while staying restricted to just Finalizados, for example.
+That implicit term-controls-estado coupling is now gone: `estado_choice` is fully explicit and
+independent of whether there's a search term, defaulting to Activos same as before. To get the old
+"full history for this client" behavior, the user now has to explicitly pick "Todos los estados" —
+one extra deliberate step, traded for predictable, accessible, non-hidden filter state (the estado
+selector always means exactly what it says, regardless of what's typed in the search box). Flag to
+the user if this trade-off turns out to be unwelcome in practice — it wasn't explicitly requested as
+part of this change, it fell out of making Estado a first-class combinable filter.
 
 **Third notebook tab, and shortcuts became tab-aware (2026-07-12)** — adding this module grew
 `MainFrame`'s `wx.Notebook` from the 2 pages described under Calculadora de Crédito above (Casos,
@@ -1144,7 +1305,8 @@ gestor_credito/
     logo.py                       # AppLogo — the accessible logo shown on every tab/dialog
     sonido.py                     # reproducir_sonido() — plays a .wav from assets/sonidos/ via wx.adv.Sound
     fechas.py                     # ISO <-> DD/MM/AAAA date formatting for the UI boundary
-    accesibilidad.py               # nombre_accesible/activar_con_enter/anunciar_texto_estado/anunciar_voz_nvda
+    accesibilidad.py               # nombre_accesible/activar_con_enter/anunciar_texto_estado/anunciar_voz_nvda/
+                                     # ejecutar_en_segundo_plano
     atajos.py                      # central registry of every documented keyboard shortcut
     casos_panel.py                 # "Casos" tab (search/list/manually edit)
     calculadora_panel.py            # "Calculadora de Crédito" tab — see that section above

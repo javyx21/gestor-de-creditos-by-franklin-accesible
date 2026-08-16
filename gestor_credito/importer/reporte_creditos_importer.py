@@ -7,7 +7,7 @@ import openpyxl
 from gestor_credito.db.database import get_connection
 
 DATE_FIELDS = {"fecha_desembolso", "fecha_vencimiento"}
-INT_FIELDS = {"plazo_credito", "cuotas_pagadas"}
+INT_FIELDS = {"plazo_credito", "numero_cuotas", "cuotas_pagadas"}
 FLOAT_FIELDS = {"monto_desembolsado"}
 
 _ESPACIOS_MULTIPLES = re.compile(r"\s+")
@@ -35,13 +35,15 @@ COLUMN_ALIASES = {
     "no identificacion": "cedula",
     "plazo credito": "plazo_credito",
     "plazo del credito": "plazo_credito",
+    "numero cuotas": "numero_cuotas",
+    "numero de cuotas": "numero_cuotas",
     "cuotas pagadas": "cuotas_pagadas",
 }
 
 CREDITO_COLUMNS = [
     "cedula", "nombre_cliente", "fecha_desembolso", "fecha_vencimiento",
     "monto_desembolsado", "estado_credito", "empresa_convenio",
-    "plazo_credito", "cuotas_pagadas",
+    "plazo_credito", "numero_cuotas", "cuotas_pagadas",
 ]
 
 
@@ -177,7 +179,7 @@ def _to_float(value):
 
 def _upsert_credito(conn, no_credito, data):
     existing = conn.execute(
-        "SELECT id FROM reporte_credito WHERE no_credito = ?", (no_credito,)
+        "SELECT id, estado_credito FROM reporte_credito WHERE no_credito = ?", (no_credito,)
     ).fetchone()
 
     if existing is None and no_credito.isdigit():
@@ -196,7 +198,7 @@ def _upsert_credito(conn, no_credito, data):
         # primer formato de texto importado para un crédito es el que queda
         # guardado permanentemente como su identidad.
         existing = conn.execute(
-            "SELECT id FROM reporte_credito "
+            "SELECT id, estado_credito FROM reporte_credito "
             "WHERE no_credito != ? AND CAST(no_credito AS INTEGER) = CAST(? AS INTEGER)",
             (no_credito, no_credito),
         ).fetchone()
@@ -208,14 +210,24 @@ def _upsert_credito(conn, no_credito, data):
         placeholders = ", ".join("?" for _ in columnas)
         params = [no_credito, *valores.values()]
         conn.execute(
-            f"INSERT INTO reporte_credito ({', '.join(columnas)}) VALUES ({placeholders})",
+            f"INSERT INTO reporte_credito ({', '.join(columnas)}, estado_credito_fecha_cambio) "
+            f"VALUES ({placeholders}, datetime('now'))",
             params,
         )
         return True
 
-    credito_id = existing[0]
+    credito_id, estado_anterior = existing
+    estado_nuevo = valores["estado_credito"]
+
     set_sql = [f"{column} = ?" for column in CREDITO_COLUMNS]
     set_sql.append("fecha_actualizacion_registro = datetime('now')")
+    # Mismo patrón que estado_solicitud_fecha_cambio en caso (excel_importer.py):
+    # solo se pisa a "ahora" cuando estado_credito realmente cambia, nunca en
+    # cada reimport que no cambia nada — así la vista "Finalizados" ordena por
+    # cuándo se detectó el cierre real, no por cuándo se volvió a importar el
+    # mismo reporte sin novedades.
+    if estado_nuevo != estado_anterior:
+        set_sql.append("estado_credito_fecha_cambio = datetime('now')")
     params = [*valores.values(), credito_id]
     conn.execute(f"UPDATE reporte_credito SET {', '.join(set_sql)} WHERE id = ?", params)
     return False

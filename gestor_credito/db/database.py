@@ -178,12 +178,31 @@ CREATE TABLE IF NOT EXISTS reporte_credito (
     estado_credito TEXT,
     empresa_convenio TEXT,
     plazo_credito INTEGER,
+
+    -- Número TOTAL de cuotas del crédito (no confundir con plazo_credito, que
+    -- está en meses — ver la misma distinción ya documentada para
+    -- Calculadora!B11 en CLAUDE.md). Agregada 2026-08-16 junto con el filtro
+    -- "cuotas pendientes" de Historial de Créditos: sin esta columna no hay
+    -- forma de calcular cuántas cuotas le faltan a un cliente para terminar.
+    numero_cuotas INTEGER,
     cuotas_pagadas INTEGER,
+
+    -- Desde cuándo estado_credito tiene su valor actual — mismo patrón que
+    -- caso.estado_solicitud_fecha_cambio (ver Domain model). Se usa para
+    -- ordenar la vista "Finalizados (Cancelado)" por más recientemente
+    -- pagado, no por fecha_desembolso (que es la fecha de inicio del
+    -- crédito, no la de su cierre). NOT NULL DEFAULT solo aplica a bases de
+    -- datos nuevas (CREATE TABLE); _migrar_reporte_credito() más abajo la
+    -- agrega y rellena a mano en bases ya existentes, porque SQLite no
+    -- admite un DEFAULT no constante en ALTER TABLE ADD COLUMN.
+    estado_credito_fecha_cambio TEXT NOT NULL DEFAULT (datetime('now')),
+
     fecha_actualizacion_registro TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_reporte_credito_cedula ON reporte_credito(cedula);
 CREATE INDEX IF NOT EXISTS idx_reporte_credito_estado ON reporte_credito(estado_credito);
+CREATE INDEX IF NOT EXISTS idx_reporte_credito_empresa ON reporte_credito(empresa_convenio);
 """
 
 # Tasas reales extraídas de la hoja "Convenios" del Excel de referencia
@@ -235,10 +254,40 @@ def get_connection():
     return conn
 
 
+def _migrar_reporte_credito(conn):
+    """Agrega a bases de datos YA EXISTENTES las columnas que
+    'CREATE TABLE IF NOT EXISTS' no toca en una tabla que ya existe
+    (2026-08-16, filtros nuevos de Historial de Créditos). numero_cuotas se
+    agrega nullable — las filas ya importadas no tienen ese dato hasta el
+    próximo reimport, y no hay forma de reconstruirlo retroactivamente desde
+    lo que ya se guardó. estado_credito_fecha_cambio no puede llevar
+    DEFAULT (datetime('now')) en un ALTER TABLE (SQLite lo rechaza por ser un
+    valor no constante — confirmado empíricamente), así que se agrega sin
+    default y se rellena una sola vez con la fecha de la migración; a partir
+    de ahí, reporte_creditos_importer.py la mantiene igual que
+    estado_solicitud_fecha_cambio en caso: la pisa a 'ahora' solo cuando
+    estado_credito realmente cambia, nunca en cada reimport."""
+    # El CREATE TABLE IF NOT EXISTS de arriba ya corrió: la tabla existe
+    # siempre acá, con todas las columnas (base nueva) o con las columnas
+    # viejas nada más (base ya existente, creada antes de este cambio).
+    columnas = {fila[1] for fila in conn.execute("PRAGMA table_info(reporte_credito)")}
+
+    if "numero_cuotas" not in columnas:
+        conn.execute("ALTER TABLE reporte_credito ADD COLUMN numero_cuotas INTEGER")
+
+    if "estado_credito_fecha_cambio" not in columnas:
+        conn.execute("ALTER TABLE reporte_credito ADD COLUMN estado_credito_fecha_cambio TEXT")
+        conn.execute(
+            "UPDATE reporte_credito SET estado_credito_fecha_cambio = datetime('now') "
+            "WHERE estado_credito_fecha_cambio IS NULL"
+        )
+
+
 def init_db():
     conn = get_connection()
     try:
         conn.executescript(SCHEMA)
+        _migrar_reporte_credito(conn)
         conn.executemany(
             "INSERT OR IGNORE INTO convenio_tasa (empresa_convenio, tasa_interes) VALUES (?, ?)",
             CONVENIOS_INICIALES,

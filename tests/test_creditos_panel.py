@@ -35,6 +35,7 @@ def _crear_credito(conn, no_credito, cedula="001", nombre="Juan Perez",
         "estado_credito": estado,
         "empresa_convenio": "MIDESA",
         "plazo_credito": 24,
+        "numero_cuotas": 24,
         "cuotas_pagadas": 3,
     }
     valores.update(overrides)
@@ -53,6 +54,21 @@ def _frame_con_status_bar():
     return frame
 
 
+@pytest.fixture(autouse=True)
+def _sin_hilos(monkeypatch):
+    """Corre ejecutar_en_segundo_plano() de forma síncrona en las pruebas —
+    2026-08-16, junto con la carga asíncrona de CreditosPanel (ver
+    ui/accesibilidad.py). Sin esto, cada carga real (una consulta a SQLite en
+    un hilo aparte más wx.CallAfter) necesitaría bombear el bucle de eventos
+    de wx y esperar al hilo, algo frágil y lento en una prueba headless sin
+    MainLoop. ejecutar_en_segundo_plano() está aislada como función de módulo
+    justo para permitir este reemplazo por una versión síncrona."""
+    monkeypatch.setattr(
+        "gestor_credito.ui.creditos_panel.ejecutar_en_segundo_plano",
+        lambda trabajo, callback: callback(trabajo()),
+    )
+
+
 @pytest.fixture
 def panel(app, conn):
     frame = _frame_con_status_bar()
@@ -69,11 +85,13 @@ def _filas_lista(panel, columna):
 
 def test_nombre_accesible_de_la_lista():
     # No requiere BD/panel real: solo confirma que las columnas están en el
-    # orden pedido por el usuario (ver sección 1 del pedido).
+    # orden pedido por el usuario (ver sección 1 del pedido). "Número de
+    # Cuotas"/"Cuotas Pagadas"/"Cuotas Pendientes" separadas 2026-08-16 (antes
+    # una sola columna "Número de Cuotas" mostraba en realidad cuotas_pagadas).
     assert COLUMNAS == [
         "Fecha Desembolso", "Fecha Vencimiento", "No. Crédito", "Monto Desembolsado",
         "Nombre del Cliente", "Identificación", "Empresa Convenio", "Estado del Crédito",
-        "Plazo del Crédito", "Número de Cuotas",
+        "Plazo del Crédito", "Número de Cuotas", "Cuotas Pagadas", "Cuotas Pendientes",
     ]
 
 
@@ -86,12 +104,29 @@ def test_vista_por_defecto_muestra_solo_corriente(panel, conn):
     assert _filas_lista(panel, 2) == ["C-1"]  # columna "No. Crédito"
 
 
-def test_buscar_por_cedula_muestra_historial_completo_ordenado_desc(panel, conn):
+def test_buscar_por_cedula_respeta_el_estado_activo_por_defecto(panel, conn):
+    # 2026-08-16: el selector "Estado" reemplazó el auto-historial-completo
+    # que antes disparaba cualquier término de búsqueda — con el valor por
+    # defecto ("Activos"), un crédito Cancelado no aparece aunque coincida
+    # la cédula. Ver el test siguiente para pedir el historial completo.
     _crear_credito(conn, "C-1", cedula="0012510940057N", estado="Corriente",
                     fecha_desembolso="2025-06-30")
     _crear_credito(conn, "C-2", cedula="0012510940057N", estado="Cancelado",
                     fecha_desembolso="2026-06-30")
 
+    panel.busqueda_texto.SetValue("0012510940057N")
+    panel._buscar()
+
+    assert _filas_lista(panel, 2) == ["C-1"]
+
+
+def test_buscar_por_cedula_con_estado_todos_muestra_historial_completo_ordenado_desc(panel, conn):
+    _crear_credito(conn, "C-1", cedula="0012510940057N", estado="Corriente",
+                    fecha_desembolso="2025-06-30")
+    _crear_credito(conn, "C-2", cedula="0012510940057N", estado="Cancelado",
+                    fecha_desembolso="2026-06-30")
+
+    panel.estado_choice.SetSelection(2)  # "Todos los estados"
     panel.busqueda_texto.SetValue("0012510940057N")
     panel._buscar()
 
@@ -102,12 +137,18 @@ def test_vaciar_busqueda_vuelve_a_la_vista_por_defecto(panel, conn):
     _crear_credito(conn, "C-1", cedula="001", estado="Corriente")
     _crear_credito(conn, "C-2", cedula="002", estado="Cancelado")
 
+    # Además de la búsqueda, cambia los tres filtros nuevos — limpiar_busqueda()
+    # debe resetear todo, no solo el cuadro de texto (2026-08-16).
+    panel.estado_choice.SetSelection(2)  # "Todos los estados"
     panel.busqueda_texto.SetValue("002")
     panel._buscar()
     assert panel.lista.GetItemCount() == 1
 
     panel.limpiar_busqueda()
     assert panel.busqueda_texto.GetValue() == ""
+    assert panel.estado_choice.GetSelection() == 0
+    assert panel.empresa_choice.GetSelection() == 0
+    assert panel.cuotas_pendientes_texto.GetValue() == ""
     assert _filas_lista(panel, 2) == ["C-1"]
 
 
@@ -186,6 +227,85 @@ def test_enfocar_resultados_sin_filas_no_falla(panel, conn):
     panel.recargar()
     assert panel.lista.GetItemCount() == 0
     panel.enfocar_resultados()  # no debe lanzar
+
+
+def test_empresa_choice_solo_lista_empresas_del_reporte(panel, conn):
+    # Pedido explícito del usuario (2026-08-16): "evitando listar todas las
+    # empresas globalmente" — no debe salir el catálogo completo de
+    # convenio_tasa (29 empresas sembradas por init_db), solo AGROSACO/IMMSA.
+    _crear_credito(conn, "C-1", empresa_convenio="AGROSACO")
+    _crear_credito(conn, "C-2", cedula="002", empresa_convenio="IMMSA")
+    panel.recargar()
+
+    opciones = [panel.empresa_choice.GetString(i) for i in range(panel.empresa_choice.GetCount())]
+    assert opciones == ["Todas las empresas", "AGROSACO", "IMMSA"]
+
+
+def test_filtro_por_empresa_restringe_la_lista(panel, conn):
+    _crear_credito(conn, "C-1", empresa_convenio="AGROSACO")
+    _crear_credito(conn, "C-2", cedula="002", empresa_convenio="IMMSA")
+    panel.recargar()
+
+    panel.empresa_choice.SetSelection(2)  # "IMMSA" (índice 0 = Todas, 1 = AGROSACO)
+    panel._cargar_creditos(avisar_sin_resultados=False)
+
+    assert _filas_lista(panel, 2) == ["C-2"]
+
+
+def test_filtro_por_estado_finalizados(panel, conn):
+    _crear_credito(conn, "C-1", estado="Corriente", numero_cuotas=24, cuotas_pagadas=3)
+    _crear_credito(conn, "C-2", cedula="002", estado="Cancelado",
+                    numero_cuotas=24, cuotas_pagadas=24)
+    # Cuotas ya completas pero estado_credito todavía sin actualizar a
+    # Cancelado en el sistema de origen — también cuenta como finalizado
+    # (ver ESTADO_CREDITO_FINALIZADO en db/reporte_creditos.py).
+    _crear_credito(conn, "C-3", cedula="003", estado="Trámite",
+                    numero_cuotas=24, cuotas_pagadas=24)
+
+    panel.estado_choice.SetSelection(1)  # "Finalizados (para reenganche)"
+    panel._cargar_creditos(avisar_sin_resultados=False)
+
+    assert sorted(_filas_lista(panel, 2)) == ["C-2", "C-3"]
+
+
+def test_filtro_por_cuotas_pendientes_maximo_es_menor_o_igual(panel, conn):
+    # "Próximos a finalizar" (pedido explícito del usuario, 2026-08-16
+    # segunda ronda): <=, no coincidencia exacta.
+    _crear_credito(conn, "C-1", numero_cuotas=24, cuotas_pagadas=24)  # 0 pendientes
+    _crear_credito(conn, "C-2", cedula="002", numero_cuotas=24, cuotas_pagadas=22)  # 2 pendientes
+    _crear_credito(conn, "C-3", cedula="003", numero_cuotas=24, cuotas_pagadas=18)  # 6 pendientes
+
+    panel.estado_choice.SetSelection(2)  # "Todos los estados"
+    panel.cuotas_pendientes_texto.SetValue("2")
+    panel._buscar()
+
+    assert sorted(_filas_lista(panel, 2)) == ["C-1", "C-2"]
+
+
+def test_proximos_a_finalizar_es_activos_mas_cuotas_pendientes_maximo(panel, conn):
+    # El filtro de negocio "Próximos a finalizar" no es un control aparte:
+    # es Estado="Activos" (el valor por defecto del panel) combinado con el
+    # campo "Cuotas pendientes (máximo)" — ver CLAUDE.md.
+    _crear_credito(conn, "C-1", estado="Corriente", numero_cuotas=24, cuotas_pagadas=22)  # activo, 2 pend.
+    _crear_credito(conn, "C-2", cedula="002", estado="Cancelado",
+                    numero_cuotas=24, cuotas_pagadas=24)  # finalizado, no debe aparecer
+
+    panel.cuotas_pendientes_texto.SetValue("2")
+    panel._buscar()
+
+    assert _filas_lista(panel, 2) == ["C-1"]
+
+
+def test_cuotas_pendientes_invalidas_muestra_mensaje_y_no_revienta(panel, conn, monkeypatch):
+    llamadas = []
+    monkeypatch.setattr(wx, "MessageBox", lambda *a, **k: llamadas.append(a) or wx.OK)
+
+    _crear_credito(conn, "C-1")
+    panel.cuotas_pendientes_texto.SetValue("no es un número")
+    panel._cargar_creditos(avisar_sin_resultados=False)
+
+    assert panel.lista.GetItemCount() == 0
+    assert len(llamadas) == 1
 
 
 def test_limpiar_busqueda_reproduce_el_sonido_de_borrado(panel, conn, monkeypatch):

@@ -1,5 +1,6 @@
 import ctypes
 import sys
+import threading
 from ctypes import wintypes
 from pathlib import Path
 
@@ -84,6 +85,42 @@ def anunciar_texto_estado(status_bar):
     cambio de estado, no solo búsquedas explícitas."""
     hwnd = status_bar.GetHandle()
     _NotifyWinEvent(_EVENT_OBJECT_LIVEREGIONCHANGED, hwnd, _OBJID_CLIENT, _CHILDID_SELF + 1)
+
+
+def ejecutar_en_segundo_plano(trabajo, callback):
+    """Corre `trabajo()` (sin argumentos, normalmente una consulta a la base
+    de datos) en un hilo aparte y entrega su valor de retorno a `callback`
+    de vuelta en el hilo principal de wx (vía wx.CallAfter).
+
+    Agregado 2026-08-16 tras un reporte real del usuario en Historial de
+    Créditos: recargar la lista de créditos y de empresas (`buscar_creditos`/
+    `obtener_empresas_convenio`) corre en el hilo principal por defecto, y
+    mientras esa consulta a SQLite está en curso, Windows no bombea el bucle
+    de mensajes de la ventana — con NVDA activo, esto se percibe como que "la
+    lectura o salida por voz se congela" al abrir la pestaña o mover el
+    selector de filtros, porque cualquier evento de accesibilidad pendiente
+    (incluido el habla de NVDA, que depende de que Windows siga entregando
+    mensajes) queda en cola hasta que el hilo principal se libera. Moverlo a
+    un hilo aparte deja el bucle de mensajes libre todo el tiempo.
+
+    `callback` SIEMPRE se llama en el hilo principal (nunca directo desde el
+    hilo en segundo plano) — así puede tocar controles de wx sin problema,
+    algo que NO es seguro hacer desde otro hilo. Si `trabajo()` necesita
+    reportar un error (p. ej. un ValueError de una búsqueda inválida), debe
+    atraparlo y devolverlo como parte del resultado en vez de dejarlo
+    propagarse — una excepción sin atrapar dentro del hilo en segundo plano
+    no llega a ningún lado, se pierde en silencio.
+
+    Aislado como función de módulo (no un método) para que las pruebas
+    puedan reemplazarlo por una versión síncrona vía monkeypatch (ver
+    tests/test_creditos_panel.py) sin depender de threading real ni de
+    bombear el bucle de eventos de wx en una prueba headless sin MainLoop."""
+
+    def _en_hilo():
+        resultado = trabajo()
+        wx.CallAfter(callback, resultado)
+
+    threading.Thread(target=_en_hilo, daemon=True).start()
 
 
 def activar_con_enter(boton):

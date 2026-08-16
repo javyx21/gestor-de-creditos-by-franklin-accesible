@@ -71,15 +71,15 @@ def test_importa_credito_nuevo(db, tmp_path):
     try:
         fila = conn.execute(
             "SELECT no_credito, cedula, nombre_cliente, fecha_desembolso, fecha_vencimiento, "
-            "monto_desembolsado, estado_credito, empresa_convenio, plazo_credito, cuotas_pagadas "
-            "FROM reporte_credito"
+            "monto_desembolsado, estado_credito, empresa_convenio, plazo_credito, numero_cuotas, "
+            "cuotas_pagadas FROM reporte_credito"
         ).fetchone()
     finally:
         conn.close()
 
     assert fila == (
         "001985", "0012510940057N", "KARLA VANESSA CORTEZ SELVA", "2025-06-30", "2027-05-30",
-        2007.0443, "Corriente", "AGROSACO", 23, 24,
+        2007.0443, "Corriente", "AGROSACO", 23, 46, 24,
     )
 
 
@@ -140,9 +140,10 @@ def test_no_credito_como_numero_se_guarda_como_texto(db, tmp_path):
 
 
 def test_columnas_no_mapeadas_del_reporte_real_se_ignoran(db, tmp_path):
-    """SALDO_PRINCIPAL, MONTO_GARANTIA, NUMERO_CUOTAS, PRODUCTO_CREDITO y
-    NO_CLIENTE_SIAF existen en el Excel real pero no forman parte del mapeo
-    pedido (ver sección 1 del pedido) — deben ignorarse sin romper nada."""
+    """SALDO_PRINCIPAL, MONTO_GARANTIA, PRODUCTO_CREDITO y NO_CLIENTE_SIAF
+    existen en el Excel real pero no forman parte del mapeo pedido — deben
+    ignorarse sin romper nada. NUMERO_CUOTAS sí se mapea (ver
+    test_numero_cuotas_se_importa)."""
     excel_path = tmp_path / "reporte.xlsx"
     _escribir_excel(excel_path, [_fila()])
 
@@ -222,6 +223,101 @@ def test_fila_con_dato_invalido_no_pierde_las_demas_filas_del_lote(db, tmp_path)
         conn.close()
 
     assert total == 2
+
+
+def test_numero_cuotas_se_importa(db, tmp_path):
+    """Agregado 2026-08-16 junto con el filtro de cuotas pendientes de
+    Historial de Créditos: antes NUMERO_CUOTAS se ignoraba, sin esa columna
+    no hay forma de calcular cuántas cuotas le faltan a un cliente."""
+    excel_path = tmp_path / "reporte.xlsx"
+    _escribir_excel(excel_path, [_fila(NUMERO_CUOTAS=46)])
+
+    import_reporte_creditos(excel_path)
+
+    conn = db.get_connection()
+    try:
+        numero_cuotas = conn.execute("SELECT numero_cuotas FROM reporte_credito").fetchone()[0]
+    finally:
+        conn.close()
+
+    assert numero_cuotas == 46
+
+
+def test_estado_credito_fecha_cambio_se_estampa_al_insertar(db, tmp_path):
+    excel_path = tmp_path / "reporte.xlsx"
+    _escribir_excel(excel_path, [_fila()])
+    import_reporte_creditos(excel_path)
+
+    conn = db.get_connection()
+    try:
+        fecha = conn.execute(
+            "SELECT estado_credito_fecha_cambio FROM reporte_credito"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert fecha is not None
+
+
+def test_estado_credito_fecha_cambio_no_se_toca_si_el_estado_no_cambia(db, tmp_path):
+    """Mismo patrón que estado_solicitud_fecha_cambio en caso
+    (excel_importer.py): un reimport que no cambia estado_credito no debe
+    pisar la fecha, o la vista "Finalizados" ordenaría mal por "más
+    recientemente reimportado" en vez de "más recientemente pagado"."""
+    excel_path = tmp_path / "reporte.xlsx"
+    _escribir_excel(excel_path, [_fila(ESTADO_CREDITO="Cancelado")])
+    import_reporte_creditos(excel_path)
+
+    conn = db.get_connection()
+    try:
+        fecha_original = conn.execute(
+            "SELECT estado_credito_fecha_cambio FROM reporte_credito"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    # Reimport con el mismo estado, pero otro dato cambiado (monto): no debe
+    # tocar estado_credito_fecha_cambio.
+    _escribir_excel(excel_path, [_fila(ESTADO_CREDITO="Cancelado", MONTO_DESEMBOLSADO=999.0)])
+    import_reporte_creditos(excel_path)
+
+    conn = db.get_connection()
+    try:
+        fecha_tras_reimport = conn.execute(
+            "SELECT estado_credito_fecha_cambio FROM reporte_credito"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert fecha_tras_reimport == fecha_original
+
+
+def test_estado_credito_fecha_cambio_se_actualiza_si_el_estado_cambia(db, tmp_path):
+    excel_path = tmp_path / "reporte.xlsx"
+    _escribir_excel(excel_path, [_fila(ESTADO_CREDITO="Corriente")])
+    import_reporte_creditos(excel_path)
+
+    conn = db.get_connection()
+    try:
+        conn.execute(
+            "UPDATE reporte_credito SET estado_credito_fecha_cambio = '2000-01-01 00:00:00'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    _escribir_excel(excel_path, [_fila(ESTADO_CREDITO="Cancelado")])
+    import_reporte_creditos(excel_path)
+
+    conn = db.get_connection()
+    try:
+        fecha = conn.execute(
+            "SELECT estado_credito_fecha_cambio FROM reporte_credito"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert fecha != "2000-01-01 00:00:00"
 
 
 def test_encabezados_con_espacio_en_vez_de_guion_bajo_tambien_matchean(db, tmp_path):
