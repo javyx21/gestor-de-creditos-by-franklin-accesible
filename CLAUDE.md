@@ -790,6 +790,17 @@ doesn't touch any control — which was the explicit point: read a result out lo
 your place in the form. The result boxes ("Resultados") stay visible on screen for sighted users;
 these shortcuts are purely an additional, faster path for screen-reader use, not a replacement.
 
+**Ctrl+D moves focus to "Fecha de ingreso" after clearing (2026-08-16)** — explicit user request:
+"que el foco del teclado... quede colocado automáticamente en el campo de texto de la Fecha de
+Ingreso... para facilitar el ingreso continuo de datos". `limpiar_formulario()` ends with
+`self.fecha_ingreso_texto.SetFocus()`, after the fields are cleared and the confirmation sound
+plays. Before this, clearing the form left focus wherever it already was (typically on whatever
+control the user last touched), so loading the next client meant manually tabbing or clicking back
+to the first field. Verified end-to-end (focus starting on a different field, `Ctrl+D` pressed,
+focus landing on `fecha_ingreso_texto`) both via a real `wx.App`/`MainFrame` and via a dedicated
+test. Scoped to Calculadora only — Casos'/Historial de Créditos' own clear actions weren't asked to
+move focus anywhere and were left as-is.
+
 **Tipo de cambio is a fixed constant, not a field (2026-07-12)** — user's words: *"por el momento
 es estrictamente fijo... no va a variar... por ahora déjalo fijo internamente en el código."*
 `TIPO_CAMBIO_FIJO = 36.6243` at the top of `calculadora_panel.py` replaces what used to be a

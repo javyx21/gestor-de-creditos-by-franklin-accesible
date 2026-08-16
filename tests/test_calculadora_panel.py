@@ -410,6 +410,18 @@ def test_limpiar_formulario_reproduce_el_sonido_de_borrado(calc, conn, monkeypat
     assert llamadas == [SONIDO_BORRAR]
 
 
+def test_limpiar_formulario_deja_el_foco_en_fecha_de_ingreso(calc, conn):
+    # Pedido explícito del usuario, 2026-08-16: tras Ctrl+D, el foco debe
+    # quedar en "Fecha de ingreso" para poder seguir cargando el siguiente
+    # cliente sin ir a buscar el primer campo a mano.
+    _llenar_formulario(calc)
+    calc.salario_texto.SetFocus()
+
+    calc.limpiar_formulario()
+
+    assert wx.Window.FindFocus() is calc.fecha_ingreso_texto
+
+
 # ---- Salario con deducciones en vivo (pedido explícito del usuario, ------
 # ---- 2026-08-16: "mismo comportamiento del cálculo de pasivos") ----------
 

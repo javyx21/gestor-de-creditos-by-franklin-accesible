@@ -615,7 +615,16 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         Reproduce el sonido de confirmación (borrar.wav) — pedido explícito
         del usuario: "la acción de borrar siempre tiene que hacer llamado
         al sonido", mismo criterio que ya usan las acciones de limpiar/
-        eliminar de CasosPanel."""
+        eliminar de CasosPanel.
+
+        Deja el foco en "Fecha de ingreso" (el primer campo del formulario)
+        — pedido explícito del usuario, 2026-08-16: "que el foco del
+        teclado... quede colocado automáticamente en el campo de texto de
+        la Fecha de Ingreso... para facilitar el ingreso continuo de
+        datos". Antes, tras limpiar, el foco se quedaba donde ya estuviera
+        (normalmente sobre el propio atajo o el último control tocado), así
+        que había que ir a buscar el primer campo a mano (con Tab o mouse)
+        para empezar a cargar el siguiente cliente."""
         self.fecha_ingreso_texto.SetValue("")
         self.salario_texto.SetValue("")
         self.extra_texto.SetValue("0")
@@ -627,6 +636,7 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         self._actualizar_salario_neto_en_vivo()
         self._limpiar_resultados()
         reproducir_sonido(SONIDO_BORRAR)
+        self.fecha_ingreso_texto.SetFocus()
 
     # ---- Atajos de verbalización pura (Ctrl+Shift+Q/W/E/R) ----------------
 
