@@ -408,3 +408,139 @@ def test_limpiar_formulario_reproduce_el_sonido_de_borrado(calc, conn, monkeypat
     calc.limpiar_formulario()
 
     assert llamadas == [SONIDO_BORRAR]
+
+
+# ---- Salario con deducciones en vivo (pedido explícito del usuario, ------
+# ---- 2026-08-16: "mismo comportamiento del cálculo de pasivos") ----------
+
+def test_salario_neto_se_calcula_en_vivo_al_tipear_salario_sin_calcular(calc, conn):
+    from gestor_credito.calculo.deducciones import calcular_salario_neto_mensual
+
+    calc.salario_texto.SetValue("15000")
+
+    esperado = calcular_salario_neto_mensual(15000.0, 0.0)
+    assert calc._salario_neto_cordobas == pytest.approx(esperado)
+    assert calc._salario_neto_usd == pytest.approx(esperado / TIPO_CAMBIO_FIJO)
+    assert "Salario neto mensual: C$" in calc.resultado_salario_neto.GetLabel()
+
+
+def test_salario_neto_en_vivo_no_requiere_empresa_ni_monto_ni_plazo(calc, conn):
+    # A diferencia del resto de "Resultados" (cuota, cobertura,
+    # endeudamiento), el salario neto no depende de empresa/tasa ni de
+    # monto/plazo — calcular_salario_neto_mensual() solo usa salario bruto e
+    # ingresos extra.
+    assert calc._empresa_seleccionada() is None
+    assert calc.monto_texto.GetValue() == ""
+    assert calc.plazo_texto.GetValue() == ""
+
+    calc.salario_texto.SetValue("15000")
+
+    assert calc._salario_neto_cordobas is not None
+
+
+def test_salario_neto_en_vivo_se_actualiza_al_cambiar_ingresos_extra(calc, conn):
+    from gestor_credito.calculo.deducciones import calcular_salario_neto_mensual
+
+    calc.salario_texto.SetValue("15000")
+    sin_extra = calc._salario_neto_cordobas
+
+    calc.extra_texto.SetValue("2000")
+
+    con_extra = calc._salario_neto_cordobas
+    assert con_extra == pytest.approx(calcular_salario_neto_mensual(15000.0, 2000.0))
+    assert con_extra > sin_extra
+
+
+def test_salario_neto_en_vivo_vuelve_a_guion_si_se_borra_el_salario(calc, conn):
+    calc.salario_texto.SetValue("15000")
+    assert calc._salario_neto_cordobas is not None
+
+    calc.salario_texto.SetValue("")
+
+    assert calc._salario_neto_cordobas is None
+    assert calc.resultado_salario_neto.GetLabel() == "Salario neto mensual: —"
+
+
+def test_pasivo_laboral_en_vivo_sigue_funcionando_junto_al_salario_neto(calc, conn):
+    # Pedido explícito del usuario: que agregar el salario neto en vivo no
+    # interfiera ni desactive el cálculo automático del pasivo laboral —
+    # ambos deben quedar activos y correctos al mismo tiempo.
+    calc.fecha_ingreso_texto.SetValue("01/01/2020")
+    calc.salario_texto.SetValue("15000")
+
+    assert calc._pasivo_laboral_cordobas is not None
+    assert calc._salario_neto_cordobas is not None
+    assert "Pasivo laboral: C$" in calc.resultado_pasivo_laboral.GetLabel()
+    assert "Salario neto mensual: C$" in calc.resultado_salario_neto.GetLabel()
+
+
+def test_cambiar_empresa_sin_tasa_no_borra_el_salario_neto_en_vivo(calc, conn):
+    # Antes (hasta 2026-08-16), cambiar a una empresa sin tasa configurada
+    # limpiaba TODO el cuadro de Resultados, incluido el salario neto — con
+    # el cálculo en vivo, eso ya no debería pasar: el salario neto no
+    # depende de la empresa/tasa en absoluto (mismo criterio ya aplicado al
+    # pasivo laboral).
+    from gestor_credito.db.convenios import guardar_tasa
+
+    guardar_tasa(conn, "SIN TASA", None)
+    calc.recargar()
+
+    calc.salario_texto.SetValue("15000")
+    assert calc._salario_neto_cordobas is not None
+
+    _elegir_empresa(calc, "SIN TASA")
+
+    assert calc._salario_neto_cordobas is not None
+    assert "Salario neto mensual: C$" in calc.resultado_salario_neto.GetLabel()
+
+
+def test_calcular_no_pisa_el_salario_neto_con_un_numero_distinto(calc, conn):
+    _llenar_formulario(calc)
+    _elegir_empresa(calc, "MIDESA")
+
+    antes_de_calcular = calc._salario_neto_cordobas
+    calc._on_calcular(None)
+
+    assert calc._salario_neto_cordobas == pytest.approx(antes_de_calcular)
+    assert f"C${calc._salario_neto_cordobas:.2f}" in calc.resultado_salario_neto.GetLabel()
+
+
+def test_anunciar_salario_neto_lee_el_valor_en_vivo_sin_necesitar_calcular(calc, conn, monkeypatch):
+    # Ctrl+Shift+W: hasta 2026-08-16 dependía de haber presionado
+    # Ctrl+Shift+R al menos una vez (leía de _ultimo_resultado) — ahora debe
+    # funcionar con solo tipear el salario, igual que Ctrl+Shift+Q.
+    llamadas = []
+    monkeypatch.setattr(
+        "gestor_credito.ui.calculadora_panel.anunciar_voz_nvda",
+        lambda texto: llamadas.append(texto),
+    )
+    assert calc._ultimo_resultado is None
+
+    calc.salario_texto.SetValue("15000")
+    calc._anunciar_salario_neto()
+
+    assert len(llamadas) == 1
+    assert "Salario con deducciones" in llamadas[0]
+
+
+def test_anunciar_salario_neto_sin_salario_avisa_que_falta_el_dato(calc, conn, monkeypatch):
+    llamadas = []
+    monkeypatch.setattr(
+        "gestor_credito.ui.calculadora_panel.anunciar_voz_nvda",
+        lambda texto: llamadas.append(texto),
+    )
+
+    calc._anunciar_salario_neto()
+
+    assert len(llamadas) == 1
+    assert "Todavía no se puede calcular" in llamadas[0]
+
+
+def test_limpiar_formulario_limpia_tambien_el_salario_neto_en_vivo(calc, conn):
+    calc.salario_texto.SetValue("15000")
+    assert calc._salario_neto_cordobas is not None
+
+    calc.limpiar_formulario()
+
+    assert calc._salario_neto_cordobas is None
+    assert calc.resultado_salario_neto.GetLabel() == "Salario neto mensual: —"

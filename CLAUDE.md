@@ -731,16 +731,60 @@ calls this same function instead of computing pasivo laboral a second time from
 post-Calcular value disagreeing. If fecha/salario are missing or invalid, the label falls back to
 "Pasivo laboral: —" rather than showing a stale number.
 
-**Voice-only shortcuts, Ctrl+Shift+Q / Ctrl+Shift+W (2026-07-12)** — user's words: *"para agilizar
-la usabilidad... y evitar que el flujo de tabulación se vuelva lento o invasivo con demasiados
-campos informativos."* Bound via `wx.EVT_CHAR_HOOK` on the panel itself (same mechanism as the
-`filtro_alerta_choice` Enter workaround in `casos_panel.py`, but here deliberately WITHOUT a
-`FindFocus()` check — it must fire no matter which control currently has focus):
+**Salario con deducciones (salario neto) also calculates live, same pattern (2026-08-16)** —
+explicit user request: "el salario neto se recalcule dinámicamente al cambiar sus valores, sin
+requerir presionar el botón de calcular ni depender de la selección de una empresa... permite que
+la lectura del salario neto funcione directamente en vivo (similar a como ya opera Ctrl+Shift+Q
+para el pasivo laboral)... sin interferir ni desactivar el cálculo automático del pasivo laboral".
+Until this point salario neto only existed as part of a full Calcular
+(`evaluar_capacidad()`'s `resultado.salario_neto_cordobas/usd`) — this was flagged as a known gap
+right when live pasivo laboral shipped (see the Ctrl+Shift+Q/W bullet below, since corrected).
+Fixed with `_actualizar_salario_neto_en_vivo()`, calling `calcular_salario_neto_mensual()`
+(`deducciones.py` — INSS + IR + ingresos extra) directly: bound to `EVT_TEXT` on **both**
+`salario_texto` and `extra_texto` (`ingresos_extra_cordobas` is the second parameter that function
+takes — the only two inputs `calcular_salario_neto_mensual()` actually depends on; there is no
+separate "deducciones" input field of its own — INSS/IR are legal, computed automatically, never
+typed). Like pasivo laboral, this is independent of empresa/tasa/monto/plazo, so it stays valid
+across everything else being empty or invalid. Tracked in `self._salario_neto_cordobas`/`_usd`
+(same pattern as `_pasivo_laboral_cordobas`/`_usd`) and is now the single source of truth for the
+`resultado_salario_neto` label and for what Ctrl+Shift+W announces (see below) — `_on_calcular`
+calls this same function instead of re-deriving the label from `evaluar_capacidad()`'s own
+(numerically identical, but architecturally separate) result. **`_limpiar_resultados()` no longer
+resets `resultado_salario_neto`** — same exclusion pasivo laboral already had, extended here for
+the same reason: since the value no longer depends on empresa/tasa, wiping it out when switching to
+an empresa without a configured tasa would now be actively wrong (unlike before, when salario neto
+only ever existed as part of a full, empresa-dependent Calcular).
+
+**Real bug found and fixed while wiring this up: `salario_texto` needed `event.Skip()` in BOTH its
+EVT_TEXT handlers.** `salario_texto` already had `_actualizar_pasivo_laboral_en_vivo` bound to
+`EVT_TEXT`; adding a second `Bind(wx.EVT_TEXT, self._actualizar_salario_neto_en_vivo)` on the same
+control, with neither handler calling `event.Skip()`, silently broke pasivo laboral — **verified
+empirically**: wx only keeps calling further handlers bound to the same event on the same window if
+each one calls `event.Skip()`; without it, whichever handler was bound most recently "eats" the
+event and the other one bound earlier simply stops firing on keystrokes, with no error, no
+exception, nothing — the pasivo laboral label just silently freezes at its last value the moment
+the second handler gets bound. This is exactly the failure mode the user explicitly warned against
+("que esta actualización no interfiera ni desactive el cálculo automático del pasivo laboral") —
+and it's precisely what a naive first implementation did. Both
+`_actualizar_pasivo_laboral_en_vivo()` and `_actualizar_salario_neto_en_vivo()` now start with
+`if event is not None: event.Skip()` (guarded, since both are also called directly with no event
+from `_on_calcular`/`limpiar_formulario`). **Any future control that ends up with more than one
+handler bound to the same `EVT_TEXT`/`EVT_CHOICE`/etc. in this panel needs the same guard** — don't
+assume wx calls every bound handler by default, verify with `event.Skip()` present in each.
+
+**Voice-only shortcuts, Ctrl+Shift+Q / Ctrl+Shift+W (2026-07-12, W updated 2026-08-16)** — user's
+words: *"para agilizar la usabilidad... y evitar que el flujo de tabulación se vuelva lento o
+invasivo con demasiados campos informativos."* Bound via `wx.EVT_CHAR_HOOK` on the panel itself
+(same mechanism as the `filtro_alerta_choice` Enter workaround in `casos_panel.py`, but here
+deliberately WITHOUT a `FindFocus()` check — it must fire no matter which control currently has
+focus):
 - **Ctrl+Shift+Q**: speaks the current pasivo laboral (dólares y córdobas) via `anunciar_voz_nvda()`
   — the same live-tracked value described above, not a stale one from the last Calcular.
-- **Ctrl+Shift+W**: speaks the salario con deducciones from the last Calcular (`_ultimo_resultado`
-  — this one is NOT live yet, only Pasivo laboral was asked to be; flag if the user wants Ctrl+Shift+W
-  to become live too).
+- **Ctrl+Shift+W**: speaks the current salario con deducciones, same live-tracked value as above
+  (`self._salario_neto_cordobas`/`_usd`). **Until 2026-08-16 this read from `_ultimo_resultado`**
+  (only populated by a full Calcular) — flagged as a known gap right when Ctrl+Shift+Q/pasivo
+  laboral shipped live, and fixed the same day salario neto itself went live, for the same reason:
+  no longer needs a prior Calcular to have a number to announce.
 Neither moves keyboard focus — `anunciar_voz_nvda()` calls straight into NVDA's speech API, it
 doesn't touch any control — which was the explicit point: read a result out loud without losing
 your place in the form. The result boxes ("Resultados") stay visible on screen for sighted users;

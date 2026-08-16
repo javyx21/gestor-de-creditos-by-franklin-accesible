@@ -5,6 +5,7 @@ import wx.lib.scrolledpanel as scrolledpanel
 
 from gestor_credito.calculo.amortizacion import PERIODICIDADES_VALIDAS
 from gestor_credito.calculo.capacidad import evaluar_capacidad
+from gestor_credito.calculo.deducciones import calcular_salario_neto_mensual
 from gestor_credito.calculo.pasivo_laboral import calcular_pasivo_laboral
 from gestor_credito.db.convenios import listar_convenios
 from gestor_credito.db.database import get_connection
@@ -94,6 +95,15 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         # esperar a Calcular — pedido explícito del usuario (2026-07-12).
         self._pasivo_laboral_cordobas = None
         self._pasivo_laboral_usd = None
+        # Salario con deducciones (salario neto): mismo criterio que el
+        # pasivo laboral de arriba — se actualiza en vivo (ver
+        # _actualizar_salario_neto_en_vivo), sin esperar a Calcular ni
+        # depender de que haya una empresa elegida. Pedido explícito del
+        # usuario (2026-08-16): "que se calcule y actualice en tiempo
+        # real... siguiendo el mismo comportamiento del cálculo de
+        # pasivos".
+        self._salario_neto_cordobas = None
+        self._salario_neto_usd = None
 
         sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(AppLogo(self), 0, wx.ALIGN_LEFT | wx.ALL, 4)
@@ -153,7 +163,10 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         # B6/B7: premisa del pasivo laboral (fecha de ingreso + salario bruto).
         # Se escuchan en vivo (EVT_TEXT) para actualizar el Pasivo laboral en
         # pantalla sin esperar a Calcular — ver
-        # _actualizar_pasivo_laboral_en_vivo.
+        # _actualizar_pasivo_laboral_en_vivo. salario_texto además dispara el
+        # salario con deducciones en vivo (ver _actualizar_salario_neto_en_vivo
+        # — dos handlers distintos atados al mismo EVT_TEXT, cada uno
+        # actualiza su propio resultado sin interferir con el otro).
         fecha_ingreso_label = wx.StaticText(contenedor, label="Fecha de ingreso a la empresa (DD/MM/AAAA):")
         self.fecha_ingreso_texto = wx.TextCtrl(contenedor)
         nombre_accesible(self.fecha_ingreso_texto, "Fecha de ingreso a la empresa")
@@ -162,6 +175,7 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         self.salario_texto = wx.TextCtrl(contenedor)
         nombre_accesible(self.salario_texto, "Salario bruto mensual en Córdobas")
         self.salario_texto.Bind(wx.EVT_TEXT, self._actualizar_pasivo_laboral_en_vivo)
+        self.salario_texto.Bind(wx.EVT_TEXT, self._actualizar_salario_neto_en_vivo)
         grilla.Add(fecha_ingreso_label, 0, wx.ALIGN_CENTER_VERTICAL)
         grilla.Add(self.fecha_ingreso_texto, 0, wx.EXPAND)
         grilla.Add(salario_label, 0, wx.ALIGN_CENTER_VERTICAL)
@@ -169,9 +183,14 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
 
         # D9/B10: ingresos extra (suman al salario neto) y monto del crédito
         # (siempre en Dólares, se tipea directo — nunca viene de un caso).
+        # extra_texto también dispara el salario neto en vivo (pedido
+        # explícito del usuario, 2026-08-16: recalcular al cambiar "salario
+        # bruto y las deducciones" — junto con salario_texto arriba, son los
+        # dos únicos campos de los que depende calcular_salario_neto_mensual()).
         extra_label = wx.StaticText(contenedor, label="Ingresos extra (C$, opcional):")
         self.extra_texto = wx.TextCtrl(contenedor, value="0")
         nombre_accesible(self.extra_texto, "Ingresos extra en Córdobas")
+        self.extra_texto.Bind(wx.EVT_TEXT, self._actualizar_salario_neto_en_vivo)
         monto_label = wx.StaticText(contenedor, label="Monto del crédito (US$):")
         self.monto_texto = wx.TextCtrl(contenedor)
         nombre_accesible(self.monto_texto, "Monto del crédito en Dólares")
@@ -284,7 +303,22 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         también desde _on_calcular para que "Calcular" no dependa de una
         segunda fórmula: esta función es la única fuente de verdad de
         resultado_pasivo_laboral y de los valores que anuncia Ctrl+Shift+Q
-        (ver _anunciar_pasivo_laboral)."""
+        (ver _anunciar_pasivo_laboral).
+
+        event.Skip() es OBLIGATORIO acá (bug real encontrado 2026-08-16 al
+        agregar el salario neto en vivo): salario_texto tiene DOS handlers
+        atados al mismo EVT_TEXT (este y _actualizar_salario_neto_en_vivo).
+        wx solo sigue llamando al resto de los handlers de un mismo evento
+        en la misma ventana si cada uno llama a event.Skip() — sin esto,
+        el handler bindeado más recientemente "se come" el evento y el otro
+        directamente deja de ejecutarse al tipear, dejando el pasivo
+        laboral congelado en su último valor sin ningún error visible.
+        Verificado empíricamente el orden de ejecución (LIFO: el último
+        Bind() es el primero en correr) y que Skip() en AMBOS handlers es lo
+        que hace que los dos terminen ejecutándose siempre, sin importar el
+        orden en que se hayan bindeado."""
+        if event is not None:
+            event.Skip()
         fecha_ingreso_iso = parsear_fecha_ui(self.fecha_ingreso_texto.GetValue())
         try:
             salario = float(self.salario_texto.GetValue().replace(",", ""))
@@ -305,6 +339,60 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         self._pasivo_laboral_usd = pasivo_cordobas / TIPO_CAMBIO_FIJO
         self.resultado_pasivo_laboral.SetLabel(
             f"Pasivo laboral: C${pasivo_cordobas:.2f} (US${self._pasivo_laboral_usd:.2f})"
+        )
+
+    def _actualizar_salario_neto_en_vivo(self, event=None):
+        """Pedido explícito del usuario (2026-08-16): "el salario neto se
+        recalcule dinámicamente al cambiar sus valores, sin requerir
+        presionar el botón de calcular ni depender de la selección de una
+        empresa" — mismo criterio y misma forma que
+        _actualizar_pasivo_laboral_en_vivo (independiente, atada a su
+        propio EVT_TEXT, no reemplaza ni desactiva esa otra actualización),
+        pero para calcular_salario_neto_mensual() (Calculadora!B9 =
+        B7-B23-B25+D9), que depende únicamente de Salario bruto mensual
+        (B7) e Ingresos extra (D9) — ni de la empresa/tasa, ni de
+        monto/plazo/periodicidad, así que puede quedar al día sin esperar a
+        que el resto del formulario esté completo.
+
+        Atado a EVT_TEXT de salario_texto Y extra_texto, y llamado también
+        desde _on_calcular/limpiar_formulario para que "Calcular" no
+        dependa de una segunda fórmula: esta función es la única fuente de
+        verdad de resultado_salario_neto y de los valores que anuncia
+        Ctrl+Shift+W (ver _anunciar_salario_neto) — antes ese atajo leía de
+        _ultimo_resultado (solo disponible después de un Calcular
+        explícito); ahora lee de acá en vivo, igual que Ctrl+Shift+Q ya lee
+        de _pasivo_laboral_cordobas/_usd en vez de _ultimo_resultado.
+
+        event.Skip() es OBLIGATORIO acá, mismo motivo que en
+        _actualizar_pasivo_laboral_en_vivo (ver ese docstring): salario_texto
+        tiene dos handlers atados al mismo EVT_TEXT, y sin Skip() en ambos,
+        solo el bindeado más recientemente corre — esta función haber sido
+        agregada SIN Skip() fue justo lo que desactivó en silencio el
+        pasivo laboral en vivo al escribir el salario, exactamente lo que
+        el usuario pidió evitar explícitamente ("que esta actualización no
+        interfiera ni desactive el cálculo automático del pasivo laboral")."""
+        if event is not None:
+            event.Skip()
+        try:
+            salario = float(self.salario_texto.GetValue().replace(",", ""))
+        except ValueError:
+            salario = None
+        try:
+            extra = float(self.extra_texto.GetValue().replace(",", "") or 0)
+        except ValueError:
+            extra = None
+
+        if salario is None or salario <= 0 or extra is None:
+            self._salario_neto_cordobas = None
+            self._salario_neto_usd = None
+            self.resultado_salario_neto.SetLabel("Salario neto mensual: —")
+            return
+
+        salario_neto_cordobas = calcular_salario_neto_mensual(salario, extra)
+        self._salario_neto_cordobas = salario_neto_cordobas
+        self._salario_neto_usd = salario_neto_cordobas / TIPO_CAMBIO_FIJO
+        self.resultado_salario_neto.SetLabel(
+            f"Salario neto mensual: C${salario_neto_cordobas:.2f} (US${self._salario_neto_usd:.2f})"
         )
 
     def _leer_entradas(self):
@@ -387,18 +475,21 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
             deuda_activa_cordobas=entradas["deuda_activa_cordobas"],
         )
 
-        # Se guarda para el atajo de verbalización Ctrl+Shift+W (salario con
-        # deducciones) y para el resumen hablado de más abajo — ver
-        # _on_atajo_verbalizacion. El pasivo laboral NO se lee de acá: se
-        # actualiza en vivo por separado, ver _actualizar_pasivo_laboral_en_vivo.
+        # Se guarda para el resumen hablado de más abajo (cuota/endeudamiento)
+        # y para el atajo Ctrl+Shift+R en general — ver _on_atajo_verbalizacion.
+        # Ni el pasivo laboral ni el salario neto se leen de acá para mostrarse
+        # en pantalla: ambos se actualizan en vivo por separado (ver
+        # _actualizar_pasivo_laboral_en_vivo/_actualizar_salario_neto_en_vivo),
+        # y ninguno de los dos interfiere con el otro.
         self._ultimo_resultado = resultado
 
-        # Ya debería estar al día por el listener EVT_TEXT de fecha/salario/
-        # tipo de cambio, pero se vuelve a llamar acá para que sea la única
-        # fuente de verdad de esa etiqueta — evita que Calcular y la
-        # actualización en vivo puedan mostrar dos números calculados por
-        # dos caminos de código distintos.
+        # Ya deberían estar al día por los listeners EVT_TEXT de fecha/
+        # salario/extra, pero se vuelven a llamar acá para que cada una siga
+        # siendo la única fuente de verdad de su propia etiqueta — evita que
+        # Calcular y la actualización en vivo puedan mostrar dos números
+        # calculados por dos caminos de código distintos.
         self._actualizar_pasivo_laboral_en_vivo()
+        self._actualizar_salario_neto_en_vivo()
 
         # Calculadora!C7 = B7/C2 — conversión trivial, no vive en
         # evaluar_capacidad() porque es solo informativa (nada más la usa),
@@ -409,10 +500,13 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         self.resultado_salario_bruto.SetLabel(
             f"Salario bruto: C${entradas['salario_bruto_cordobas']:.2f} (US${salario_bruto_usd:.2f})"
         )
-        self.resultado_salario_neto.SetLabel(
-            f"Salario neto mensual: C${resultado.salario_neto_cordobas:.2f} "
-            f"(US${resultado.salario_neto_usd:.2f})"
-        )
+        # resultado_salario_neto NO se pisa acá con resultado.salario_neto_*:
+        # _actualizar_salario_neto_en_vivo(), ya llamada arriba, es la única
+        # fuente de verdad de esa etiqueta (mismo criterio que pasivo
+        # laboral) — evaluar_capacidad() calcula su propio salario neto
+        # internamente (misma fórmula, calcular_salario_neto_mensual) solo
+        # porque nivel_endeudamiento lo necesita, no porque haga falta un
+        # segundo camino para mostrarlo en pantalla.
         self.resultado_cuota.SetLabel(
             f"Cuota calculada: US${resultado.cuota_usd:.2f} (C${resultado.cuota_cordobas:.2f})"
         )
@@ -449,16 +543,18 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         anunciar_voz_nvda(mensaje)
 
     def _limpiar_resultados(self):
-        """Vuelve el cuadro de Resultados (salvo Pasivo laboral, que se
-        rastrea aparte y sigue siendo válido) a su estado "todavía no
+        """Vuelve el cuadro de Resultados (salvo Pasivo laboral y Salario
+        neto, que se rastrean aparte y siguen siendo válidos — ninguno de
+        los dos depende de empresa/tasa/monto/plazo) a su estado "todavía no
         calculado" — usado cuando cambiar de empresa deja el formulario sin
         datos suficientes para recalcular limpio (ver
         _refrescar_resultado_tras_cambio_de_tasa): mostrar el resultado de la
         empresa ANTERIOR ahí sería indistinguible de un cálculo válido para
-        la empresa recién elegida."""
+        la empresa recién elegida. Salario neto se sumó a esta excepción
+        2026-08-16, mismo día que pasó a calcularse en vivo — antes SÍ se
+        pisaba acá porque solo existía como parte de un Calcular completo."""
         self._ultimo_resultado = None
         self.resultado_salario_bruto.SetLabel("Salario bruto: —")
-        self.resultado_salario_neto.SetLabel("Salario neto mensual: —")
         self.resultado_cuota.SetLabel("Cuota calculada: —")
         self.resultado_cobertura.SetLabel("Cobertura de pasivo laboral: —")
         self.resultado_endeudamiento.SetLabel("Nivel de endeudamiento: —")
@@ -507,13 +603,14 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         vuelve a su estado inicial en blanco (Periodicidad a su selección
         por defecto, índice 0 "Mensual", igual que al construir el panel).
 
-        Al vaciar fecha/salario, el pasivo laboral en vivo también se limpia
-        solo (ver _actualizar_pasivo_laboral_en_vivo, ya atado a EVT_TEXT de
-        esos dos campos) — se llama una vez más acá de forma explícita,
-        mismo criterio que _on_calcular, para no depender únicamente del
-        evento. El cuadro de Resultados también se limpia (ver
-        _limpiar_resultados): un cálculo anterior ya no corresponde a un
-        formulario recién vaciado.
+        Al vaciar fecha/salario/extra, el pasivo laboral y el salario neto en
+        vivo también se limpian solos (ver _actualizar_pasivo_laboral_en_vivo/
+        _actualizar_salario_neto_en_vivo, ya atados a EVT_TEXT de esos
+        campos) — se llaman una vez más acá de forma explícita, mismo
+        criterio que _on_calcular, para no depender únicamente del evento.
+        El cuadro de Resultados también se limpia (ver _limpiar_resultados):
+        un cálculo anterior ya no corresponde a un formulario recién
+        vaciado.
 
         Reproduce el sonido de confirmación (borrar.wav) — pedido explícito
         del usuario: "la acción de borrar siempre tiene que hacer llamado
@@ -527,6 +624,7 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         self.periodicidad_choice.SetSelection(0)
         self.deuda_texto.SetValue("0")
         self._actualizar_pasivo_laboral_en_vivo()
+        self._actualizar_salario_neto_en_vivo()
         self._limpiar_resultados()
         reproducir_sonido(SONIDO_BORRAR)
 
@@ -589,14 +687,22 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         )
 
     def _anunciar_salario_neto(self):
-        """Ctrl+Shift+W: igual que _anunciar_pasivo_laboral pero para el
-        salario con deducciones aplicadas (INSS + IR + ingresos extra)."""
-        if self._ultimo_resultado is None:
-            anunciar_voz_nvda("Todavía no se calculó el salario con deducciones. Presioná Ctrl+Shift+R para calcular primero.")
+        """Ctrl+Shift+W: igual que _anunciar_pasivo_laboral (mismo patrón,
+        misma fuente de datos en vivo) pero para el salario con deducciones
+        aplicadas (INSS + IR + ingresos extra). Hasta 2026-08-16 leía de
+        _ultimo_resultado (solo disponible después de Ctrl+Shift+R/Calcular)
+        — pedido explícito del usuario ese día: "permite que la lectura del
+        salario neto funcione directamente en vivo (similar a como ya opera
+        Ctrl+Shift+Q para el pasivo laboral)" — ver
+        _actualizar_salario_neto_en_vivo. Ahora lee de
+        _salario_neto_cordobas/_usd, sin depender de que se haya calculado
+        antes."""
+        if self._salario_neto_cordobas is None:
+            anunciar_voz_nvda("Todavía no se puede calcular el salario con deducciones: falta el salario bruto.")
             return
-        r = self._ultimo_resultado
         anunciar_voz_nvda(
-            f"Salario con deducciones: {r.salario_neto_usd:.2f} dólares y {r.salario_neto_cordobas:.2f} córdobas."
+            f"Salario con deducciones: {self._salario_neto_usd:.2f} dólares y "
+            f"{self._salario_neto_cordobas:.2f} córdobas."
         )
 
     def _anunciar_empresa(self):
