@@ -144,7 +144,7 @@ class CreditosPanel(wx.Panel):
 
         # "Vaciar búsqueda" SIN mnemónico: tenía Alt+V hasta 2026-08-16,
         # cuando el usuario pidió unificar todo comando de limpiar en un
-        # solo atajo GLOBAL congruente, Ctrl+L (ver MainFrame.
+        # solo atajo GLOBAL congruente, Ctrl+D (ver MainFrame.
         # _limpiar_segun_pestana_activa, que llama a limpiar_busqueda() —
         # más abajo — cuando esta pestaña está activa). El botón sigue
         # existiendo y accionable con mouse/Tab+Enter, solo perdió su
@@ -281,7 +281,7 @@ class CreditosPanel(wx.Panel):
         """Vacía la búsqueda Y los tres filtros, y vuelve a la vista por
         defecto (créditos en estado Corriente, todas las empresas, sin
         filtro de cuotas pendientes). Público (no "_on_...") porque también
-        lo dispara el atajo GLOBAL Ctrl+L (antes Alt+L) cuando esta pestaña
+        lo dispara el atajo GLOBAL Ctrl+D (antes Alt+L) cuando esta pestaña
         está activa (pedido explícito del usuario — ver
         MainFrame._limpiar_segun_pestana_activa). Reproduce el sonido de
         confirmación (borrar.wav) — pedido explícito del usuario: "la acción

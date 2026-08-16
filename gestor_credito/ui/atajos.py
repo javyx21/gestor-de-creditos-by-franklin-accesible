@@ -61,7 +61,7 @@ ATAJOS = [
         None,
     ),
     (
-        wx.ACCEL_CTRL, ord("L"), "Ctrl+L", "General",
+        wx.ACCEL_CTRL, ord("D"), "Ctrl+D", "General",
         "Limpiar/vaciar los campos del módulo activo — atajo GLOBAL, ÚNICO y "
         "congruente en toda la app (pedido explícito del usuario, 2026-08-16: "
         "\"unifica el comando para limpiar formularios o campos en todos los "

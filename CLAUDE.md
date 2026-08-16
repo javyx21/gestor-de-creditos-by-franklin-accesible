@@ -1224,7 +1224,7 @@ shortcuts dispatch on the active notebook page instead of a fixed target:
   Calculadora, it cleared the input form **while preserving the currently-selected empresa**
   (re-picking the rate every time was the friction reported); on Historial de Créditos, it cleared
   the search box and returned to the default Corriente-only view. **Superseded 2026-08-16** — see
-  "Standardized clear shortcut: Ctrl+L" further down: the key changed to Ctrl+L, Alt+V was retired,
+  "Standardized clear shortcut: Ctrl+D" further down: the key changed to Ctrl+D, Alt+V was retired,
   and Casos' two separate clear actions were merged into one.
 - Every one of these clear actions now also plays the delete-confirmation sound (`SONIDO_BORRAR`)
   — explicit user request: "la acción de borrar siempre tiene que hacer llamado al sonido", applied
@@ -1246,26 +1246,26 @@ so far") predates both this module and the Calculadora de Crédito one — it st
 tabs (Casos, Calculadora de Crédito, Historial de Créditos), not 0 or 2 — see the `ui/main_frame.py`
 line in the Architecture tree below for the current state.
 
-## Standardized clear shortcut: Ctrl+L (2026-08-16)
+## Standardized clear shortcut: Ctrl+D (2026-08-16)
 
 Explicit user request: "unifica el comando para limpiar formularios o campos en todos los módulos
-(incluido el apartado de Casos)... Cambia los atajos anteriores (Alt+L, Alt+V, etc.) por Ctrl+L, de
+(incluido el apartado de Casos)... Cambia los atajos anteriores (Alt+L, Alt+V, etc.) por Ctrl+D, de
 modo que funcione como el único gesto global para limpiar de forma congruente en toda la
 aplicación." This replaces **two** previous mechanisms at once:
 - The GLOBAL Alt+L accelerator (`MainFrame._limpiar_segun_pestana_activa`, dispatching per active
   tab — see "Third notebook tab..." above for its original 2026-07-12 design) is now bound to
-  **Ctrl+L** instead — same dispatch function, same per-tab targets, just a different key
+  **Ctrl+D** instead — same dispatch function, same per-tab targets, just a different key
   (`wx.ACCEL_CTRL, ord("L")` instead of `wx.ACCEL_ALT, ord("L")` in `atajos.py`).
 - The LOCAL Alt+V mnemonic that the "Vaciar búsqueda" buttons in Casos and Historial de Créditos had
   (a plain wx.Button `&`-mnemonic, not a `MainFrame`-registered accelerator) is **retired** — both
   buttons' labels changed from `"&Vaciar búsqueda"` to plain `"Vaciar búsqueda"`. The buttons
   themselves still exist and still work via mouse click or Tab+Enter, they just no longer claim a
-  keyboard shortcut of their own now that Ctrl+L covers that role globally.
+  keyboard shortcut of their own now that Ctrl+D covers that role globally.
 
 **Casos went from two separate clear actions to one.** Before, Alt+L cleared only the edit panel
 (`CasosPanel.limpiar_edicion()`) and the local "Vaciar búsqueda" button (Alt+V) cleared only the
 search box + alert filter (`CasosPanel.limpiar_busqueda()`) — two distinct actions, each with its
-own trigger. Ctrl+L in Casos now calls a new `CasosPanel.limpiar_todo()`, which does both together:
+own trigger. Ctrl+D in Casos now calls a new `CasosPanel.limpiar_todo()`, which does both together:
 search, alert filter, AND the edit panel, in one gesture, leaving the tab exactly as if freshly
 opened. `limpiar_edicion()`/`limpiar_busqueda()` still exist as public methods (the local "Vaciar
 búsqueda" button — now without a keyboard mnemonic — still calls `limpiar_busqueda()` alone, for
@@ -1278,11 +1278,11 @@ with each of the three public methods playing the sound exactly once at its own 
 
 Calculadora and Historial de Créditos didn't have this two-actions problem (each only ever had one
 clear concept), so their `limpiar_formulario()`/`limpiar_busqueda()` targets are unchanged — only
-the key that reaches them changed, from Alt+L to Ctrl+L.
+the key that reaches them changed, from Alt+L to Ctrl+D.
 
 ## Direct tab navigation: Ctrl+1/Ctrl+2/Ctrl+3 (2026-08-16)
 
-Explicit user request, same round as the Ctrl+L change above: jump directly to a specific notebook
+Explicit user request, same round as the Ctrl+D change above: jump directly to a specific notebook
 tab regardless of which one is currently active, as a faster alternative to Ctrl+Tab/Ctrl+Shift+Tab
 (which only step forward/backward in order — reaching Historial de Créditos from Casos means two
 Ctrl+Tab presses, or one Ctrl+Shift+Tab from Calculadora, neither of which lets you jump straight

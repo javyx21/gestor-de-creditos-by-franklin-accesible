@@ -171,7 +171,7 @@ class CasosPanel(wx.Panel):
         # "Vaciar búsqueda" SIN mnemónico (ni "&V" ni ningún otro): Alt+V
         # existió como atajo local de este botón hasta 2026-08-16, cuando
         # el usuario pidió explícitamente unificar todo comando de limpiar
-        # en un solo gesto GLOBAL y congruente, Ctrl+L (ver limpiar_todo()
+        # en un solo gesto GLOBAL y congruente, Ctrl+D (ver limpiar_todo()
         # más abajo y MainFrame._limpiar_segun_pestana_activa) — Alt+V
         # quedó retirado junto con Alt+L para no dejar dos atajos de
         # teclado distintos haciendo variantes de "limpiar" en la misma
@@ -279,7 +279,7 @@ class CasosPanel(wx.Panel):
         edición. Público (no "_on_...") porque lo dispara el botón local
         "Vaciar búsqueda" (sin mnemónico de teclado propio desde 2026-08-16,
         ver ese botón en _crear_busqueda) — para limpiar TODO de un solo
-        golpe con el teclado está el atajo GLOBAL Ctrl+L (ver limpiar_todo()
+        golpe con el teclado está el atajo GLOBAL Ctrl+D (ver limpiar_todo()
         más abajo)."""
         self._vaciar_busqueda_y_filtro()
         self._cargar_casos(avisar_sin_resultados=False)
@@ -292,7 +292,7 @@ class CasosPanel(wx.Panel):
     def limpiar_edicion(self):
         """Deja el panel de edición exactamente como si no hubiera ningún
         caso seleccionado, sin tocar la búsqueda ni el filtro de alerta —
-        ver limpiar_todo() para el atajo GLOBAL Ctrl+L, que ahora limpia
+        ver limpiar_todo() para el atajo GLOBAL Ctrl+D, que ahora limpia
         ambas cosas en un solo gesto (pedido explícito del usuario,
         2026-08-16: unificar el comando de limpiar en toda la app)."""
         self._resetear_panel_edicion()
@@ -321,7 +321,7 @@ class CasosPanel(wx.Panel):
         self.caso_seleccionado_texto.SetLabel("Ningún caso seleccionado")
 
     def limpiar_todo(self):
-        """Atajo GLOBAL Ctrl+L cuando la pestaña activa es Casos (pedido
+        """Atajo GLOBAL Ctrl+D cuando la pestaña activa es Casos (pedido
         explícito del usuario, 2026-08-16: "unifica el comando para limpiar
         formularios o campos en todos los módulos, incluido el apartado de
         Casos... que funcione como el único gesto global para limpiar de
@@ -332,7 +332,7 @@ class CasosPanel(wx.Panel):
         distintas: Alt+L (global) limpiaba solo el panel de edición, y Alt+V
         (mnemónico local del botón "Vaciar búsqueda") limpiaba solo la
         búsqueda y el filtro de alerta — dos atajos para dos alcances
-        distintos en la misma pestaña. Ctrl+L unifica ambos en un solo
+        distintos en la misma pestaña. Ctrl+D unifica ambos en un solo
         gesto: vacía búsqueda, filtro de alerta Y panel de edición juntos,
         dejando la pestaña como recién abierta. El botón local "Vaciar
         búsqueda" (limpiar_busqueda()) sigue existiendo para quien quiera

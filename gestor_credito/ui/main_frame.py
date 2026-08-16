@@ -211,7 +211,7 @@ class MainFrame(wx.Frame):
 
         "enfocar_busqueda", "enfocar_resultados" y "limpiar_busqueda" ya NO
         apuntan directo a un método de CasosPanel (pedido explícito del
-        usuario, 2026-07-12): Ctrl+F, Ctrl+R y Ctrl+L (antes Alt+L — ver más
+        usuario, 2026-07-12): Ctrl+F, Ctrl+R y Ctrl+D (antes Alt+L — ver más
         abajo por qué cambió) pasaron a ser atajos GLOBALES cuyo efecto
         depende de la pestaña activa del notebook en ese momento — antes
         siempre apuntaban a Casos sin importar qué pestaña estuviera
@@ -286,14 +286,14 @@ class MainFrame(wx.Frame):
             self.creditos_panel.enfocar_resultados()
 
     def _limpiar_segun_pestana_activa(self):
-        """Atajo GLOBAL Ctrl+L (antes Alt+L — pedido explícito del usuario,
+        """Atajo GLOBAL Ctrl+D (antes Alt+L — pedido explícito del usuario,
         2026-08-16: "unifica el comando para limpiar formularios o campos en
-        todos los módulos, incluido el apartado de Casos... Ctrl+L, de modo
+        todos los módulos, incluido el apartado de Casos... Ctrl+D, de modo
         que funcione como el único gesto global para limpiar de forma
         congruente en toda la aplicación"). Reemplaza tanto el Alt+L global
         anterior como el Alt+V local que tenían los botones "Vaciar
         búsqueda" de Casos e Historial de Créditos — ninguno de los dos
-        mnemónicos de teclado sigue activo, solo Ctrl+L.
+        mnemónicos de teclado sigue activo, solo Ctrl+D.
 
         Su efecto sigue dependiendo de qué pestaña está activa, cada módulo
         define su propio alcance de "limpiar": la Calculadora limpia todos

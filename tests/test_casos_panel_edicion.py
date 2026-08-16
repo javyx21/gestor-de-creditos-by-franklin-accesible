@@ -1,6 +1,6 @@
 """Pruebas de CasosPanel.limpiar_edicion() y limpiar_todo(). limpiar_edicion()
 ya no está atado directo a ningún atajo de teclado (hasta 2026-07-12 lo
-estaba, a Alt+L) — desde 2026-08-16 el atajo GLOBAL Ctrl+L cuando la pestaña
+estaba, a Alt+L) — desde 2026-08-16 el atajo GLOBAL Ctrl+D cuando la pestaña
 activa es Casos llama a limpiar_todo(), que combina limpiar_edicion() con
 limpiar_busqueda() en un solo gesto (ver CLAUDE.md, "Estandarización del
 atajo para limpiar"). Mismo patrón de panel real contra base de datos
@@ -118,7 +118,7 @@ def test_limpiar_edicion_reproduce_el_sonido_de_borrado(panel, conn, monkeypatch
 
 
 def test_limpiar_todo_resetea_edicion_y_busqueda_juntos(panel, conn):
-    # Ctrl+L (2026-08-16) unifica lo que antes eran dos acciones separadas
+    # Ctrl+D (2026-08-16) unifica lo que antes eran dos acciones separadas
     # (Alt+L para el panel de edición, Alt+V para la búsqueda/filtro).
     _crear_cliente_y_caso(conn)
     panel._cargar_casos(avisar_sin_resultados=False)

@@ -1,4 +1,4 @@
-"""Pruebas de los atajos GLOBALES Ctrl+F/Ctrl+L/Ctrl+1..3 de MainFrame, cuyo
+"""Pruebas de los atajos GLOBALES Ctrl+F/Ctrl+D/Ctrl+1..3 de MainFrame, cuyo
 efecto ahora depende de la pestaña activa del notebook (pedido explícito del
 usuario, 2026-07-12) — ver MainFrame._enfocar_busqueda_segun_pestana_activa /
 _limpiar_segun_pestana_activa / _ir_a_casos (etc.). Construye un MainFrame
@@ -53,7 +53,7 @@ def test_limpiar_en_calculadora_llama_limpiar_formulario(frame, monkeypatch):
 
 
 def test_limpiar_en_casos_llama_limpiar_todo(frame, monkeypatch):
-    # 2026-08-16: Ctrl+L unifica en Casos lo que antes eran dos atajos
+    # 2026-08-16: Ctrl+D unifica en Casos lo que antes eran dos atajos
     # separados (Alt+L para el panel de edición, Alt+V para la búsqueda) en
     # un solo método, CasosPanel.limpiar_todo().
     llamadas = []

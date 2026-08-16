@@ -494,7 +494,7 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         self._calcular_y_mostrar(entradas, hablar=False)
 
     def limpiar_formulario(self):
-        """Atajo GLOBAL Ctrl+L (antes Alt+L, unificado 2026-08-16 — ver
+        """Atajo GLOBAL Ctrl+D (antes Alt+L, unificado 2026-08-16 — ver
         MainFrame._limpiar_segun_pestana_activa) cuando la pestaña activa es
         la Calculadora (pedido explícito del usuario, 2026-07-12: "debe
         limpiar absolutamente todos los campos de entrada de datos,
