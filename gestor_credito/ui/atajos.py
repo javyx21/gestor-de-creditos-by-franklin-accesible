@@ -61,36 +61,44 @@ ATAJOS = [
         None,
     ),
     (
-        wx.ACCEL_ALT, ord("L"), "Alt+L", "Casos",
-        "Limpiar por completo el cuadro de edición del caso seleccionado — atajo "
-        "GLOBAL cuyo efecto depende de la pestaña activa (pedido explícito del "
-        "usuario, 2026-07-12), ver también las filas de Calculadora e Historial "
-        "de Créditos. Antes vaciaba la búsqueda/filtro de Casos: eso ahora es el "
-        "botón \"Vaciar búsqueda\" (Alt+V), sin atajo global",
+        wx.ACCEL_CTRL, ord("L"), "Ctrl+L", "General",
+        "Limpiar/vaciar los campos del módulo activo — atajo GLOBAL, ÚNICO y "
+        "congruente en toda la app (pedido explícito del usuario, 2026-08-16: "
+        "\"unifica el comando para limpiar formularios o campos en todos los "
+        "módulos... que funcione como el único gesto global para limpiar de "
+        "forma congruente\"; reemplaza los atajos previos Alt+L, global pero "
+        "distinto por pestaña, y Alt+V, mnemónico local del botón \"Vaciar "
+        "búsqueda\" en Casos/Historial de Créditos — ninguno de los dos sigue "
+        "activo). En Casos vacía la búsqueda, el filtro por alerta Y el cuadro "
+        "de edición del caso seleccionado juntos (antes eran dos acciones "
+        "separadas); en Calculadora limpia todos los campos de entrada "
+        "conservando la última empresa convenio elegida; en Historial de "
+        "Créditos vacía la búsqueda y los tres filtros y vuelve a la vista por "
+        "defecto (créditos en estado Corriente)",
         "limpiar_busqueda",
     ),
     (
-        None, None, "Alt+L", "Calculadora",
-        "Limpiar todos los campos de entrada, conservando elegida la última "
-        "empresa convenio usada",
-        None,
+        wx.ACCEL_CTRL, ord("1"), "Ctrl+1", "General",
+        "Ir directo a la pestaña Casos, sin importar cuál esté activa (pedido "
+        "explícito del usuario, 2026-08-16, navegación rápida entre pestañas "
+        "distinta de Ctrl+Tab, que solo avanza/retrocede en orden)",
+        "ir_a_casos",
     ),
     (
-        None, None, "Alt+L", "Historial de Créditos",
-        "Vaciar la búsqueda y volver a la vista por defecto (créditos en estado "
-        "Corriente) — mismo efecto que el botón \"Vaciar búsqueda\" (Alt+V)",
-        None,
+        wx.ACCEL_CTRL, ord("2"), "Ctrl+2", "General",
+        "Ir directo a la pestaña Calculadora de Crédito, sin importar cuál "
+        "esté activa",
+        "ir_a_calculadora",
+    ),
+    (
+        wx.ACCEL_CTRL, ord("3"), "Ctrl+3", "General",
+        "Ir directo a la pestaña Historial de Créditos, sin importar cuál "
+        "esté activa",
+        "ir_a_creditos",
     ),
     (
         None, None, "Alt+B", "Casos",
         "Ejecutar la búsqueda con el término escrito (botón Buscar)",
-        None,
-    ),
-    (
-        None, None, "Alt+V (en Casos)", "Casos",
-        "Vaciar la búsqueda y el filtro por alerta de Casos (botón Vaciar "
-        "búsqueda) — solo funciona con el foco dentro de esta pestaña, a "
-        "diferencia de Alt+L que es global",
         None,
     ),
     (
@@ -201,10 +209,12 @@ ATAJOS = [
     (
         None, None, "Ctrl+Tab / Ctrl+Shift+Tab", "Calculadora",
         "Alternar entre las pestañas Casos, Calculadora de Crédito e Historial de "
-        "Créditos — todas son pestañas de primer nivel, no diálogos de menú (pedido "
-        "explícito del usuario, 2026-07-11: \"esto es una función no una "
-        "configuración\", mismo criterio aplicado a Historial de Créditos el "
-        "2026-07-12). Al llegar a cada una, se anuncia por voz su nombre",
+        "Créditos, en orden (adelante/atrás) — todas son pestañas de primer nivel, "
+        "no diálogos de menú (pedido explícito del usuario, 2026-07-11: \"esto es "
+        "una función no una configuración\", mismo criterio aplicado a Historial de "
+        "Créditos el 2026-07-12). Al llegar a cada una, se anuncia por voz su "
+        "nombre. Para ir directo a una pestaña específica sin importar el orden, "
+        "ver Ctrl+1/Ctrl+2/Ctrl+3 más arriba (sección General)",
         None,
     ),
     (
@@ -244,12 +254,6 @@ ATAJOS = [
     (
         None, None, "Alt+B (en Historial de Créditos)", "Historial de Créditos",
         "Ejecutar la búsqueda con el término escrito (botón Buscar)",
-        None,
-    ),
-    (
-        None, None, "Alt+V (en Historial de Créditos)", "Historial de Créditos",
-        "Vaciar la búsqueda y volver a la vista por defecto (créditos en estado "
-        "Corriente)",
         None,
     ),
     (

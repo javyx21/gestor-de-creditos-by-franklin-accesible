@@ -142,16 +142,14 @@ class CreditosPanel(wx.Panel):
         buscar_btn.Bind(wx.EVT_BUTTON, lambda event: self._buscar())
         activar_con_enter(buscar_btn)
 
-        # "&Vaciar búsqueda", no "Limpiar búsqueda": Alt+L es un atajo
-        # GLOBAL cuyo efecto depende de la pestaña activa (pedido explícito
-        # del usuario, 2026-07-12; ver MainFrame._limpiar_segun_pestana_activa)
-        # y ese atajo global intercepta Alt+L antes de que llegara al
-        # mnemónico local de este botón — mismo tipo de choque ya evitado
-        # antes al elegir Alt+A en vez de Alt+L para el botón Calcular de la
-        # Calculadora (ver calculadora_panel.py). El atajo global también
-        # llama a limpiar_busqueda() (ver más abajo) cuando esta pestaña
-        # está activa, así que Alt+L y Alt+V terminan haciendo lo mismo acá.
-        limpiar_btn = wx.Button(contenedor, label="&Vaciar búsqueda")
+        # "Vaciar búsqueda" SIN mnemónico: tenía Alt+V hasta 2026-08-16,
+        # cuando el usuario pidió unificar todo comando de limpiar en un
+        # solo atajo GLOBAL congruente, Ctrl+L (ver MainFrame.
+        # _limpiar_segun_pestana_activa, que llama a limpiar_busqueda() —
+        # más abajo — cuando esta pestaña está activa). El botón sigue
+        # existiendo y accionable con mouse/Tab+Enter, solo perdió su
+        # mnemónico de teclado propio.
+        limpiar_btn = wx.Button(contenedor, label="Vaciar búsqueda")
         limpiar_btn.Bind(wx.EVT_BUTTON, lambda event: self.limpiar_busqueda())
         activar_con_enter(limpiar_btn)
 
@@ -283,8 +281,8 @@ class CreditosPanel(wx.Panel):
         """Vacía la búsqueda Y los tres filtros, y vuelve a la vista por
         defecto (créditos en estado Corriente, todas las empresas, sin
         filtro de cuotas pendientes). Público (no "_on_...") porque también
-        lo dispara el atajo GLOBAL Alt+L cuando esta pestaña está activa
-        (pedido explícito del usuario, 2026-07-12 — ver
+        lo dispara el atajo GLOBAL Ctrl+L (antes Alt+L) cuando esta pestaña
+        está activa (pedido explícito del usuario — ver
         MainFrame._limpiar_segun_pestana_activa). Reproduce el sonido de
         confirmación (borrar.wav) — pedido explícito del usuario: "la acción
         de borrar siempre tiene que hacer llamado al sonido", mismo criterio

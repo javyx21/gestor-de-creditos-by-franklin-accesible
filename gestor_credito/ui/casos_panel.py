@@ -168,15 +168,16 @@ class CasosPanel(wx.Panel):
         buscar_btn.Bind(wx.EVT_BUTTON, lambda event: self._buscar())
         activar_con_enter(buscar_btn)
 
-        # "&Vaciar búsqueda", no "Limpiar búsqueda": Alt+L pasó a ser un
-        # atajo GLOBAL cuyo efecto depende de la pestaña activa (pedido
-        # explícito del usuario, 2026-07-12; en Casos ahora limpia el cuadro
-        # de edición, ver limpiar_edicion() y MainFrame._limpiar_segun_pestana_activa)
-        # y ese atajo global intercepta Alt+L antes de que llegara al
-        # mnemónico local de este botón — mismo tipo de choque ya evitado
-        # antes al elegir Alt+A en vez de Alt+L para el botón Calcular de la
-        # Calculadora (ver calculadora_panel.py).
-        limpiar_btn = wx.Button(contenedor, label="&Vaciar búsqueda")
+        # "Vaciar búsqueda" SIN mnemónico (ni "&V" ni ningún otro): Alt+V
+        # existió como atajo local de este botón hasta 2026-08-16, cuando
+        # el usuario pidió explícitamente unificar todo comando de limpiar
+        # en un solo gesto GLOBAL y congruente, Ctrl+L (ver limpiar_todo()
+        # más abajo y MainFrame._limpiar_segun_pestana_activa) — Alt+V
+        # quedó retirado junto con Alt+L para no dejar dos atajos de
+        # teclado distintos haciendo variantes de "limpiar" en la misma
+        # pestaña. El botón sigue existiendo y sigue siendo accionable con
+        # mouse/Tab+Enter, solo perdió su mnemónico de teclado.
+        limpiar_btn = wx.Button(contenedor, label="Vaciar búsqueda")
         limpiar_btn.Bind(wx.EVT_BUTTON, self._on_limpiar_busqueda)
         activar_con_enter(limpiar_btn)
 
@@ -274,38 +275,30 @@ class CasosPanel(wx.Panel):
         self.limpiar_busqueda()
 
     def limpiar_busqueda(self):
-        """Vacía la búsqueda y el filtro de alerta. Reproduce un sonido de
-        confirmación (borrar.wav) porque limpiar no deja ningún cambio visual
-        obvio con foco en el botón — pedido explícito del usuario para
-        confirmar que sí se borró todo sin tener que leer la barra de estado
-        a mano. Público (no "_on_...") porque lo dispara el botón "Vaciar
-        búsqueda" (Alt+V, mnemónico local de esta pestaña) — YA NO el atajo
-        global Alt+L (ver limpiar_edicion() más abajo y
-        MainFrame._limpiar_segun_pestana_activa: pedido explícito del
-        usuario, 2026-07-12, "en el apartado de Casos [Alt+L] debe limpiar
-        por completo el cuadro de edición actual", no la búsqueda)."""
-        self.busqueda_texto.SetValue("")
-        self.filtro_alerta_choice.SetSelection(0)
+        """Vacía la búsqueda y el filtro de alerta, sin tocar el panel de
+        edición. Público (no "_on_...") porque lo dispara el botón local
+        "Vaciar búsqueda" (sin mnemónico de teclado propio desde 2026-08-16,
+        ver ese botón en _crear_busqueda) — para limpiar TODO de un solo
+        golpe con el teclado está el atajo GLOBAL Ctrl+L (ver limpiar_todo()
+        más abajo)."""
+        self._vaciar_busqueda_y_filtro()
         self._cargar_casos(avisar_sin_resultados=False)
         reproducir_sonido(SONIDO_BORRAR)
 
+    def _vaciar_busqueda_y_filtro(self):
+        self.busqueda_texto.SetValue("")
+        self.filtro_alerta_choice.SetSelection(0)
+
     def limpiar_edicion(self):
-        """Atajo GLOBAL Alt+L cuando la pestaña activa es Casos (pedido
-        explícito del usuario, 2026-07-12: "en el apartado de Casos [Alt+L]
-        debe limpiar por completo el cuadro de edición actual") — ver
-        MainFrame._limpiar_segun_pestana_activa, que decide qué método de
-        qué pestaña llamar según cuál esté activa en ese momento.
+        """Deja el panel de edición exactamente como si no hubiera ningún
+        caso seleccionado, sin tocar la búsqueda ni el filtro de alerta —
+        ver limpiar_todo() para el atajo GLOBAL Ctrl+L, que ahora limpia
+        ambas cosas en un solo gesto (pedido explícito del usuario,
+        2026-08-16: unificar el comando de limpiar en toda la app)."""
+        self._resetear_panel_edicion()
+        reproducir_sonido(SONIDO_BORRAR)
 
-        Deja el panel de edición exactamente como si no hubiera ningún caso
-        seleccionado: deselecciona la fila en la lista, Estado Solicitud/
-        Etapa Proceso, el checkbox de documentos, los botones Guardar/
-        Eliminar y el mensaje — no toca la búsqueda ni el filtro de alerta
-        (para eso está limpiar_busqueda(), el botón "Vaciar búsqueda").
-
-        Reproduce el sonido de confirmación (borrar.wav) — pedido explícito
-        del usuario: "la acción de borrar siempre tiene que hacer llamado
-        al sonido", mismo criterio que ya usan limpiar_busqueda()/
-        eliminar_caso()/eliminar_cliente()."""
+    def _resetear_panel_edicion(self):
         indice = self.lista.GetFirstSelected()
         if indice != wx.NOT_FOUND:
             estado_actual = wx.LIST_STATE_SELECTED | wx.LIST_STATE_FOCUSED
@@ -326,6 +319,34 @@ class CasosPanel(wx.Panel):
         self.mensaje_texto.SetLabel("")
         self.Layout()
         self.caso_seleccionado_texto.SetLabel("Ningún caso seleccionado")
+
+    def limpiar_todo(self):
+        """Atajo GLOBAL Ctrl+L cuando la pestaña activa es Casos (pedido
+        explícito del usuario, 2026-08-16: "unifica el comando para limpiar
+        formularios o campos en todos los módulos, incluido el apartado de
+        Casos... que funcione como el único gesto global para limpiar de
+        forma congruente en toda la aplicación") — ver
+        MainFrame._limpiar_segun_pestana_activa.
+
+        Antes de este pedido, Casos tenía DOS acciones de "limpiar"
+        distintas: Alt+L (global) limpiaba solo el panel de edición, y Alt+V
+        (mnemónico local del botón "Vaciar búsqueda") limpiaba solo la
+        búsqueda y el filtro de alerta — dos atajos para dos alcances
+        distintos en la misma pestaña. Ctrl+L unifica ambos en un solo
+        gesto: vacía búsqueda, filtro de alerta Y panel de edición juntos,
+        dejando la pestaña como recién abierta. El botón local "Vaciar
+        búsqueda" (limpiar_busqueda()) sigue existiendo para quien quiera
+        limpiar SOLO la búsqueda sin perder el caso que está editando, pero
+        ya no tiene un atajo de teclado propio.
+
+        Reproduce el sonido de confirmación UNA sola vez (borrar.wav) —
+        _vaciar_busqueda_y_filtro()/_resetear_panel_edicion() son las
+        mismas rutinas que usan limpiar_busqueda()/limpiar_edicion() por
+        separado, factorizadas sin el sonido para que combinarlas acá no lo
+        reproduzca dos veces seguidas."""
+        self._vaciar_busqueda_y_filtro()
+        self._resetear_panel_edicion()
+        self._cargar_casos(avisar_sin_resultados=False)
         reproducir_sonido(SONIDO_BORRAR)
 
     def enfocar_busqueda(self):

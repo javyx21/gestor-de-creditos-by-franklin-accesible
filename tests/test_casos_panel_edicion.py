@@ -1,7 +1,10 @@
-"""Pruebas de CasosPanel.limpiar_edicion() — atajo GLOBAL Alt+L cuando la
-pestaña activa es Casos (pedido explícito del usuario, 2026-07-12), mismo
-patrón de panel real contra base de datos temporal que
-test_configuracion_panel.py."""
+"""Pruebas de CasosPanel.limpiar_edicion() y limpiar_todo(). limpiar_edicion()
+ya no está atado directo a ningún atajo de teclado (hasta 2026-07-12 lo
+estaba, a Alt+L) — desde 2026-08-16 el atajo GLOBAL Ctrl+L cuando la pestaña
+activa es Casos llama a limpiar_todo(), que combina limpiar_edicion() con
+limpiar_busqueda() en un solo gesto (ver CLAUDE.md, "Estandarización del
+atajo para limpiar"). Mismo patrón de panel real contra base de datos
+temporal que test_configuracion_panel.py."""
 
 import wx
 import pytest
@@ -110,5 +113,43 @@ def test_limpiar_edicion_reproduce_el_sonido_de_borrado(panel, conn, monkeypatch
     from gestor_credito.ui.sonido import SONIDO_BORRAR
 
     panel.limpiar_edicion()
+
+    assert llamadas == [SONIDO_BORRAR]
+
+
+def test_limpiar_todo_resetea_edicion_y_busqueda_juntos(panel, conn):
+    # Ctrl+L (2026-08-16) unifica lo que antes eran dos acciones separadas
+    # (Alt+L para el panel de edición, Alt+V para la búsqueda/filtro).
+    _crear_cliente_y_caso(conn)
+    panel._cargar_casos(avisar_sin_resultados=False)
+    estado = wx.LIST_STATE_SELECTED | wx.LIST_STATE_FOCUSED
+    panel.lista.SetItemState(0, estado, estado)
+    evento = wx.ListEvent(wx.wxEVT_LIST_ITEM_SELECTED, panel.lista.GetId())
+    evento.SetIndex(0)
+    panel._on_seleccionar_caso(evento)
+
+    panel.busqueda_texto.SetValue("algo")
+    panel.filtro_alerta_choice.SetSelection(1)
+    assert panel._caso_seleccionado_id is not None
+
+    panel.limpiar_todo()
+
+    assert panel._caso_seleccionado_id is None
+    assert panel.caso_seleccionado_texto.GetLabel() == "Ningún caso seleccionado"
+    assert panel.busqueda_texto.GetValue() == ""
+    assert panel.filtro_alerta_choice.GetSelection() == 0
+
+
+def test_limpiar_todo_reproduce_el_sonido_de_borrado_una_sola_vez(panel, conn, monkeypatch):
+    # No debe sonar dos veces por combinar internamente las rutinas que
+    # limpiar_busqueda()/limpiar_edicion() usan por separado.
+    llamadas = []
+    monkeypatch.setattr(
+        "gestor_credito.ui.casos_panel.reproducir_sonido",
+        lambda nombre: llamadas.append(nombre),
+    )
+    from gestor_credito.ui.sonido import SONIDO_BORRAR
+
+    panel.limpiar_todo()
 
     assert llamadas == [SONIDO_BORRAR]

@@ -357,7 +357,7 @@ def test_guardado_repetido_de_la_misma_tasa_no_desincroniza_nada(calc, conn):
     assert calc._ultimo_resultado.cuota_usd == pytest.approx(_cuota_esperada(calc, 0.33))
 
 
-# ---- limpiar_formulario() (atajo GLOBAL Alt+L en la Calculadora) ---------
+# ---- limpiar_formulario() (atajo GLOBAL Ctrl+L en la Calculadora, antes Alt+L) ---------
 
 def test_limpiar_formulario_vacia_los_campos_pero_conserva_la_empresa(calc, conn):
     _llenar_formulario(calc)

@@ -1218,14 +1218,14 @@ shortcuts dispatch on the active notebook page instead of a fixed target:
 - **Ctrl+F** (focus search) / **Ctrl+R** (focus results list): Casos and Historial de Créditos each
   focus their own search box / results list; Calculadora de Crédito has neither concept (no search,
   no list), so these two are simply no-ops there.
-- **Alt+L** ("Limpiar"/clear) means something different per tab, all confirmed with the user
-  2026-07-12: on Casos, it clears the **edit panel** (the search box itself was moved to a new local
-  button, "&Vaciar búsqueda"/Alt+V, so Alt+L and Alt+V are no longer the same action there — a
-  deliberate split, not an oversight); on Calculadora, it clears the input form **while preserving
-  the currently-selected empresa** (re-picking the rate every time was the friction reported); on
-  Historial de Créditos, it clears the search box and returns to the default Corriente-only view —
-  same action as its own local "Vaciar búsqueda" button, since this tab has no separate edit panel
-  to distinguish it from.
+- **Alt+L** ("Limpiar"/clear) meant something different per tab, all confirmed with the user
+  2026-07-12: on Casos, it cleared the **edit panel** (the search box itself was moved to a new local
+  button, "&Vaciar búsqueda"/Alt+V, so Alt+L and Alt+V were deliberately different actions there); on
+  Calculadora, it cleared the input form **while preserving the currently-selected empresa**
+  (re-picking the rate every time was the friction reported); on Historial de Créditos, it cleared
+  the search box and returned to the default Corriente-only view. **Superseded 2026-08-16** — see
+  "Standardized clear shortcut: Ctrl+L" further down: the key changed to Ctrl+L, Alt+V was retired,
+  and Casos' two separate clear actions were merged into one.
 - Every one of these clear actions now also plays the delete-confirmation sound (`SONIDO_BORRAR`)
   — explicit user request: "la acción de borrar siempre tiene que hacer llamado al sonido", applied
   uniformly across all three tabs' clear actions, not just the one that prompted the request.
@@ -1245,6 +1245,63 @@ so far") predates both this module and the Calculadora de Crédito one — it st
 `MainFrame` hosting Casos alone with no notebook. That's doubly stale now: the notebook holds 3
 tabs (Casos, Calculadora de Crédito, Historial de Créditos), not 0 or 2 — see the `ui/main_frame.py`
 line in the Architecture tree below for the current state.
+
+## Standardized clear shortcut: Ctrl+L (2026-08-16)
+
+Explicit user request: "unifica el comando para limpiar formularios o campos en todos los módulos
+(incluido el apartado de Casos)... Cambia los atajos anteriores (Alt+L, Alt+V, etc.) por Ctrl+L, de
+modo que funcione como el único gesto global para limpiar de forma congruente en toda la
+aplicación." This replaces **two** previous mechanisms at once:
+- The GLOBAL Alt+L accelerator (`MainFrame._limpiar_segun_pestana_activa`, dispatching per active
+  tab — see "Third notebook tab..." above for its original 2026-07-12 design) is now bound to
+  **Ctrl+L** instead — same dispatch function, same per-tab targets, just a different key
+  (`wx.ACCEL_CTRL, ord("L")` instead of `wx.ACCEL_ALT, ord("L")` in `atajos.py`).
+- The LOCAL Alt+V mnemonic that the "Vaciar búsqueda" buttons in Casos and Historial de Créditos had
+  (a plain wx.Button `&`-mnemonic, not a `MainFrame`-registered accelerator) is **retired** — both
+  buttons' labels changed from `"&Vaciar búsqueda"` to plain `"Vaciar búsqueda"`. The buttons
+  themselves still exist and still work via mouse click or Tab+Enter, they just no longer claim a
+  keyboard shortcut of their own now that Ctrl+L covers that role globally.
+
+**Casos went from two separate clear actions to one.** Before, Alt+L cleared only the edit panel
+(`CasosPanel.limpiar_edicion()`) and the local "Vaciar búsqueda" button (Alt+V) cleared only the
+search box + alert filter (`CasosPanel.limpiar_busqueda()`) — two distinct actions, each with its
+own trigger. Ctrl+L in Casos now calls a new `CasosPanel.limpiar_todo()`, which does both together:
+search, alert filter, AND the edit panel, in one gesture, leaving the tab exactly as if freshly
+opened. `limpiar_edicion()`/`limpiar_busqueda()` still exist as public methods (the local "Vaciar
+búsqueda" button — now without a keyboard mnemonic — still calls `limpiar_busqueda()` alone, for
+someone who wants to clear just the search without losing the case they're mid-editing), but neither
+is directly wired to the global shortcut anymore; `limpiar_todo()` is. To avoid the confirmation
+sound (`SONIDO_BORRAR`) playing twice when both underlying actions run together, the actual
+state-resetting logic was factored out into sound-less helpers (`_vaciar_busqueda_y_filtro()`,
+`_resetear_panel_edicion()`) that `limpiar_busqueda()`/`limpiar_edicion()`/`limpiar_todo()` all call,
+with each of the three public methods playing the sound exactly once at its own end.
+
+Calculadora and Historial de Créditos didn't have this two-actions problem (each only ever had one
+clear concept), so their `limpiar_formulario()`/`limpiar_busqueda()` targets are unchanged — only
+the key that reaches them changed, from Alt+L to Ctrl+L.
+
+## Direct tab navigation: Ctrl+1/Ctrl+2/Ctrl+3 (2026-08-16)
+
+Explicit user request, same round as the Ctrl+L change above: jump directly to a specific notebook
+tab regardless of which one is currently active, as a faster alternative to Ctrl+Tab/Ctrl+Shift+Tab
+(which only step forward/backward in order — reaching Historial de Créditos from Casos means two
+Ctrl+Tab presses, or one Ctrl+Shift+Tab from Calculadora, neither of which lets you jump straight
+there). **Ctrl+1** → Casos, **Ctrl+2** → Calculadora de Crédito, **Ctrl+3** → Historial de Créditos —
+matching the pages' fixed left-to-right order (`MainFrame._INDICE_CASOS/_INDICE_CALCULADORA/
+_INDICE_CREDITOS`, mirroring the order pages are added to `self.notebook` in `__init__`).
+
+Implemented as three thin methods (`MainFrame._ir_a_casos/_ir_a_calculadora/_ir_a_creditos`, each
+just `self.notebook.SetSelection(<índice>)`) rather than three inline lambdas in the `acciones` dict
+— named methods keep this consistent with every other entry in that dict (`_limpiar_segun_pestana_activa`
+etc.), and let tests call them directly the same way, instead of only being reachable through a
+simulated key event. **`wx.Notebook.SetSelection()` was confirmed empirically (not assumed) to fire
+`EVT_NOTEBOOK_PAGE_CHANGED`** in this app/wxPython/Windows combination — `wx.Notebook` has a separate
+`ChangeSelection()` method specifically documented to skip that event, so this isn't guaranteed
+behavior for `wx.BookCtrlBase` in general, but it does hold here. That means these three methods
+don't need to duplicate `_on_cambiar_pestana()`'s work (reload the target tab's data, announce its
+name via `anunciar_voz_nvda`) — switching via Ctrl+1/2/3 goes through the exact same event handler as
+a mouse click or Ctrl+Tab, so it stays automatically in sync with whatever that handler does, now or
+later.
 
 ## Commands
 

@@ -68,6 +68,12 @@ class _PanelDialog(wx.Dialog):
 
 
 class MainFrame(wx.Frame):
+    # Orden fijo en que se agregan las páginas del notebook en __init__ — ver
+    # Ctrl+1/Ctrl+2/Ctrl+3 en _crear_atajos() más abajo.
+    _INDICE_CASOS = 0
+    _INDICE_CALCULADORA = 1
+    _INDICE_CREDITOS = 2
+
     def __init__(self, parent, title):
         super().__init__(parent, title=title, size=(900, 650))
 
@@ -205,18 +211,33 @@ class MainFrame(wx.Frame):
 
         "enfocar_busqueda", "enfocar_resultados" y "limpiar_busqueda" ya NO
         apuntan directo a un método de CasosPanel (pedido explícito del
-        usuario, 2026-07-12): Ctrl+F, Ctrl+R y Alt+L pasaron a ser atajos
-        GLOBALES cuyo efecto depende de la pestaña activa del notebook en
-        ese momento — antes siempre apuntaban a Casos sin importar qué
-        pestaña estuviera realmente activa, así que no tenían ningún efecto
-        visible desde la Calculadora o Historial de Créditos. Ver
+        usuario, 2026-07-12): Ctrl+F, Ctrl+R y Ctrl+L (antes Alt+L — ver más
+        abajo por qué cambió) pasaron a ser atajos GLOBALES cuyo efecto
+        depende de la pestaña activa del notebook en ese momento — antes
+        siempre apuntaban a Casos sin importar qué pestaña estuviera
+        realmente activa, así que no tenían ningún efecto visible desde la
+        Calculadora o Historial de Créditos. Ver
         _enfocar_busqueda_segun_pestana_activa/_enfocar_resultados_segun_pestana_activa/
         _limpiar_segun_pestana_activa más abajo.
+
+        "ir_a_casos"/"ir_a_calculadora"/"ir_a_creditos" (Ctrl+1/Ctrl+2/Ctrl+3,
+        agregados 2026-08-16, pedido explícito del usuario: navegación rápida
+        entre pestañas sin depender de Ctrl+Tab, que solo avanza/retrocede en
+        orden) van directo a self.notebook.SetSelection(indice) — confirmado
+        empíricamente que wx.Notebook.SetSelection() SÍ dispara
+        EVT_NOTEBOOK_PAGE_CHANGED en esta app (a diferencia de ChangeSelection(),
+        que a propósito no lo hace), así que _on_cambiar_pestana() se encarga
+        solo de recargar datos y anunciar el nombre de la pestaña por voz,
+        igual que si el cambio viniera de un clic o de Ctrl+Tab — no hace
+        falta duplicar esa lógica acá.
         """
         acciones = {
             "enfocar_busqueda": self._enfocar_busqueda_segun_pestana_activa,
             "enfocar_resultados": self._enfocar_resultados_segun_pestana_activa,
             "limpiar_busqueda": self._limpiar_segun_pestana_activa,
+            "ir_a_casos": self._ir_a_casos,
+            "ir_a_calculadora": self._ir_a_calculadora,
+            "ir_a_creditos": self._ir_a_creditos,
         }
 
         entradas = []
@@ -265,22 +286,49 @@ class MainFrame(wx.Frame):
             self.creditos_panel.enfocar_resultados()
 
     def _limpiar_segun_pestana_activa(self):
-        """Atajo GLOBAL Alt+L (pedido explícito del usuario, 2026-07-12): su
-        efecto ahora depende de qué pestaña está activa, en vez de apuntar
-        siempre a Casos — cada módulo define su propio significado de
-        "limpiar": la Calculadora limpia todos los campos de entrada
-        (conservando la última empresa convenio elegida), Casos limpia el
-        cuadro de edición del caso seleccionado (ya NO la búsqueda — eso
-        pasó al botón local "Vaciar búsqueda", Alt+V, ver casos_panel.py), e
-        Historial de Créditos vacía la búsqueda y vuelve a la vista por
-        defecto."""
+        """Atajo GLOBAL Ctrl+L (antes Alt+L — pedido explícito del usuario,
+        2026-08-16: "unifica el comando para limpiar formularios o campos en
+        todos los módulos, incluido el apartado de Casos... Ctrl+L, de modo
+        que funcione como el único gesto global para limpiar de forma
+        congruente en toda la aplicación"). Reemplaza tanto el Alt+L global
+        anterior como el Alt+V local que tenían los botones "Vaciar
+        búsqueda" de Casos e Historial de Créditos — ninguno de los dos
+        mnemónicos de teclado sigue activo, solo Ctrl+L.
+
+        Su efecto sigue dependiendo de qué pestaña está activa, cada módulo
+        define su propio alcance de "limpiar": la Calculadora limpia todos
+        los campos de entrada (conservando la última empresa convenio
+        elegida); Casos ahora limpia TODO de un solo golpe — búsqueda,
+        filtro de alerta Y cuadro de edición juntos (antes eran dos
+        acciones separadas, Alt+L para la edición y Alt+V para la
+        búsqueda — ver CasosPanel.limpiar_todo()); e Historial de Créditos
+        vacía la búsqueda y los tres filtros y vuelve a la vista por
+        defecto (sin cambios de alcance ahí, ya era una sola acción)."""
         pagina = self.notebook.GetCurrentPage()
         if pagina is self.calculadora_panel:
             self.calculadora_panel.limpiar_formulario()
         elif pagina is self.casos_panel:
-            self.casos_panel.limpiar_edicion()
+            self.casos_panel.limpiar_todo()
         elif pagina is self.creditos_panel:
             self.creditos_panel.limpiar_busqueda()
+
+    def _ir_a_casos(self):
+        """Atajo GLOBAL Ctrl+1 (pedido explícito del usuario, 2026-08-16):
+        va directo a la pestaña Casos sin importar cuál esté activa. Métodos
+        separados por pestaña (en vez de uno solo parametrizado) para que
+        cada uno sea bindeable por su propia clave de acción en ATAJOS/
+        _crear_atajos(), igual que el resto de los atajos globales de este
+        archivo — y para que las pruebas puedan invocarlos igual que
+        _limpiar_segun_pestana_activa()."""
+        self.notebook.SetSelection(self._INDICE_CASOS)
+
+    def _ir_a_calculadora(self):
+        """Atajo GLOBAL Ctrl+2 — ver _ir_a_casos()."""
+        self.notebook.SetSelection(self._INDICE_CALCULADORA)
+
+    def _ir_a_creditos(self):
+        """Atajo GLOBAL Ctrl+3 — ver _ir_a_casos()."""
+        self.notebook.SetSelection(self._INDICE_CREDITOS)
 
     def _on_abrir_notificaciones(self, event):
         self._abrir_dialogo("Notificaciones", NotificacionesPanel)

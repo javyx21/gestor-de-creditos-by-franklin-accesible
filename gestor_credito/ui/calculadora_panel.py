@@ -494,11 +494,12 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         self._calcular_y_mostrar(entradas, hablar=False)
 
     def limpiar_formulario(self):
-        """Atajo GLOBAL Alt+L cuando la pestaña activa es la Calculadora
-        (pedido explícito del usuario, 2026-07-12: "debe limpiar
-        absolutamente todos los campos de entrada de datos, manteniendo
-        únicamente seleccionada la última empresa que se utilizó") — ver
-        MainFrame._limpiar_segun_pestana_activa.
+        """Atajo GLOBAL Ctrl+L (antes Alt+L, unificado 2026-08-16 — ver
+        MainFrame._limpiar_segun_pestana_activa) cuando la pestaña activa es
+        la Calculadora (pedido explícito del usuario, 2026-07-12: "debe
+        limpiar absolutamente todos los campos de entrada de datos,
+        manteniendo únicamente seleccionada la última empresa que se
+        utilizó").
 
         empresa_choice NO se toca a propósito: la empresa/tasa ya resuelta
         no es un dato que el oficial tipee a mano, así que no tiene sentido
