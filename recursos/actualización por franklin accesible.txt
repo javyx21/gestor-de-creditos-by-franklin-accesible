@@ -1,0 +1,338 @@
+ACTUALIZACIÓN AUTOMÁTICA — Gestor de Crédito
+Última actualización: 2026-08-19 (sesión 3, misma fecha)
+Generado por Claude Code para retomar contexto en una sesión nueva.
+
+===========================================================================
+ESTADO ACTUAL EN UNA FRASE
+===========================================================================
+TODO EL MECANISMO (red+checksum, y cierre+extracción+relanzamiento) YA
+QUEDÓ VERIFICADO DE PUNTA A PUNTA, con ejecutables reales, contra un
+repositorio de GitHub real (ver secciones 5 y 8 abajo) — pero ese
+repositorio de prueba (javyx21/gestor-de-credito) SE BORRÓ el mismo
+19/08 a pedido explícito del usuario: antes de publicar cualquier cosa
+de verdad hay que decidir qué LICENCIA se le va a poner al contenido
+publicado. URL_VERSION_JSON en el código volvió a quedar VACÍA a
+propósito (277 tests en verde). Retomar en la sección 9 (pendientes) —
+el próximo paso real es resolver la licencia, no infraestructura.
+
+DECISIÓN TOMADA ESTA SESIÓN (repo público, no privado): el usuario
+preguntó explícitamente si un repo privado limitaría el acceso al token
+o a toda la cuenta — se le explicó que un token classic ('repo', el que
+usa gh auth) da acceso a TODOS los repos, mientras que un fine-grained
+token puede acotarse a un solo repo de solo lectura, pero igual no es un
+secreto real una vez embebido en un .exe distribuido, y exige crear/
+renovar el token a mano sin CI. El usuario eligió REPO PÚBLICO — mantiene
+el diseño original de GET anónimo sin login, sin mantenimiento de
+tokens. El contenido publicado (el .zip de la app + version.json) no
+tiene datos de clientes ni credenciales, así que la exposición pública
+se consideró aceptable.
+
+===========================================================================
+1. QUÉ SE PIDIÓ ORIGINALMENTE
+===========================================================================
+El usuario preguntó si la app se podría actualizar sola por internet, con
+un botón, en vez de tener que reinstalarla a mano en el pendrive. Se
+armó junto con el usuario, punto por punto, este diseño:
+
+- Distribución por LINK DE DESCARGA DIRECTA por HTTPS, no por una carpeta
+  sincronizada de OneDrive/Google Drive — decisión explícita del usuario:
+  "no tengo mis cuentas personales en la empresa y no pienso poner nada
+  personal en la PC de la oficina". La app solo hace un GET anónimo a una
+  URL pública, nunca inicia sesión en nada.
+- Checksum SHA256 + HTTPS es TODO el modelo de seguridad — confirmado
+  suficiente por el usuario, sin firma de código ni autenticación extra.
+- La UI vive en el diálogo de AYUDA, no en Configuración — corrección
+  explícita del usuario tras la primera propuesta (que la ponía en
+  Configuración): "esto es una función... no una configuración... en
+  ayuda estaría buscar actualizaciones".
+- DOS BOTONES separados, no uno combinado — elegido por el usuario entre
+  3 opciones presentadas. "Buscar actualizaciones" solo revisa e informa;
+  "Actualizar ahora" (deshabilitado hasta que el primero encuentre versión
+  nueva) descarga+verifica+aplica+reinicia de un tirón. El clic en ese
+  segundo botón ES la confirmación, sin wx.MessageBox extra de "¿estás
+  seguro?".
+- Sobre DÓNDE alojar version.json + el .zip: se probó primero pensando en
+  Google Drive, pero surgió un problema real — Google Drive muestra una
+  pantalla intermedia de "no se pudo escanear en busca de virus" para
+  archivos grandes, que rompería el link de descarga directa simple. El
+  usuario, al enterarse, prefirió cambiar a GITHUB (RELEASES) como
+  hosting — sin ese problema, pensado específicamente para esto.
+
+===========================================================================
+2. CÓDIGO YA ESCRITO (esta parte está TERMINADA, no tocar sin motivo)
+===========================================================================
+- gestor_credito/version.py — VERSION = "1.0.0" (se sube a mano en cada
+  release futuro).
+- gestor_credito/actualizador/actualizador.py — verificar_actualizacion(),
+  descargar_actualizacion() (con checksum SHA256), aplicar_actualizacion().
+  Sin dependencias nuevas, solo librería estándar (urllib/hashlib). Tiene
+  arriba una constante URL_VERSION_JSON, TODAVÍA VACÍA — ahí va el link de
+  descarga directa del version.json una vez que exista de verdad (ver
+  sección 5, es el próximo paso pendiente).
+- updater/actualizar_app.py — el proceso EXTERNO que espera a que la app
+  principal cierre (sondea tasklist por PID), extrae el .zip encima de la
+  carpeta de la app, y la vuelve a abrir. Hace falta un proceso aparte
+  porque un .exe corriendo no puede sobrescribirse a sí mismo en Windows.
+  Se empaqueta APARTE con --onefile (no --onedir como la app principal) —
+  ver CLAUDE.md, sección "Actualizaciones automáticas" y "Empaquetado
+  portable", para el comando exacto y por qué.
+- gestor_credito/ui/ayuda_panel.py — sección nueva "Actualizaciones" con
+  los botones "&Buscar actualizaciones" (Alt+B) y "&Actualizar ahora"
+  (Alt+A, empieza deshabilitado). Usa ejecutar_en_segundo_plano() para no
+  congelar NVDA mientras descarga, y anunciar_voz_nvda() para confirmar
+  resultados — mismos patrones ya establecidos en el resto de la app.
+- gestor_credito/ui/atajos.py — documentadas las dos filas de mnemónicos
+  nuevas (Alt+B/Alt+A en Ayuda).
+- CLAUDE.md — sección completa "## Actualizaciones automáticas" con TODO
+  el razonamiento de diseño de arriba, más las actualizaciones al árbol
+  de Architecture y al comando de Empaquetado portable.
+- tests/test_actualizador.py (14 tests) y tests/test_ayuda_panel.py
+  (6 tests) — todo mockeado (sin red real), incluye validación de errores
+  de red/checksum/versión inválida y del flujo completo de los botones.
+
+SUITE COMPLETA: 277 tests, TODOS PASANDO al cerrar esta sesión (comando:
+`python -m pytest -q` desde la raíz del proyecto).
+
+NADA de esto está commiteado a git todavía — decisión pendiente del
+usuario, no se preguntó explícitamente en esta sesión si commitear ya.
+
+===========================================================================
+3. ARCHIVOS DE PRUEBA YA ARMADOS
+===========================================================================
+En recursos/prueba_actualizacion/ (carpeta nueva, dentro del proyecto para
+que sobreviva a un reinicio de sesión — el scratchpad de Claude Code es
+temporal y específico de cada sesión, NO hay que confiar en esa ruta en
+una sesión nueva):
+
+- actualizacion_prueba.zip — un .zip mínimo (177 bytes, un prueba.txt de
+  texto adentro) para probar el flujo de descarga+checksum sin necesitar
+  todavía un build real de la app.
+- version_prueba.json — {"version": "9.9.9", "url":
+  "PEGAR_AQUI_EL_LINK_DE_DESCARGA_DIRECTA_DEL_ZIP", "sha256": "<el sha256
+  real del zip de arriba, ya calculado>"}. La versión "9.9.9" es a
+  propósito más alta que VERSION ("1.0.0") para que la prueba siempre
+  detecte "hay actualización disponible". El campo "url" todavía tiene un
+  placeholder — hay que reemplazarlo por el link real de descarga directa
+  del .zip una vez subido a GitHub Releases (ver sección 5).
+
+===========================================================================
+4. GITHUB CLI — YA INSTALADO Y CONECTADO
+===========================================================================
+- Se instaló GitHub CLI con winget: `winget install --id GitHub.cli`.
+  Quedó en `C:\Program Files\GitHub CLI\gh.exe`. El PATH del sistema ya
+  quedó actualizado (a nivel de máquina), pero una terminal que ya estaba
+  abierta ANTES de instalar no lo ve hasta que se abre una nueva — si
+  hace falta, usar la ruta completa entre comillas:
+  `& "C:\Program Files\GitHub CLI\gh.exe" <comando>`.
+- El usuario corrió `gh auth login` en su propia terminal (paso
+  interactivo con navegador, no se puede hacer por mí). VALIDADO desde
+  Claude Code con `gh auth status`, resultado real:
+
+    github.com
+      ✓ Logged in to github.com account javyx21 (keyring)
+      - Active account: true
+      - Git operations protocol: https
+      - Token scopes: 'gist', 'read:org', 'repo', 'workflow'
+
+  La cuenta "javyx21" quedó conectada correctamente, con el scope 'repo'
+  necesario para crear repositorios y releases. ESTO YA QUEDÓ LISTO, no
+  hace falta repetir el login salvo que el usuario cierre sesión o el
+  token expire.
+
+===========================================================================
+5. *** PRÓXIMO PASO — RETOMAR ACÁ ***
+===========================================================================
+YA HECHO (sesión 2026-08-19, tarde):
+
+1. Repositorio creado: https://github.com/javyx21/gestor-de-credito
+   (público — ver decisión arriba). Se inicializó con un README mínimo
+   (necesario: gh release no acepta tags en un repo sin ningún commit
+   todavía) y un commit usando el email noreply de GitHub del usuario
+   (216271280+javyx21@users.noreply.github.com — GitHub rechaza pushes
+   con el email real por privacidad si no está habilitado explícitamente).
+2. Release de prueba subido: tag v9.9.9-prueba, con
+   actualizacion_prueba.zip y version_prueba.json (ambos de
+   recursos/prueba_actualizacion/).
+3. Campo "url" de version_prueba.json actualizado con el link real de
+   descarga directa del zip y vuelto a subir al release
+   (`gh release upload ... --clobber`).
+4. Probado `verificar_actualizacion()` y `descargar_actualizacion()`
+   desde Python contra la URL real de GitHub — funcionó de punta a
+   punta (detectó 9.9.9, descargó el zip real de 177 bytes, el
+   checksum SHA256 coincidió).
+5. MEJORA sobre el plan original: en vez de pegar el link fijo al tag
+   v9.9.9-prueba (que habría que cambiar a mano en cada release real),
+   se usó el alias ESTABLE que ofrece GitHub Releases:
+   `https://github.com/javyx21/gestor-de-credito/releases/latest/download/version.json`
+   — apunta siempre al release marcado "latest", sin importar el tag.
+   Se subió una copia de version_prueba.json con el nombre exacto
+   "version.json" al mismo release de prueba para validar este link
+   estable también de punta a punta (funcionó igual). REQUISITO para
+   que esto siga funcionando en cada release real futuro: el asset
+   tiene que llamarse EXACTAMENTE "version.json" (no
+   "version_prueba.json" ni variantes), y el release tiene que quedar
+   marcado como "latest" (gh release create lo hace solo por defecto,
+   salvo que se pase --prerelease).
+6. URL_VERSION_JSON en gestor_credito/actualizador/actualizador.py ya
+   tiene ese link estable pegado — YA NO ESTÁ VACÍA.
+7. tests/test_actualizador.py: un test
+   (test_verificar_actualizacion_sin_url_configurada) dependía de que
+   URL_VERSION_JSON estuviera vacía por defecto; se corrigió con
+   monkeypatch para forzar ese caso puntual en vez de depender del
+   estado real del módulo. Suite completa: 277 tests, todos en verde.
+
+IMPORTANTE — el release de prueba v9.9.9-prueba queda publicado y
+LIVE en el repo: mientras exista y siga siendo el release "latest",
+cualquier chequeo real de actualizaciones (incluida una app ya
+empaquetada que use esta URL) va a reportar "hay actualización
+disponible: 9.9.9" — es justamente el comportamiento esperado de un
+release de prueba (9.9.9 > 1.0.0 a propósito), pero hay que
+reemplazarlo por un release real antes de distribuir la app de verdad,
+o el primer "Buscar actualizaciones" de un usuario real mostraría este
+release de prueba como si fuera una versión real disponible.
+
+=========================================================================
+8. CICLO COMPLETO DE aplicar_actualizacion() — YA PROBADO DE PUNTA A
+   PUNTA (2026-08-19, misma sesión, corregido: SÍ era posible en este
+   entorno — ver más abajo)
+=========================================================================
+CORRECCIÓN sobre lo dicho antes en este archivo: se había asumido que
+compilar y probar los .exe reales "no se podía hacer desde este
+entorno" — resultó ser una suposición nunca verificada. Este entorno
+SÍ corre directamente en la máquina Windows real del usuario (no un
+sandbox separado), con PyInstaller 6.21.0 ya instalado. Sí se pudo
+compilar y probar todo el ciclo end-to-end sin necesitar tocar la UI
+con mouse/teclado (no hay herramienta de automatización de escritorio
+disponible, solo de navegador Chrome — pero el ciclo de
+aplicar_actualizacion() es pura gestión de procesos, no requiere UI).
+
+DETALLE DEL BUG ENCONTRADO Y EVITADO: compilar directo dentro de
+dist/ del proyecto (como indica el comando de CLAUDE.md) falló con
+PermissionError al borrar dist/GestorDeCredito/_internal/.../nvda —
+OneDrive tenía un lock sobre esos archivos (misma clase de problema ya
+documentado para calculadora.xlsx con Excel COM). Fix: se compiló con
+--distpath/--workpath/--specpath apuntando al scratchpad de Claude
+Code (fuera de la carpeta sincronizada por OneDrive), no a dist/ del
+proyecto. Si se recompila a mano en el futuro DENTRO de la carpeta de
+OneDrive y aparece el mismo PermissionError, cerrar/pausar la
+sincronización de OneDrive antes, o compilar fuera y copiar el
+resultado.
+
+PASOS EJECUTADOS (todos con éxito):
+1. Se compiló GestorDeCredito.exe (--windowed --onedir) y
+   GestorDeCredito_Updater.exe (--onefile) con los comandos exactos de
+   CLAUDE.md, sección Empaquetado portable, solo cambiando la ruta de
+   salida por lo de arriba.
+2. Se copió GestorDeCredito_Updater.exe dentro de la carpeta
+   GestorDeCredito/ (como indica el proceso real de release).
+3. Se copió esa carpeta completa a una segunda ubicación de prueba
+   (NO la carpeta de build "limpia", para no ensuciarla) — ahí se hizo
+   la prueba destructiva.
+4. Se armó un .zip de prueba mínimo con un archivo marcador
+   (MARCADOR_ACTUALIZACION.txt) en la raíz — no el contenido completo
+   de una app real, solo lo mínimo para probar que la extracción
+   ocurre encima de la carpeta correcta.
+5. Se lanzó GestorDeCredito.exe real de la copia de prueba
+   (Start-Process), capturando su PID real (9092) — esto SÍ abrió una
+   ventana real en la pantalla brevemente, avisado antes al usuario.
+6. Se invocó GestorDeCredito_Updater.exe directamente con los mismos
+   4 argumentos que arma aplicar_actualizacion() en actualizador.py
+   (PID, ruta del zip, carpeta de la app, ruta del exe principal) —
+   no se pudo invocar aplicar_actualizacion() en sí porque esa función
+   exige sys.frozen=True (solo corre dentro de un .exe empaquetado),
+   pero invocar el updater con los mismos argumentos prueba el mismo
+   mecanismo real.
+7. Se mató el proceso principal (Stop-Process -Force), simulando el
+   wx.Exit() que hace ayuda_panel.py tras un aplicar_actualizacion()
+   exitoso.
+8. Verificado, los TRES resultados esperados ocurrieron:
+   - El archivo marcador apareció en la carpeta de la app (la
+     extracción del zip ocurrió recién después de confirmar, vía
+     tasklist, que el PID original ya no seguía vivo — no antes).
+   - El .zip descargado se borró solo después de aplicarse
+     (ruta_zip.unlink() en actualizar_app.py).
+   - GestorDeCredito.exe se relanzó solo, con un PID nuevo, desde la
+     ruta correcta.
+9. Limpieza: se mató el proceso relanzado al terminar la prueba. No
+   quedaron procesos colgados. La carpeta de prueba queda en el
+   scratchpad de la sesión (temporal, no en el proyecto ni en git).
+
+CONCLUSIÓN: el ciclo completo cerrar→extraer→relanzar de
+aplicar_actualizacion()/actualizar_app.py está verificado
+empíricamente de punta a punta, con ejecutables reales, en la máquina
+real del usuario — mismo nivel de confianza que el resto de las
+funciones "verificadas empíricamente" de este proyecto. Lo único que
+esta prueba NO cubrió (porque no hacía falta): el flujo real de la UI
+haciendo clic en "Actualizar ahora" en Ayuda, y una descarga real vía
+verificar_actualizacion()/descargar_actualizacion() encadenada
+directo con este mismo ciclo (esas dos mitades — red+checksum, y
+cerrar+extraer+relanzar — YA se probaron cada una por separado y con
+éxito, solo nunca las dos concatenadas en una sola corrida real).
+
+=========================================================================
+9. REPOSITORIO DE PRUEBA BORRADO (2026-08-19, sesión 3) — PENDIENTE
+   REAL: DECIDIR LA LICENCIA ANTES DE PUBLICAR NADA
+=========================================================================
+El usuario pidió explícitamente borrar el repositorio de prueba
+(javyx21/gestor-de-credito) antes de subir nada más, porque falta
+validar qué licencia se le va a poner. Se hizo así:
+
+1. El primer intento de `gh repo delete` falló: el token de gh auth NO
+   tenía el scope 'delete_repo' (solo tenía 'repo', que no alcanza
+   para borrar). Hizo falta que el usuario mismo corriera
+   `gh auth refresh -h github.com -s delete_repo` (paso interactivo
+   con navegador, no se puede hacer desde Claude Code).
+2. Confirmado el nuevo scope con `gh auth status`, se corrió
+   `gh repo delete javyx21/gestor-de-credito --yes` — éxito.
+3. Verificado con `gh repo view javyx21/gestor-de-credito` que ya no
+   existe (error "Could not resolve to a Repository").
+4. Se revirtió URL_VERSION_JSON en actualizador.py a "" otra vez (con
+   un comentario explicando por qué está vacía y qué falta antes de
+   volver a llenarla) — dejarla apuntando a un repositorio borrado
+   sería peor que dejarla vacía (fallaría con un error de red confuso
+   en vez del RuntimeError claro y ya probado de "no hay URL
+   configurada"). No hizo falta tocar tests/test_actualizador.py de
+   nuevo (el test que ya usa monkeypatch para forzar URL_VERSION_JSON
+   vacía sigue funcionando igual). 277 tests, todos en verde.
+5. CLAUDE.md actualizado para reflejar esto: la sección "Actualizaciones
+   automáticas" ya no afirma que hay un repositorio real vivo, y deja
+   explícito que la licencia es el próximo paso, no la infraestructura
+   (que ya está probada y lista para reactivarse en cuanto haya un
+   repositorio definitivo).
+
+===========================================================================
+10. LO QUE REALMENTE QUEDA PENDIENTE
+===========================================================================
+- *** DECIDIR LA LICENCIA *** que se le va a poner al contenido
+  publicado (el repositorio en sí y/o los archivos .zip/version.json
+  que contendría) — esto es lo que bloquea todo lo demás, según pidió
+  el usuario explícitamente. Sin esto resuelto, no crear ningún
+  repositorio nuevo ni republicar nada.
+- Una vez resuelta la licencia: recrear el repositorio (mismo nombre u
+  otro, público según la razón ya confirmada de que un repo privado
+  rompe el GET anónimo — ver sección 1), y repetir el release de
+  prueba si se quiere revalidar, o ir directo a un release real.
+- Publicar un release REAL (no uno de prueba) con VERSION subida a
+  mano en gestor_credito/version.py, el .zip del build --onedir real
+  (SIN GestorDeCredito_Updater.exe adentro, ver sección 6) y un asset
+  "version.json" apuntando a ese zip real.
+- Pegar de nuevo la URL estable (.../releases/latest/download/
+  version.json) en URL_VERSION_JSON dentro de actualizador.py, ya con
+  el repositorio definitivo.
+- Si se quiere, probar el flujo completo desde la UI real (clic en
+  Ayuda → Buscar actualizaciones → Actualizar ahora) en vez de
+  invocar las funciones/el updater directamente — no es estrictamente
+  necesario dado que cada pieza ya se validó por separado (ver sección
+  8), pero sería la validación más parecida a cómo lo va a usar el
+  usuario real.
+
+===========================================================================
+6. COSAS A NO OLVIDAR
+===========================================================================
+- El .zip de cada release REAL (a diferencia del de prueba) debe excluir
+  GestorDeCredito_Updater.exe — ver CLAUDE.md, se sobrescribiría a sí
+  mismo mientras está corriendo.
+- VERSION en gestor_credito/version.py se sube A MANO antes de cada
+  release real (no hay CI que lo haga solo).
+- Nada de esto está commiteado a git todavía — confirmar con el usuario
+  cuándo commitear.

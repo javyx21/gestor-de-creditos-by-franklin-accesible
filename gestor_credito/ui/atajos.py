@@ -207,6 +207,19 @@ ATAJOS = [
         None,
     ),
     (
+        None, None, "Alt+B (en Ayuda)", "Ayuda",
+        "Buscar actualizaciones disponibles (compara la versión instalada contra la "
+        "publicada en el link de descarga configurado)",
+        None,
+    ),
+    (
+        None, None, "Alt+A (en Ayuda)", "Ayuda",
+        "Descargar, verificar y aplicar la actualización encontrada — cierra la "
+        "aplicación para instalarla y la vuelve a abrir sola. Solo se habilita "
+        "después de que \"Buscar actualizaciones\" encuentre una versión más nueva",
+        None,
+    ),
+    (
         None, None, "Ctrl+Tab / Ctrl+Shift+Tab", "Calculadora",
         "Alternar entre las pestañas Casos, Calculadora de Crédito e Historial de "
         "Créditos, en orden (adelante/atrás) — todas son pestañas de primer nivel, "

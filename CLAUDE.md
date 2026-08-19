@@ -1414,6 +1414,144 @@ name via `anunciar_voz_nvda`) — switching via Ctrl+1/2/3 goes through the exac
 a mouse click or Ctrl+Tab, so it stays automatically in sync with whatever that handler does, now or
 later.
 
+## Actualizaciones automáticas
+
+A fourth, independent module (2026-08-19): lets the user (the developer/agente who publishes new
+builds, not an end client) check for and install a newer packaged version from inside the running
+app, instead of manually rebuilding and re-copying the pendrive folder by hand.
+
+**Explicit design decisions, all confirmed with the user before building this**:
+- **Distribution mechanism is a plain HTTPS direct-download link, not a synced folder.** The
+  office PC where this app runs has no personal OneDrive/Google Drive account signed in, by the
+  user's own explicit choice ("no tengo mis cuentas personales en la empresa y no pienso poner
+  nada personal en la PC de la oficina") — so the app only ever does an anonymous `GET` to a
+  public URL, it never authenticates against any cloud account. There's no need for the app to
+  proactively notice on its own, since the user is also the one publishing every update and
+  always knows when a new version exists.
+- **Hosting: GitHub Releases**, not OneDrive/Google Drive as first considered. Google Drive was
+  tried first and rejected — it shows an interstitial "no se pudo escanear en busca de virus"
+  page for larger files instead of a clean direct download, which would break the simple
+  anonymous-`GET` design. A test repo (`javyx21/gestor-de-credito`, public) was created 2026-08-19
+  to validate this end-to-end — **and deleted the same day, at the user's explicit request**: before
+  publishing anything for real, the license to attach to that repo/its released content still needs
+  to be decided. Don't recreate it or assume a name/visibility until that's settled — the earlier
+  "public, since a private repo's release assets aren't downloadable via a plain anonymous `GET`
+  without a token" reasoning still holds and should carry over, but the license question is a
+  separate, still-open decision, not resolved by that repo having existed once already.
+- **`URL_VERSION_JSON` (in `actualizador.py`) is deliberately empty again**, pending the above. The
+  intended design — confirmed to work, not just planned — is GitHub's stable "latest" alias:
+  `.../releases/latest/download/version.json` always resolves to the `version.json` asset of
+  whichever release is currently marked "latest", so once the real repo exists, **no code change is
+  needed on future releases**, as long as every real release (a) includes an asset named exactly
+  `version.json` (not `version_prueba.json` or any other variant) and (b) isn't published with
+  `--prerelease` (which would keep it from becoming "latest"). This whole mechanism, plus the
+  network/checksum download and the close/extract/relaunch cycle, were already verified
+  end-to-end with real executables against that now-deleted test repo (2026-08-19) — see
+  `recursos/actualización por franklin accesible.txt` for the full trace. Re-verify against
+  whatever repo ends up being the real one once the license question is settled and it's created —
+  don't assume the old test repo's exact URL still applies.
+- **Checksum (SHA256) + HTTPS is the full integrity/security model** — explicitly confirmed
+  sufficient by the user, no code signing or additional auth layer.
+- **UI lives in the Ayuda dialog, not Configuración** — explicit user correction after the first
+  proposal (which put it in Configuración, alongside the bitácora/reporte importers): "esto es
+  una función... no como una configuración... en ayuda estaría buscar actualizaciones." The
+  reasoning that emerged from that correction: unlike Configuración's contents (agente, import,
+  tasas — things you set once and leave), checking for updates is a quick, occasional lookup, closer
+  in spirit to glancing at the keyboard-shortcut list than to configuring something — so it shares
+  `AyudaPanel`'s screen instead of adding a fourth category to Configuración's tree.
+- **Two separate buttons, not one combined action** — explicit user choice among three options
+  presented. "Buscar actualizaciones" only checks and reports (never downloads); "Actualizar
+  ahora" (disabled until a check finds a newer version, same enable-gating pattern as
+  `guardar_btn`/`importar_btn` elsewhere in this app) does download+verify+apply+restart in one
+  go. The click on "Actualizar ahora" itself **is** the confirmation — no extra `wx.MessageBox`
+  "¿estás seguro?" on top of it, since the two-step button flow already makes the action
+  deliberate.
+
+**Module layout** (`gestor_credito/actualizador/actualizador.py`, no DB/UI dependency — same
+separation-of-concerns principle as `calculo/`/`export/`):
+- `VERSION` lives in `gestor_credito/version.py`, a single source of truth bumped by hand before
+  each release (there's no CI/tagging pipeline generating it).
+- `URL_VERSION_JSON` (top of `actualizador.py`) is **empty again** — see the licensing note above.
+  It's meant to hold the stable GitHub "latest release" link once the real repo exists, pointing at
+  a small `version.json` (`{"version": "...", "url": "...", "sha256": "..."}`) that must get
+  uploaded, named exactly `version.json`, to every real release going forward.
+  `verificar_actualizacion()` raises a clear `RuntimeError` if this constant (or an explicit
+  override passed in) is blank, rather than trying to hit `""` as a URL — exercised in tests via
+  `monkeypatch.setattr(actualizador, "URL_VERSION_JSON", "")`.
+- `verificar_actualizacion()` — `GET`s `version.json`, compares against `VERSION` (plain
+  dotted-integer tuple comparison, e.g. `(1, 2, 0) > (1, 1, 9)`), returns an
+  `ActualizacionDisponible` or `None`.
+- `descargar_actualizacion()` — downloads the `.zip` via `urllib.request.urlretrieve`, computes its
+  SHA256, and raises (deleting the partial file) if it doesn't match `sha256` from `version.json`.
+- `aplicar_actualizacion()` — launches the external updater process (see below) and returns; it
+  does **not** close the app itself (this module has no wx dependency, same reason `calculo/`
+  doesn't reach into the UI) — that's `ayuda_panel.py`'s job, right after this returns
+  successfully.
+- Every network/JSON/checksum failure is caught and re-raised as a plain-Spanish `RuntimeError`,
+  same pattern already used by `excel_importer.py`/`reporte_creditos_importer.py` for their own
+  failure modes — `ayuda_panel.py` shows it via `wx.MessageBox` (this app's established exception
+  to "no popups," since a failed check/download with no other UI feedback is exactly the kind of
+  outcome NVDA would otherwise never announce).
+
+**Why a separate external process is unavoidable**: a running `.exe` cannot overwrite its own
+files on Windows. `aplicar_actualizacion()` launches `GestorDeCredito_Updater.exe` (passed this
+process's PID, the downloaded `.zip`, the app folder, and the main `.exe`'s path), then
+`ayuda_panel.py` calls `wx.Exit()` to close immediately (an intentional "emergency" exit — nothing
+else is running in-process by that point, so there's nothing to clean up). The updater
+(`updater/actualizar_app.py`, stdlib-only — no `gestor_credito` import) polls `tasklist` until the
+main process's PID is confirmed gone, extracts the `.zip` over the app folder, and relaunches the
+main `.exe`.
+
+**The updater is packaged separately, `--onefile`, not folded into the main `--onedir` build** —
+see Empaquetado below. A `--onefile` build's slower startup doesn't matter for something invoked
+rarely and briefly; what matters is that it doesn't need its own `_internal/` support folder
+sitting alongside (and potentially colliding with) the main app's. **Whoever prepares an update
+`.zip` must exclude `GestorDeCredito_Updater.exe` from it** — the updater is running from that
+exact file while it extracts the archive, and Windows would refuse to let it overwrite itself,
+the identical problem this whole external-process design exists to avoid for the main `.exe`. The
+updater binary itself is expected to change rarely, if ever, and isn't part of the normal update
+payload.
+
+**Network + checksum half was verified end-to-end (2026-08-19), against a real but now-deleted test
+repo**: a test release (`v9.9.9-prueba`, deliberately a higher version than `VERSION` so it always
+shows "update available") was published to that repo, and `verificar_actualizacion()` +
+`descargar_actualizacion()` were run directly against it from Python (not mocked) — both the
+version comparison and the SHA256-verified download of the real `.zip` asset succeeded. **That test
+repo was deleted the same day** at the user's request, pending the license decision (see above) —
+so this mechanism is proven to work, but there's currently nothing live for `URL_VERSION_JSON` to
+point at until a real repo (with its license settled) replaces it. See `recursos/actualización
+por franklin accesible.txt` for the exact commands used and what's still open.
+
+**Close/extract/relaunch cycle also verified end-to-end (2026-08-19)**, with real PyInstaller
+builds of both executables. Correction to an earlier assumption: this had been thought impossible
+"from this environment" — that was never actually checked; this environment runs directly on the
+user's real Windows machine (not a separate sandbox), with PyInstaller already installed, so real
+builds and real process management were both possible without needing any desktop-automation tool.
+**One real build gotcha hit and worked around**: building straight into the project's `dist/`
+(inside the OneDrive-synced folder) failed with `PermissionError` deleting old build output —
+OneDrive held a lock on files mid-sync, the same class of problem already documented for
+`calculadora.xlsx` under Excel COM testing above. Fixed by pointing `--distpath`/`--workpath`/
+`--specpath` outside the OneDrive folder for the build; if this recurs when building normally in
+the future, pause OneDrive sync first or build outside the synced folder and copy the result in.
+The verification itself: launched the real compiled `GestorDeCredito.exe` to get a genuine PID,
+invoked `GestorDeCredito_Updater.exe` directly with the exact 4 arguments
+`aplicar_actualizacion()` constructs (couldn't call `aplicar_actualizacion()` itself outside a
+frozen build, since it requires `sys.frozen`), then killed that PID to simulate `wx.Exit()`. All
+three expected outcomes held: the updater only extracted the zip after confirming via `tasklist`
+that the original PID was actually gone (not before), the zip was deleted after being applied, and
+`GestorDeCredito.exe` relaunched on its own with a new PID from the correct path. Test process
+cleaned up afterward, nothing left running. See `recursos/actualización por franklin accesible.txt`
+section 8 for the full step-by-step. **Not covered by this pass** (not needed, since each half was
+already validated separately): the two halves — network+checksum download, and close+extract+
+relaunch — were verified independently, never chained together in one single real run driven from
+the actual Ayuda UI buttons; that's the one remaining "closest to how the real user will use it"
+check, listed as still-open in that same file. What's covered by the automated suite:
+`tests/test_actualizador.py` (network/checksum/version-comparison logic, all network calls mocked,
+plus the real-network case validated manually outside the test suite) and `tests/test_ayuda_panel.py`
+(the button flow/state gating, with `verificar_actualizacion`/`descargar_actualizacion`/
+`aplicar_actualizacion` mocked at the `ayuda_panel` import site and `ejecutar_en_segundo_plano`
+forced synchronous, same pattern as `tests/test_creditos_panel.py`).
+
 ## Commands
 
 ```
@@ -1448,13 +1586,30 @@ different machine on a pendrive. Don't revert that check to a plain
 `Path(__file__)`-relative path; it would silently break portability. Build
 artifacts (`build/`, `dist/`, `*.spec`) are git-ignored.
 
+A second, separate build produces the external updater (see Actualizaciones automáticas above) —
+run once, its output copied into the same `dist/GestorDeCredito/` folder as the main build above:
+
+```
+pyinstaller --name "GestorDeCredito_Updater" --onefile --noconfirm updater/actualizar_app.py
+copy dist\GestorDeCredito_Updater\GestorDeCredito_Updater.exe dist\GestorDeCredito\
+```
+
+`--onefile` here on purpose, unlike the main app's `--onedir` — see Actualizaciones automáticas
+above for why. **When zipping up a new release to publish, exclude
+`GestorDeCredito_Updater.exe`** from that `.zip` — only the main app's files change per release.
+
 ## Architecture
 
 ```
 main.py                        # entry point, calls gestor_credito.app.main()
+updater/
+  actualizar_app.py             # external updater process, stdlib-only, built --onefile separately
 gestor_credito/
   app.py                       # wx.App subclass, creates the main frame
+  version.py                    # VERSION constant, bumped by hand before each release
   catalogos.py                  # fixed value lists from 02_Catalogos (Estado Solicitud, Etapa Proceso)
+  actualizador/
+    actualizador.py              # verificar_actualizacion/descargar_actualizacion/aplicar_actualizacion — see Actualizaciones automáticas above
   assets/
     logo.png                     # real logo, 2048x2048px — AppLogo scales it down for display
     sonidos/                      # .wav alert sounds, supplied by the user (not generated by Claude)
@@ -1481,7 +1636,8 @@ gestor_credito/
     creditos_panel.py               # "Historial de Créditos" tab — see that section above
     notificaciones_panel.py         # Notificaciones dialog (alert list, see Alerts/workflow)
     configuracion_panel.py          # Configuración dialog (agente actual + importar Excel de bitácora/reporte)
-    ayuda_panel.py                  # Ayuda dialog (keyboard shortcut reference, from atajos.py)
+    ayuda_panel.py                  # Ayuda dialog (keyboard shortcut reference, from atajos.py; also hosts
+                                       # Buscar actualizaciones/Actualizar ahora, see Actualizaciones automáticas above)
   db/
     database.py                  # sqlite3 connection + schema management
     casos.py                      # queries/updates for the caso entity (search, filter, edit)
