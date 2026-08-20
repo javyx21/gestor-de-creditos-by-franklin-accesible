@@ -183,27 +183,21 @@ def _disparar(boton):
     boton.Command(wx.CommandEvent(wx.EVT_BUTTON.typeId, boton.GetId()))
 
 
-def test_instalar_flujo_completo_cierra_la_app(parent, monkeypatch):
-    # Bug real reproducido en vivo (2026-08-20): llamar wx.Exit() directo
-    # desde este handler, sin cerrar antes el diálogo modal en el que corre,
-    # dejaba el proceso colgado para siempre (nunca cerraba). Fix: EndModal()
-    # primero, wx.Exit() diferido con wx.CallAfter — en una prueba headless
-    # sin MainLoop real, wx.CallAfter no ejecuta nada por su cuenta, así que
-    # se monkeypatchea para que corra inmediato, igual que ya se hace en
-    # otras partes de la app con mecanismos diferidos de wx (ver
-    # ejecutar_en_segundo_plano en tests/test_creditos_panel.py).
-    monkeypatch.setattr(wx, "CallAfter", lambda fn, *a, **k: fn(*a, **k))
+def test_instalar_flujo_completo_termina_el_proceso(parent, monkeypatch):
+    # Bug real reproducido en vivo DOS VECES (2026-08-20): ni wx.Exit()
+    # directo, ni un primer intento de fix con EndModal() + wx.Exit()
+    # diferido por wx.CallAfter, cerraban el proceso de verdad — quedaba
+    # colgado indefinidamente en algún nivel de los varios bucles
+    # modales/CallAfter anidados que llevan hasta acá (ver el comentario
+    # extenso en actualizacion_dialog.py). Fix definitivo: os._exit(0),
+    # que no depende de wx ni de ningún bucle de eventos. Monkeypatchear
+    # os._exit acá es OBLIGATORIO — la versión real termina el proceso de
+    # pytest mismo si llega a ejecutarse de verdad.
+    codigos_salida = []
+    monkeypatch.setattr(modulo.os, "_exit", lambda codigo: codigos_salida.append(codigo))
 
     disponible = ActualizacionDisponible(version="9.9.9", url_descarga="https://x", sha256="abc")
     dialogo = ActualizacionDisponibleDialog(parent, disponible)
-    # EndModal() exige que el diálogo esté realmente en curso vía ShowModal()
-    # (wx lanza wxAssertionError si no) — en el uso real siempre lo está,
-    # porque el botón Instalar no existe hasta que buscar_actualizaciones()
-    # ya lo mostró modal. Acá se monkeypatchea para poder probar la cadena
-    # completa de llamadas sin bloquear la prueba con un ShowModal() real
-    # (ese orden específico, EndModal antes que Exit, ya queda blindado
-    # aparte en test_instalar_cierra_el_modal_antes_de_salir).
-    monkeypatch.setattr(dialogo, "EndModal", lambda codigo: None)
 
     descargas = []
     monkeypatch.setattr(
@@ -212,8 +206,6 @@ def test_instalar_flujo_completo_cierra_la_app(parent, monkeypatch):
     )
     aplicaciones = []
     monkeypatch.setattr(modulo, "aplicar_actualizacion", lambda ruta_zip: aplicaciones.append(ruta_zip))
-    salidas = []
-    monkeypatch.setattr(wx, "Exit", lambda: salidas.append(1))
 
     _disparar(dialogo.instalar_btn)
 
@@ -221,29 +213,7 @@ def test_instalar_flujo_completo_cierra_la_app(parent, monkeypatch):
     assert descargas[0][0] == "https://x"
     assert descargas[0][1] == "abc"
     assert len(aplicaciones) == 1
-    assert salidas == [1]
-    dialogo.Destroy()
-
-
-def test_instalar_cierra_el_modal_antes_de_salir(parent, monkeypatch):
-    # Blinda específicamente el orden del fix: EndModal() tiene que ocurrir
-    # ANTES que wx.Exit() — llamarlos al revés (o solo wx.Exit(), como hacía
-    # la versión con el bug) es precisamente lo que dejaba el proceso
-    # colgado para siempre en el uso real.
-    orden = []
-    monkeypatch.setattr(wx, "CallAfter", lambda fn, *a, **k: (orden.append("CallAfter"), fn(*a, **k)))
-
-    disponible = ActualizacionDisponible(version="9.9.9", url_descarga="https://x", sha256="abc")
-    dialogo = ActualizacionDisponibleDialog(parent, disponible)
-
-    monkeypatch.setattr(modulo, "descargar_actualizacion", lambda url, sha256, destino: None)
-    monkeypatch.setattr(modulo, "aplicar_actualizacion", lambda ruta_zip: None)
-    monkeypatch.setattr(dialogo, "EndModal", lambda codigo: orden.append("EndModal"))
-    monkeypatch.setattr(wx, "Exit", lambda: orden.append("Exit"))
-
-    _disparar(dialogo.instalar_btn)
-
-    assert orden == ["EndModal", "CallAfter", "Exit"]
+    assert codigos_salida == [0]
     dialogo.Destroy()
 
 

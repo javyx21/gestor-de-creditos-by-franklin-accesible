@@ -1,3 +1,4 @@
+import os
 import tempfile
 from pathlib import Path
 
@@ -113,27 +114,31 @@ class ActualizacionDisponibleDialog(wx.Dialog):
         # pueda seguir hablando.
         anunciar_voz_nvda("Actualización descargada. Cerrando la aplicación para aplicarla.")
 
-        # Bug real reportado por el usuario (2026-08-20), reproducido en vivo:
-        # llamar wx.Exit() DIRECTO acá nunca cerraba el proceso — este
-        # handler corre dentro del bucle modal propio de ShowModal() (llega
-        # vía wx.CallAfter desde el hilo de descarga, que el bucle modal
-        # también bombea), y forzar wx.Exit() sin haber cerrado antes ese
-        # modal deja el bucle nativo de Windows esperando algo que la salida
-        # de emergencia ya destruyó — el proceso queda colgado para siempre,
-        # sin cerrar ni actualizar. Confirmado con un cronómetro real: el PID
-        # seguía vivo pasados los 30s de espera del actualizador externo, que
-        # entonces abortaba (correcto, no corrompía nada) y relanzaba una
-        # SEGUNDA copia de la app — quedando dos procesos corriendo a la vez,
-        # exactamente lo que reportó el usuario.
+        # Bug real reportado por el usuario (2026-08-20), reproducido en vivo
+        # DOS VECES: la primera con wx.Exit() directo, la segunda con un
+        # primer intento de fix (EndModal() + wx.Exit() diferido con
+        # wx.CallAfter) — ninguna de las dos cerraba el proceso de verdad.
+        # Este handler corre anidado varios niveles de profundidad dentro de
+        # bucles modales/CallAfter (ShowModal() de buscar_actualizaciones(),
+        # a su vez invocado desde OTRO wx.CallAfter del hilo de "Buscar
+        # actualizaciones", más el propio CallAfter del hilo de descarga) —
+        # confirmado en vivo con un cronómetro real que ese anidamiento hace
+        # que un wx.CallAfter programado acá adentro puede no llegar a
+        # entregarse nunca en el bucle de eventos externo, sin importar
+        # cuántas capas de EndModal/Destroy se intenten desenredar antes.
         #
-        # Fix: EndModal() primero (la forma correcta de cerrar un diálogo
-        # modal desde su propio handler — deja que ShowModal() en
-        # buscar_actualizaciones() retorne y destruya el diálogo con
-        # normalidad) y wx.Exit() recién DESPUÉS, diferido con wx.CallAfter
-        # para que corra una vez que el bucle modal ya terminó de
-        # desenrollarse, no desde adentro.
-        self.EndModal(wx.ID_OK)
-        wx.CallAfter(wx.Exit)
+        # Fix definitivo: en vez de pedirle a wx que cierre "con educación"
+        # (con el riesgo real de quedar colgado en algún bucle anidado que
+        # nunca vuelve a la superficie), se termina el proceso a nivel del
+        # sistema operativo con os._exit() — no depende de wx, de ningún
+        # bucle de eventos, ni de que ningún CallAfter se entregue. Es
+        # exactamente lo que este momento necesita: el actualizador externo
+        # ya está lanzado y esperando a que este PID desaparezca, así que no
+        # hace falta ningún cierre "prolijo" de wx — el proceso completo
+        # (con la ventana modal y todo) simplemente deja de existir. Ya no
+        # hace falta EndModal() tampoco: si el proceso entero muere, no
+        # importa si el diálogo seguía técnicamente "abierto".
+        os._exit(0)
 
 
 def buscar_actualizaciones(parent, al_completar):
