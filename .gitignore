@@ -14,6 +14,14 @@ dist/
 *.spec
 
 # Datos reales de clientes (nombres, cédulas) — nunca deben ir al repositorio.
+# Regla general: NINGÚN archivo Excel (de cualquier nombre, en cualquier carpeta)
+# debe subirse jamás, ya que suelen contener datos reales de clientes.
+*.xlsx
+*.xls
+*.xlsm
+
+# Entradas explícitas anteriores (redundantes con las reglas de arriba, se
+# dejan por historial/claridad — no hace falta agregar nuevas aquí).
 MachoteBaseDeDatos.xlsx
 recursos/calculadora.xlsx
 recursos/reporte.xlsx
