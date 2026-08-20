@@ -2,6 +2,7 @@ import wx
 
 from gestor_credito.db.database import init_db
 from gestor_credito.ui.accesibilidad import anunciar_texto_estado, anunciar_voz_nvda, nombre_accesible
+from gestor_credito.ui.actualizacion_dialog import buscar_actualizaciones, mostrar_informacion_version
 from gestor_credito.ui.atajos import ATAJOS
 from gestor_credito.ui.ayuda_panel import AyudaPanel
 from gestor_credito.ui.calculadora_panel import CalculadoraPanel
@@ -121,6 +122,15 @@ class MainFrame(wx.Frame):
         sizer.Add(self.notebook, 1, wx.EXPAND)
         self.SetSizer(sizer)
 
+        # Estado de "Ayuda > Actualizaciones > Información sobre la versión"
+        # (ver actualizacion_dialog.py): _ultima_busqueda_realizada distingue
+        # "todavía no se buscó nada en esta sesión" de "se buscó y ya estaba
+        # actualizado" — ambos casos dejarían _ultima_actualizacion_encontrada
+        # en None por igual, así que hace falta un segundo booleano para no
+        # confundirlos.
+        self._ultima_busqueda_actualizacion_realizada = False
+        self._ultima_actualizacion_encontrada = None
+
         self._crear_menu()
         self._crear_atajos()
 
@@ -189,6 +199,19 @@ class MainFrame(wx.Frame):
         menu_ayuda = wx.Menu()
         item_atajos = menu_ayuda.Append(wx.ID_ANY, "&Atajos de teclado...")
         self.Bind(wx.EVT_MENU, self._on_abrir_ayuda, item_atajos)
+
+        # Submenú nativo, no un panel ni un árbol dentro de un diálogo — ver
+        # gestor_credito/ui/actualizacion_dialog.py para la historia completa
+        # de por qué (pedido explícito del usuario, 2026-08-20). "c" como
+        # mnemónico de "Actualizaciones" (no "a", que ya usa "Atajos" en este
+        # mismo menú).
+        submenu_actualizaciones = wx.Menu()
+        item_buscar_actualizaciones = submenu_actualizaciones.Append(wx.ID_ANY, "&Buscar actualizaciones")
+        self.Bind(wx.EVT_MENU, self._on_buscar_actualizaciones, item_buscar_actualizaciones)
+        item_info_version = submenu_actualizaciones.Append(wx.ID_ANY, "&Información sobre la versión")
+        self.Bind(wx.EVT_MENU, self._on_informacion_version, item_info_version)
+        menu_ayuda.AppendSubMenu(submenu_actualizaciones, "A&ctualizaciones")
+
         menu_bar.Append(menu_ayuda, "A&yuda")
 
         self.SetMenuBar(menu_bar)
@@ -343,6 +366,18 @@ class MainFrame(wx.Frame):
 
     def _on_abrir_ayuda(self, event):
         self._abrir_dialogo("Ayuda", AyudaPanel)
+
+    def _on_buscar_actualizaciones(self, event):
+        def al_completar(valor):
+            self._ultima_busqueda_actualizacion_realizada = True
+            self._ultima_actualizacion_encontrada = valor
+
+        buscar_actualizaciones(self, al_completar)
+
+    def _on_informacion_version(self, event):
+        mostrar_informacion_version(
+            self, self._ultima_busqueda_actualizacion_realizada, self._ultima_actualizacion_encontrada
+        )
 
     def _abrir_dialogo(self, titulo, panel_cls, size=(760, 560)):
         with _PanelDialog(self, titulo, panel_cls, size=size) as dialogo:

@@ -194,3 +194,42 @@ def test_ctrl_1_repetido_en_casos_no_falla(frame):
     _ir_a_pestana(frame, frame.casos_panel)
     frame._ir_a_casos()
     assert frame.notebook.GetCurrentPage() is frame.casos_panel
+
+
+# ---- Ayuda > Actualizaciones (submenú nativo, 2026-08-20) -------------------
+# Ver gestor_credito/ui/actualizacion_dialog.py: MainFrame solo guarda el
+# estado de la última búsqueda (para que "Información sobre la versión" no
+# tenga que volver a golpear la red) y delega toda la lógica real ahí.
+
+
+def test_estado_inicial_de_actualizaciones_no_verificado(frame):
+    assert frame._ultima_busqueda_actualizacion_realizada is False
+    assert frame._ultima_actualizacion_encontrada is None
+
+
+def test_buscar_actualizaciones_actualiza_el_estado_guardado(frame, monkeypatch):
+    from gestor_credito.actualizador.actualizador import ActualizacionDisponible
+
+    disponible = ActualizacionDisponible(version="9.9.9", url_descarga="https://x", sha256="abc")
+
+    def _buscar_falso(parent, al_completar):
+        al_completar(disponible)
+
+    monkeypatch.setattr("gestor_credito.ui.main_frame.buscar_actualizaciones", _buscar_falso)
+
+    frame._on_buscar_actualizaciones(None)
+
+    assert frame._ultima_busqueda_actualizacion_realizada is True
+    assert frame._ultima_actualizacion_encontrada is disponible
+
+
+def test_informacion_version_usa_el_estado_guardado(frame, monkeypatch):
+    llamadas = []
+    monkeypatch.setattr(
+        "gestor_credito.ui.main_frame.mostrar_informacion_version",
+        lambda parent, realizada, encontrada: llamadas.append((parent, realizada, encontrada)),
+    )
+
+    frame._on_informacion_version(None)
+
+    assert llamadas == [(frame, False, None)]

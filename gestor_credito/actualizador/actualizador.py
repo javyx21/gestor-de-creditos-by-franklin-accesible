@@ -10,19 +10,26 @@ from pathlib import Path
 
 from gestor_credito.version import VERSION
 
-# URL ESTABLE de GitHub Releases: cuando exista el repositorio definitivo,
-# esto debe apuntar a .../releases/latest/download/version.json — ese alias
+# URL ESTABLE de GitHub Releases: .../releases/latest/download/version.json
 # siempre resuelve al asset "version.json" del release marcado "latest", así
 # que NO hace falta editar este link en cada release nuevo (requisito: cada
 # release real debe incluir un asset con el nombre EXACTO "version.json" y no
-# publicarse con --prerelease). Mecanismo ya verificado de punta a punta
-# contra un repositorio de prueba real el 2026-08-19 — ver
-# "recursos/actualización por franklin accesible.txt". Ese repositorio de
-# prueba (javyx21/gestor-de-credito) se BORRÓ el mismo día, a pedido del
-# usuario, porque falta validar qué licencia se le va a poner al contenido
-# antes de volver a publicar nada — dejar VACÍO hasta que se cree el
-# repositorio definitivo con la licencia ya decidida.
-URL_VERSION_JSON = ""
+# publicarse con --prerelease).
+#
+# Repositorio DEFINITIVO (2026-08-20, una vez resuelta la licencia — ver
+# LICENSE en la raíz del proyecto): javyx21/gestor-de-credito-releases,
+# público, dedicado SOLO a releases (sin código fuente) — separado a
+# propósito del repo del código (gestor-de-creditos-by-franklin-accesible),
+# decisión explícita del usuario al elegir entre reusar ese repo o crear uno
+# nuevo. v1.0.0 ya está publicado ahí (zip + version.json) y
+# verificar_actualizacion() se probó de punta a punta contra este link real,
+# no mockeado, el mismo día. El repositorio de PRUEBA anterior
+# (javyx21/gestor-de-credito, usado el 2026-08-19) se había borrado a pedido
+# del usuario, pendiente justo de esta decisión de licencia/repositorio —
+# ya no aplica, no confundir los dos nombres si aparecen en historial viejo.
+URL_VERSION_JSON = (
+    "https://github.com/javyx21/gestor-de-credito-releases/releases/latest/download/version.json"
+)
 
 NOMBRE_UPDATER = "GestorDeCredito_Updater.exe"
 
@@ -32,6 +39,13 @@ class ActualizacionDisponible:
     version: str
     url_descarga: str
     sha256: str
+    # Changelog/novedades de la versión remota, en texto plano — a diferencia
+    # de version/url/sha256, este campo es OPCIONAL en el version.json (no
+    # todo release necesita traer notas), así que nunca hace fallar
+    # verificar_actualizacion() si falta; queda "" por defecto. Mostrado en
+    # Ayuda > Actualizaciones (ver ayuda_panel.py) para que el usuario sepa
+    # qué trae la nueva versión antes de decidir actualizar.
+    notas: str = ""
 
 
 def _partes_version(texto):
@@ -80,7 +94,10 @@ def verificar_actualizacion(url_version_json=None):
 
     if not es_mas_nueva:
         return None
-    return ActualizacionDisponible(version=version_remota, url_descarga=url_descarga, sha256=sha256)
+    notas = datos.get("notas") or ""
+    return ActualizacionDisponible(
+        version=version_remota, url_descarga=url_descarga, sha256=sha256, notas=notas
+    )
 
 
 def _calcular_sha256(ruta):

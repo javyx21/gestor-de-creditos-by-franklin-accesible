@@ -21,8 +21,11 @@ class _RespuestaFalsa:
         return self._contenido
 
 
-def _version_json(version="1.5.0", url="https://ejemplo.invalido/app.zip", sha256="abc123"):
-    return json.dumps({"version": version, "url": url, "sha256": sha256}).encode("utf-8")
+def _version_json(version="1.5.0", url="https://ejemplo.invalido/app.zip", sha256="abc123", notas=None):
+    datos = {"version": version, "url": url, "sha256": sha256}
+    if notas is not None:
+        datos["notas"] = notas
+    return json.dumps(datos).encode("utf-8")
 
 
 # ---- verificar_actualizacion ----------------------------------------------
@@ -40,6 +43,32 @@ def test_verificar_actualizacion_encuentra_version_mas_nueva(monkeypatch):
     assert resultado.version == "9.9.9"
     assert resultado.url_descarga == "https://ejemplo.invalido/app.zip"
     assert resultado.sha256 == "abc123"
+
+
+def test_verificar_actualizacion_incluye_las_notas_de_la_version(monkeypatch):
+    monkeypatch.setattr(
+        actualizador.urllib.request, "urlopen",
+        lambda url, timeout=10: _RespuestaFalsa(
+            _version_json(version="9.9.9", notas="- Corrige tal cosa\n- Agrega tal otra")
+        ),
+    )
+
+    resultado = actualizador.verificar_actualizacion("https://ejemplo.invalido/version.json")
+
+    assert resultado.notas == "- Corrige tal cosa\n- Agrega tal otra"
+
+
+def test_verificar_actualizacion_sin_notas_queda_en_texto_vacio(monkeypatch):
+    # "notas" es opcional en el version.json remoto (a diferencia de
+    # version/url/sha256) — su ausencia no debe hacer fallar la verificación.
+    monkeypatch.setattr(
+        actualizador.urllib.request, "urlopen",
+        lambda url, timeout=10: _RespuestaFalsa(_version_json(version="9.9.9")),
+    )
+
+    resultado = actualizador.verificar_actualizacion("https://ejemplo.invalido/version.json")
+
+    assert resultado.notas == ""
 
 
 def test_verificar_actualizacion_ya_esta_actualizado(monkeypatch):

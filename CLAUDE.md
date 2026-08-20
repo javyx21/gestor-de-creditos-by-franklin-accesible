@@ -1432,52 +1432,92 @@ app, instead of manually rebuilding and re-copying the pendrive folder by hand.
   tried first and rejected — it shows an interstitial "no se pudo escanear en busca de virus"
   page for larger files instead of a clean direct download, which would break the simple
   anonymous-`GET` design. A test repo (`javyx21/gestor-de-credito`, public) was created 2026-08-19
-  to validate this end-to-end — **and deleted the same day, at the user's explicit request**: before
-  publishing anything for real, the license to attach to that repo/its released content still needs
-  to be decided. Don't recreate it or assume a name/visibility until that's settled — the earlier
-  "public, since a private repo's release assets aren't downloadable via a plain anonymous `GET`
-  without a token" reasoning still holds and should carry over, but the license question is a
-  separate, still-open decision, not resolved by that repo having existed once already.
-- **`URL_VERSION_JSON` (in `actualizador.py`) is deliberately empty again**, pending the above. The
-  intended design — confirmed to work, not just planned — is GitHub's stable "latest" alias:
-  `.../releases/latest/download/version.json` always resolves to the `version.json` asset of
-  whichever release is currently marked "latest", so once the real repo exists, **no code change is
-  needed on future releases**, as long as every real release (a) includes an asset named exactly
-  `version.json` (not `version_prueba.json` or any other variant) and (b) isn't published with
-  `--prerelease` (which would keep it from becoming "latest"). This whole mechanism, plus the
-  network/checksum download and the close/extract/relaunch cycle, were already verified
-  end-to-end with real executables against that now-deleted test repo (2026-08-19) — see
-  `recursos/actualización por franklin accesible.txt` for the full trace. Re-verify against
-  whatever repo ends up being the real one once the license question is settled and it's created —
-  don't assume the old test repo's exact URL still applies.
+  to validate this end-to-end, then deleted the same day at the user's request, pending a decision
+  on what license to attach to released content — resolved the next day (`LICENSE` added to the
+  main repo, 2026-08-19/20).
+- **DEFINITIVE repo (2026-08-20)**: `javyx21/gestor-de-credito-releases`, public, dedicated ONLY to
+  releases (zips + `version.json`) — no source code in it at all. Explicit user choice among two
+  options presented ("mismo repo del código" vs. "repo nuevo dedicado solo a releases"): a separate
+  repo, to keep compiled binaries out of the source repo entirely. `v1.0.0` is published there right
+  now (tag `v1.0.0`, not a prerelease) with the real production build described under Empaquetado
+  below. Don't confuse this with the old, deleted `javyx21/gestor-de-credito` test repo if that name
+  turns up in older history — it no longer applies to anything.
+- **`URL_VERSION_JSON` (in `actualizador.py`) now points at the real repo**: GitHub's stable
+  "latest" alias, `.../gestor-de-credito-releases/releases/latest/download/version.json` — always
+  resolves to the `version.json` asset of whichever release is currently marked "latest", so **no
+  code change is needed on future releases**, as long as every real release (a) includes an asset
+  named exactly `version.json` (not `version_prueba.json` or any other variant) and (b) isn't
+  published with `--prerelease` (which would keep it from becoming "latest"). Verified for real,
+  not mocked, against this exact live URL right after publishing `v1.0.0`: `verificar_actualizacion()`
+  correctly returned `None` (installed `VERSION` matches the published release) and
+  `descargar_actualizacion()` correctly downloaded and checksum-verified the real `.zip` asset.
 - **Checksum (SHA256) + HTTPS is the full integrity/security model** — explicitly confirmed
   sufficient by the user, no code signing or additional auth layer.
-- **UI lives in the Ayuda dialog, not Configuración** — explicit user correction after the first
+- **UI lives under "Ayuda", not Configuración** — explicit user correction after the first
   proposal (which put it in Configuración, alongside the bitácora/reporte importers): "esto es
   una función... no como una configuración... en ayuda estaría buscar actualizaciones." The
-  reasoning that emerged from that correction: unlike Configuración's contents (agente, import,
-  tasas — things you set once and leave), checking for updates is a quick, occasional lookup, closer
-  in spirit to glancing at the keyboard-shortcut list than to configuring something — so it shares
-  `AyudaPanel`'s screen instead of adding a fourth category to Configuración's tree.
-- **Two separate buttons, not one combined action** — explicit user choice among three options
-  presented. "Buscar actualizaciones" only checks and reports (never downloads); "Actualizar
-  ahora" (disabled until a check finds a newer version, same enable-gating pattern as
-  `guardar_btn`/`importar_btn` elsewhere in this app) does download+verify+apply+restart in one
-  go. The click on "Actualizar ahora" itself **is** the confirmation — no extra `wx.MessageBox`
-  "¿estás seguro?" on top of it, since the two-step button flow already makes the action
-  deliberate.
+  reasoning: unlike Configuración's contents (agente, import, tasas — things you set once and
+  leave), checking for updates is a quick, occasional lookup, closer in spirit to glancing at the
+  keyboard-shortcut list than to configuring something.
+- **Where exactly *inside* Ayuda went through three iterations (all 2026-08-19/20) before landing
+  right** — worth knowing the history if a similar "can't find X" report comes up again elsewhere:
+  1. First built as two `wx.Button`s ("Buscar actualizaciones"/"Actualizar ahora") stacked at the
+     bottom of `AyudaPanel`, below the 42-row keyboard-shortcuts `wx.ListCtrl`. Real user report:
+     opening Ayuda, arrowing through the shortcuts list, never finding them — Tab past a 42-row list
+     to reach two buttons at the bottom is easy to miss if you don't already know they're there.
+  2. Rebuilt as a `wx.TreeCtrl` of two sibling categories ("Atajos de teclado" / "Actualizaciones"),
+     calcado directamente del patrón ya usado en `ConfiguracionPanel` (árbol a la izquierda + panel
+     de contenido que se muestra/oculta a la derecha). **Explicitly rejected too** — user's words:
+     "no estoy de acuerdo... no es como el apartado de configuración." What the user actually wanted,
+     clarified only after describing the exact arrow-key sequence they expected (Alt → flecha
+     derecha hasta Ayuda → flecha abajo → flecha abajo → flecha derecha → ...), turned out to be
+     native Windows menu navigation, not a tree widget inside a dialog at all.
+  3. **Current, confirmed design**: a real **cascading submenu** (`wx.Menu.AppendSubMenu`) —
+     `Ayuda ▸ Actualizaciones ▸ {Buscar actualizaciones, Información sobre la versión}` — built
+     straight into `MainFrame`'s menu bar (`_crear_menu()`), navigated with the exact arrow-key
+     sequence the user described (right arrow opens the submenu, down arrow moves between its two
+     items, left arrow closes it back). `AyudaPanel` reverted to being *only* the shortcuts list,
+     exactly as it was before 2026-08-19 — see its own docstring for the same history, kept in sync.
+  Lesson for future "put X somewhere accessible" requests: when a user describes something as
+  wanting a specific arrow-key sequence, take that description literally as the actual UI mechanism
+  to build (a native menu, in this case) rather than translating it into whatever tree/panel pattern
+  already exists elsewhere in the app — the two are not interchangeable even though both involve
+  "arrow keys navigate, right expands".
+- **Two separate items, not one combined action** — explicit user choice among options presented
+  early on. "Buscar actualizaciones" only checks and reports (never downloads) — if it finds
+  nothing newer or hits a network error, a `wx.MessageBox` says so and nothing else happens. If it
+  *does* find something newer, it opens a small dedicated window, **"Actualización disponible"**
+  (`gestor_credito/ui/actualizacion_dialog.py`, `ActualizacionDisponibleDialog`) — user's own
+  words for why the install button belongs there and nowhere else: "si tiene alguna versión para
+  descargar ahí tiene que estar el botón instalar actualización... es lógico que tiene que ir en
+  esa pantalla." That dialog shows the new version, its changelog/novedades (`ActualizacionDisponible
+  .notas` — a new optional field in `version.json`, added the same day so this screen would have
+  something real to show), and the **"Instalar actualización"** button that does download+verify+
+  apply+restart in one go. The click on that button itself **is** the confirmation — no extra
+  "¿estás seguro?" `wx.MessageBox` on top of it, same reasoning as before (a dedicated screen you
+  had to deliberately navigate to is confirmation enough). "Información sobre la versión" is a
+  separate, always-available menu item that never touches the network — just reports the installed
+  `VERSION` and, if a check already ran this session, what it found last time (including the
+  novedades) — `MainFrame` tracks that in `_ultima_busqueda_actualizacion_realizada`/
+  `_ultima_actualizacion_encontrada` (two attributes, not one, specifically so "never checked" and
+  "checked, already up to date" — both of which leave the second attribute at `None` — stay
+  distinguishable).
 
 **Module layout** (`gestor_credito/actualizador/actualizador.py`, no DB/UI dependency — same
 separation-of-concerns principle as `calculo/`/`export/`):
 - `VERSION` lives in `gestor_credito/version.py`, a single source of truth bumped by hand before
   each release (there's no CI/tagging pipeline generating it).
-- `URL_VERSION_JSON` (top of `actualizador.py`) is **empty again** — see the licensing note above.
-  It's meant to hold the stable GitHub "latest release" link once the real repo exists, pointing at
-  a small `version.json` (`{"version": "...", "url": "...", "sha256": "..."}`) that must get
-  uploaded, named exactly `version.json`, to every real release going forward.
+- `URL_VERSION_JSON` (top of `actualizador.py`) **now points at the real, live repo** — see
+  "DEFINITIVE repo" above. Holds the stable GitHub "latest release" link, pointing at a small
+  `version.json` (`{"version": "...", "url": "...", "sha256": "...", "notas": "..."}` — `notas` is
+  optional, added 2026-08-20 for the changelog shown in `ActualizacionDisponibleDialog`) that must
+  get uploaded, named exactly `version.json`, to every real release going forward.
   `verificar_actualizacion()` raises a clear `RuntimeError` if this constant (or an explicit
   override passed in) is blank, rather than trying to hit `""` as a URL — exercised in tests via
   `monkeypatch.setattr(actualizador, "URL_VERSION_JSON", "")`.
+- `ActualizacionDisponible` (the dataclass `verificar_actualizacion()` returns) has a `notas: str =
+  ""` field — always present, defaults to empty text if the remote `version.json` omits it, never
+  makes the check fail for lacking one.
 - `verificar_actualizacion()` — `GET`s `version.json`, compares against `VERSION` (plain
   dotted-integer tuple comparison, e.g. `(1, 2, 0) > (1, 1, 9)`), returns an
   `ActualizacionDisponible` or `None`.
@@ -1485,18 +1525,19 @@ separation-of-concerns principle as `calculo/`/`export/`):
   SHA256, and raises (deleting the partial file) if it doesn't match `sha256` from `version.json`.
 - `aplicar_actualizacion()` — launches the external updater process (see below) and returns; it
   does **not** close the app itself (this module has no wx dependency, same reason `calculo/`
-  doesn't reach into the UI) — that's `ayuda_panel.py`'s job, right after this returns
+  doesn't reach into the UI) — that's `actualizacion_dialog.py`'s job, right after this returns
   successfully.
 - Every network/JSON/checksum failure is caught and re-raised as a plain-Spanish `RuntimeError`,
   same pattern already used by `excel_importer.py`/`reporte_creditos_importer.py` for their own
-  failure modes — `ayuda_panel.py` shows it via `wx.MessageBox` (this app's established exception
-  to "no popups," since a failed check/download with no other UI feedback is exactly the kind of
-  outcome NVDA would otherwise never announce).
+  failure modes — `gestor_credito/ui/actualizacion_dialog.py` (NOT `ayuda_panel.py` — see the UI
+  history above) shows it via `wx.MessageBox` (this app's established exception to "no popups,"
+  since a failed check/download with no other UI feedback is exactly the kind of outcome NVDA
+  would otherwise never announce).
 
 **Why a separate external process is unavoidable**: a running `.exe` cannot overwrite its own
 files on Windows. `aplicar_actualizacion()` launches `GestorDeCredito_Updater.exe` (passed this
 process's PID, the downloaded `.zip`, the app folder, and the main `.exe`'s path), then
-`ayuda_panel.py` calls `wx.Exit()` to close immediately (an intentional "emergency" exit — nothing
+`actualizacion_dialog.py` calls `wx.Exit()` to close immediately (an intentional "emergency" exit — nothing
 else is running in-process by that point, so there's nothing to clean up). The updater
 (`updater/actualizar_app.py`, stdlib-only — no `gestor_credito` import) polls `tasklist` until the
 main process's PID is confirmed gone, extracts the `.zip` over the app folder, and relaunches the
@@ -1512,15 +1553,19 @@ the identical problem this whole external-process design exists to avoid for the
 updater binary itself is expected to change rarely, if ever, and isn't part of the normal update
 payload.
 
-**Network + checksum half was verified end-to-end (2026-08-19), against a real but now-deleted test
-repo**: a test release (`v9.9.9-prueba`, deliberately a higher version than `VERSION` so it always
-shows "update available") was published to that repo, and `verificar_actualizacion()` +
-`descargar_actualizacion()` were run directly against it from Python (not mocked) — both the
-version comparison and the SHA256-verified download of the real `.zip` asset succeeded. **That test
-repo was deleted the same day** at the user's request, pending the license decision (see above) —
-so this mechanism is proven to work, but there's currently nothing live for `URL_VERSION_JSON` to
-point at until a real repo (with its license settled) replaces it. See `recursos/actualización
-por franklin accesible.txt` for the exact commands used and what's still open.
+**Network + checksum half, first verified 2026-08-19 against a since-deleted test repo, then
+RE-verified 2026-08-20 against the real, permanent one**: a test release (`v9.9.9-prueba`) on the
+old `javyx21/gestor-de-credito` test repo validated the mechanism first; that repo was deleted the
+same day pending the license decision. Once the license was settled (`LICENSE` added) and the
+definitive `javyx21/gestor-de-credito-releases` repo was created (see "DEFINITIVE repo" above),
+`v1.0.0` — the real first production build (see Empaquetado below) — was published there for real,
+and `verificar_actualizacion()` + `descargar_actualizacion()` were run directly against the live
+`.../releases/latest/download/version.json` URL from Python (not mocked): version comparison
+correctly returned `None` (installed `VERSION` matches the published release) and the real `.zip`
+asset downloaded and passed its SHA256 check. `URL_VERSION_JSON` is no longer a placeholder —
+this is the link a real deployed app now hits. See `recursos/actualización por franklin
+accesible.txt` for the original 2026-08-19 trace (mechanism-level detail, still accurate) and the
+"DEFINITIVE repo"/Empaquetado sections above for what's live today.
 
 **Close/extract/relaunch cycle also verified end-to-end (2026-08-19)**, with real PyInstaller
 builds of both executables. Correction to an earlier assumption: this had been thought impossible
@@ -1545,12 +1590,18 @@ section 8 for the full step-by-step. **Not covered by this pass** (not needed, s
 already validated separately): the two halves — network+checksum download, and close+extract+
 relaunch — were verified independently, never chained together in one single real run driven from
 the actual Ayuda UI buttons; that's the one remaining "closest to how the real user will use it"
-check, listed as still-open in that same file. What's covered by the automated suite:
-`tests/test_actualizador.py` (network/checksum/version-comparison logic, all network calls mocked,
-plus the real-network case validated manually outside the test suite) and `tests/test_ayuda_panel.py`
-(the button flow/state gating, with `verificar_actualizacion`/`descargar_actualizacion`/
-`aplicar_actualizacion` mocked at the `ayuda_panel` import site and `ejecutar_en_segundo_plano`
-forced synchronous, same pattern as `tests/test_creditos_panel.py`).
+check, listed as still-open in that same file — the close/extract/relaunch mechanism itself
+(`aplicar_actualizacion()`/`updater/actualizar_app.py`) hasn't changed since it was verified
+2026-08-19, only which UI module calls into it (`actualizacion_dialog.py` now, not `ayuda_panel.py`
+— see the UI history above), so that verification still stands. What's covered by the automated
+suite: `tests/test_actualizador.py` (network/checksum/version-comparison logic, all network calls
+mocked, plus the real-network case validated manually outside the test suite) and
+`tests/test_actualizacion_dialog.py` (the "Actualización disponible" dialog's install-button
+flow/state gating, and `buscar_actualizaciones()`/`mostrar_informacion_version()`'s branching, with
+`verificar_actualizacion`/`descargar_actualizacion`/`aplicar_actualizacion` mocked at the
+`actualizacion_dialog` import site and `ejecutar_en_segundo_plano` forced synchronous, same pattern
+as `tests/test_creditos_panel.py`) plus `tests/test_main_frame.py` (the two menu items only track
+`_ultima_busqueda_actualizacion_realizada`/`_ultima_actualizacion_encontrada` and delegate).
 
 ## Commands
 
@@ -1598,6 +1649,19 @@ copy dist\GestorDeCredito_Updater\GestorDeCredito_Updater.exe dist\GestorDeCredi
 above for why. **When zipping up a new release to publish, exclude
 `GestorDeCredito_Updater.exe`** from that `.zip` — only the main app's files change per release.
 
+**First real production build, `v1.0.0` (2026-08-20)**: built both executables with the exact
+commands above, `--distpath`/`--workpath`/`--specpath` pointed outside the OneDrive-synced project
+folder (`C:\GestorCreditoBuild\...`, per the OneDrive-lock gotcha already documented under
+Actualizaciones automáticas) to avoid the same `PermissionError` hit before. Smoke-tested the real
+compiled `.exe` (launched it, confirmed the "Gestor de Crédito" window actually appears via UI
+Automation, not just that the process starts) before publishing. The release `.zip` was built from
+a copy of `dist/GestorDeCredito/` with `GestorDeCredito_Updater.exe` manually excluded (per the
+rule above), then uploaded as `GestorDeCredito_v1.0.0.zip` to the `v1.0.0` release on
+`javyx21/gestor-de-credito-releases`, alongside its `version.json` — see Actualizaciones automáticas
+above for the full repo/URL story and the real (not mocked) end-to-end verification done right
+after publishing. The local `C:\GestorCreditoBuild\` folder is scratch build output, not part of
+the repo (outside it entirely) — safe to delete and rebuild from scratch any time.
+
 ## Architecture
 
 ```
@@ -1636,8 +1700,11 @@ gestor_credito/
     creditos_panel.py               # "Historial de Créditos" tab — see that section above
     notificaciones_panel.py         # Notificaciones dialog (alert list, see Alerts/workflow)
     configuracion_panel.py          # Configuración dialog (agente actual + importar Excel de bitácora/reporte)
-    ayuda_panel.py                  # Ayuda dialog (keyboard shortcut reference, from atajos.py; also hosts
-                                       # Buscar actualizaciones/Actualizar ahora, see Actualizaciones automáticas above)
+    ayuda_panel.py                  # Ayuda dialog — ONLY the keyboard shortcut reference (from atajos.py).
+                                       # Actualizaciones is NOT here — see actualizacion_dialog.py below
+    actualizacion_dialog.py          # "Ayuda ▸ Actualizaciones" cascading submenu logic, wired from
+                                       # main_frame.py's menu bar — not a tab or dialog panel of its own, see
+                                       # Actualizaciones automáticas above
   db/
     database.py                  # sqlite3 connection + schema management
     casos.py                      # queries/updates for the caso entity (search, filter, edit)

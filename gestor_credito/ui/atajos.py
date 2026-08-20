@@ -207,16 +207,34 @@ ATAJOS = [
         None,
     ),
     (
-        None, None, "Alt+B (en Ayuda)", "Ayuda",
-        "Buscar actualizaciones disponibles (compara la versión instalada contra la "
-        "publicada en el link de descarga configurado)",
+        None, None, "Alt+Y, C", "Ayuda",
+        "Desplegar el submenú Actualizaciones (Buscar actualizaciones / "
+        "Información sobre la versión) — no abre ninguna pantalla por sí solo, "
+        "es un submenú nativo, se navega con flechas igual que cualquier menú "
+        "de Windows",
         None,
     ),
     (
-        None, None, "Alt+A (en Ayuda)", "Ayuda",
+        None, None, "Alt+Y, C, B", "Ayuda",
+        "Buscar actualizaciones disponibles (compara la versión instalada contra "
+        "la publicada en el link de descarga configurado). Si encuentra una "
+        "versión más nueva, abre una pantalla aparte (\"Actualización "
+        "disponible\") con las novedades y el botón para instalarla",
+        None,
+    ),
+    (
+        None, None, "Alt+Y, C, I", "Ayuda",
+        "Información sobre la versión: muestra la versión instalada y, si ya se "
+        "buscaron actualizaciones antes en esta sesión, qué se encontró la "
+        "última vez — sin volver a consultar la red",
+        None,
+    ),
+    (
+        None, None, "Alt+I (en \"Actualización disponible\")", "Ayuda",
         "Descargar, verificar y aplicar la actualización encontrada — cierra la "
-        "aplicación para instalarla y la vuelve a abrir sola. Solo se habilita "
-        "después de que \"Buscar actualizaciones\" encuentre una versión más nueva",
+        "aplicación para instalarla y la vuelve a abrir sola. Solo aparece en la "
+        "pantalla \"Actualización disponible\", que a su vez solo se abre cuando "
+        "\"Buscar actualizaciones\" encuentra algo más nuevo",
         None,
     ),
     (
