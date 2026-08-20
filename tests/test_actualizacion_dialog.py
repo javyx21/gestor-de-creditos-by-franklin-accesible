@@ -17,8 +17,6 @@ encuentran una versión nueva, se reemplaza la clase del diálogo por un doble
 de prueba que no bloquea. El diálogo en sí (su contenido y el botón
 Instalar) se prueba aparte, construyéndolo directo sin pasar por ShowModal."""
 
-from types import SimpleNamespace
-
 import wx
 import pytest
 
@@ -185,36 +183,19 @@ def _disparar(boton):
     boton.Command(wx.CommandEvent(wx.EVT_BUTTON.typeId, boton.GetId()))
 
 
-class _Kernel32Falso:
-    """Doble de ctypes.windll.kernel32 — jamás debe ejecutarse el real acá:
-    TerminateProcess(GetCurrentProcess(), 0) real mataría el proceso de
-    pytest mismo. Registra las llamadas para poder verificar qué se pidió,
-    sin tocar el sistema operativo de verdad."""
-
-    def __init__(self):
-        self.llamadas_terminar = []
-
-    def GetCurrentProcess(self):
-        return "handle-de-proceso-falso"
-
-    def TerminateProcess(self, handle, codigo):
-        self.llamadas_terminar.append((handle, codigo))
-
-
 def test_instalar_flujo_completo_termina_el_proceso(parent, monkeypatch):
-    # Bug real reproducido en vivo TRES VECES (2026-08-20), cada intento
+    # Bug real reproducido en vivo CUATRO VECES (2026-08-20), cada intento
     # descartando la teoría del anterior — ver el comentario extenso en
-    # actualizacion_dialog.py para la historia completa. Causa real
-    # confirmada: en Windows, hasta os._exit() de Python pasa por
-    # ExitProcess(), que SÍ espera a que cada DLL cargada procese
-    # DLL_PROCESS_DETACH antes de dejar morir el proceso — con todas las
-    # DLLs nativas que empaqueta esta app, alguna se colgaba ahí. Fix
-    # definitivo: TerminateProcess() de Win32 directo (mismo mecanismo que
-    # `taskkill /F`), que Microsoft documenta que NO notifica a ninguna DLL.
-    # Monkeypatchear kernel32 acá es OBLIGATORIO — la llamada real terminaría
-    # el proceso de pytest mismo si llega a ejecutarse de verdad.
-    kernel32_falso = _Kernel32Falso()
-    monkeypatch.setattr(modulo.ctypes, "windll", SimpleNamespace(kernel32=kernel32_falso))
+    # actualizacion_dialog.py para la historia completa (wx.Exit() directo,
+    # EndModal()+CallAfter, os._exit(), y hasta un TerminateProcess() por
+    # ctypes directo, ninguno cerraba el proceso de verdad en la práctica).
+    # Fix definitivo: reusar `taskkill /F /PID <pid>` como subproceso — el
+    # único mecanismo que efectivamente cerró estos procesos colgados
+    # durante todo el diagnóstico en vivo de esta sesión. Monkeypatchear
+    # subprocess.Popen acá es OBLIGATORIO — la llamada real terminaría el
+    # proceso de pytest mismo si llega a ejecutarse de verdad.
+    llamadas_popen = []
+    monkeypatch.setattr(modulo.subprocess, "Popen", lambda args, **kw: llamadas_popen.append(args))
 
     disponible = ActualizacionDisponible(version="9.9.9", url_descarga="https://x", sha256="abc")
     dialogo = ActualizacionDisponibleDialog(parent, disponible)
@@ -233,7 +214,8 @@ def test_instalar_flujo_completo_termina_el_proceso(parent, monkeypatch):
     assert descargas[0][0] == "https://x"
     assert descargas[0][1] == "abc"
     assert len(aplicaciones) == 1
-    assert kernel32_falso.llamadas_terminar == [("handle-de-proceso-falso", 0)]
+    assert len(llamadas_popen) == 1
+    assert llamadas_popen[0][:3] == ["taskkill", "/F", "/PID"]
     dialogo.Destroy()
 
 

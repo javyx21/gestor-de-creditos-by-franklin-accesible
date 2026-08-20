@@ -1,4 +1,5 @@
-import ctypes
+import os
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -115,39 +116,33 @@ class ActualizacionDisponibleDialog(wx.Dialog):
         anunciar_voz_nvda("Actualización descargada. Cerrando la aplicación para aplicarla.")
 
         # Bug real reportado por el usuario (2026-08-20), reproducido en vivo
-        # TRES VECES, cada intento descartando la teoría del anterior:
+        # CUATRO VECES, cada intento descartando la teoría del anterior:
         # 1. wx.Exit() directo — no cerraba.
         # 2. EndModal() + wx.Exit() diferido con wx.CallAfter (teoría: bucle
         #    modal anidado que nunca entrega el CallAfter) — tampoco cerraba.
-        # 3. os._exit(0) (teoría: alguna capa de wx/CallAfter estaba de por
-        #    medio) — TAMPOCO cerraba, y esta vez la causa quedó confirmada
-        #    de forma directa: con el proceso todavía "vivo" según tasklist,
-        #    pywinauto mostró que su ventana ("Actualización disponible")
-        #    seguía visible en pantalla pero con is_active()=False — es
-        #    decir, el bucle de mensajes ya había dejado de bombear (algo SÍ
-        #    llegó a llamar a la salida), pero el proceso en sí no
-        #    terminaba de morir.
+        # 3. os._exit(0) (teoría: ExitProcess() esperando DLL_PROCESS_DETACH
+        #    de alguna de las muchas DLLs nativas empaquetadas) — TAMPOCO
+        #    cerraba.
+        # 4. ctypes.windll.kernel32.TerminateProcess(GetCurrentProcess(), 0)
+        #    directo — TAMPOCO cerraba, a pesar de ser en teoría la llamada
+        #    más contundente disponible. Sospecha (no confirmada): en un
+        #    ctypes de 64 bits, sin declarar argtypes/restype, tanto el
+        #    valor que devuelve GetCurrentProcess() como el que recibe
+        #    TerminateProcess() se marshalan por defecto como un entero C de
+        #    32 bits — un handle de 64 bits mal truncado ahí puede volver
+        #    TerminateProcess() una llamada que falla en silencio.
         #
-        # Causa real: en Windows, incluso os._exit() de Python baja hasta
-        # ExitProcess() de la API de Win32 — y ExitProcess() SÍ espera a que
-        # cada DLL cargada en el proceso reciba y termine de procesar
-        # DLL_PROCESS_DETACH antes de dejar morir el proceso (documentado
-        # así por Microsoft). Esta app empaqueta muchísimas DLLs nativas
-        # (wx, numpy, PIL, lxml, pywin32, nvdaControllerClient, sqlite3...)
-        # — si el detach de cualquiera de ellas se cuelga o tarda, el
-        # proceso entero queda "vivo" para tasklist indefinidamente, aunque
-        # ya no responda a nada.
-        #
-        # Fix definitivo: TerminateProcess() de la propia API de Win32
-        # (vía ctypes, sin pasar por el runtime de C) — a diferencia de
-        # ExitProcess(), Microsoft documenta explícitamente que
-        # TerminateProcess() NO notifica DLL_PROCESS_DETACH a nada: el
-        # proceso desaparece de inmediato, sin esperar ninguna limpieza. Es
-        # el mismo mecanismo que usa `taskkill /F` — que, no es casualidad,
-        # fue lo único que logró cerrar de verdad los procesos colgados de
-        # las dos pruebas anteriores durante el diagnóstico.
-        kernel32 = ctypes.windll.kernel32
-        kernel32.TerminateProcess(kernel32.GetCurrentProcess(), 0)
+        # Fix definitivo: en vez de seguir afinando la llamada directa a la
+        # API de Win32 (cada intento anterior parecía sólido en el papel y
+        # no funcionó en la práctica), se reutiliza el ÚNICO mecanismo que
+        # de verdad cerró estos procesos colgados durante todo este
+        # diagnóstico en vivo: `taskkill /F /PID <pid>` — lanzado como
+        # subproceso contra el propio PID. Verificado empíricamente muchas
+        # veces esta misma sesión (siempre cerró lo que ningún otro método
+        # lograba cerrar), así que en vez de confiar en una cuarta teoría
+        # sin poder probarla antes de publicar, se usa directamente la
+        # herramienta que ya demostró funcionar de verdad.
+        subprocess.Popen(["taskkill", "/F", "/PID", str(os.getpid())])
 
 
 def buscar_actualizaciones(parent, al_completar):
