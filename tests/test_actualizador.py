@@ -8,8 +8,16 @@ from gestor_credito.actualizador import actualizador
 
 
 class _RespuestaFalsa:
+    """Doble de la respuesta de urlopen. `read()` sin tamaño (usado por
+    verificar_actualizacion) devuelve todo de una vez; `read(tamaño)` (usado
+    por descargar_actualizacion, que lee por bloques hasta recibir b"")
+    devuelve porciones sucesivas y avanza un cursor interno, igual que un
+    objeto de archivo real — sin este cursor, un `while read(...)` de la
+    lectura por bloques nunca terminaría."""
+
     def __init__(self, contenido_bytes):
         self._contenido = contenido_bytes
+        self._posicion = 0
 
     def __enter__(self):
         return self
@@ -17,8 +25,14 @@ class _RespuestaFalsa:
     def __exit__(self, *args):
         return False
 
-    def read(self):
-        return self._contenido
+    def read(self, tamaño=-1):
+        if tamaño is None or tamaño < 0:
+            resto = self._contenido[self._posicion:]
+            self._posicion = len(self._contenido)
+            return resto
+        porcion = self._contenido[self._posicion:self._posicion + tamaño]
+        self._posicion += len(porcion)
+        return porcion
 
 
 def _version_json(version="1.5.0", url="https://ejemplo.invalido/app.zip", sha256="abc123", notas=None):
@@ -144,14 +158,17 @@ def test_verificar_actualizacion_version_remota_no_numerica(monkeypatch):
 
 
 def test_descargar_actualizacion_checksum_correcto(monkeypatch, tmp_path):
-    contenido = b"contenido de prueba del zip"
+    # descargar_actualizacion() usa urlopen(..., timeout=...) + lectura por
+    # bloques desde 2026-08-20 (ver docstring en actualizador.py) — reemplazó
+    # a urlretrieve(), que no aceptaba timeout y podía colgarse indefinidamente
+    # ante una conexión estancada (bug real reportado por el usuario).
+    contenido = b"contenido de prueba del zip" * 100  # más de un bloque de lectura
     sha256_esperado = hashlib.sha256(contenido).hexdigest()
 
-    def _urlretrieve_falso(url, destino):
-        with open(destino, "wb") as archivo:
-            archivo.write(contenido)
-
-    monkeypatch.setattr(actualizador.urllib.request, "urlretrieve", _urlretrieve_falso)
+    monkeypatch.setattr(
+        actualizador.urllib.request, "urlopen",
+        lambda url, timeout=30: _RespuestaFalsa(contenido),
+    )
 
     destino = tmp_path / "actualizacion.zip"
     actualizador.descargar_actualizacion("https://ejemplo.invalido/app.zip", sha256_esperado, destino)
@@ -161,11 +178,10 @@ def test_descargar_actualizacion_checksum_correcto(monkeypatch, tmp_path):
 
 
 def test_descargar_actualizacion_checksum_no_coincide(monkeypatch, tmp_path):
-    def _urlretrieve_falso(url, destino):
-        with open(destino, "wb") as archivo:
-            archivo.write(b"contenido distinto al esperado")
-
-    monkeypatch.setattr(actualizador.urllib.request, "urlretrieve", _urlretrieve_falso)
+    monkeypatch.setattr(
+        actualizador.urllib.request, "urlopen",
+        lambda url, timeout=30: _RespuestaFalsa(b"contenido distinto al esperado"),
+    )
 
     destino = tmp_path / "actualizacion.zip"
     with pytest.raises(RuntimeError, match="checksum"):
@@ -175,14 +191,32 @@ def test_descargar_actualizacion_checksum_no_coincide(monkeypatch, tmp_path):
 
 
 def test_descargar_actualizacion_error_de_red(monkeypatch, tmp_path):
-    def _urlretrieve_falla(url, destino):
+    def _urlopen_falla(url, timeout=30):
         raise urllib.error.URLError("sin conexión")
 
-    monkeypatch.setattr(actualizador.urllib.request, "urlretrieve", _urlretrieve_falla)
+    monkeypatch.setattr(actualizador.urllib.request, "urlopen", _urlopen_falla)
 
     destino = tmp_path / "actualizacion.zip"
     with pytest.raises(RuntimeError, match="No se pudo descargar"):
         actualizador.descargar_actualizacion("https://ejemplo.invalido/app.zip", "0" * 64, destino)
+
+    assert not destino.exists()
+
+
+def test_descargar_actualizacion_se_cuelga_lanza_error_por_timeout(monkeypatch, tmp_path):
+    # El bug real reportado: sin timeout, una conexión estancada se quedaba
+    # esperando para siempre, sin cerrar la app ni avisar nada. Ahora
+    # urlopen(timeout=...) hace que eso salte como TimeoutError.
+    def _urlopen_cuelga(url, timeout=30):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(actualizador.urllib.request, "urlopen", _urlopen_cuelga)
+
+    destino = tmp_path / "actualizacion.zip"
+    with pytest.raises(RuntimeError, match="No se pudo descargar"):
+        actualizador.descargar_actualizacion("https://ejemplo.invalido/app.zip", "0" * 64, destino)
+
+    assert not destino.exists()
 
 
 # ---- aplicar_actualizacion --------------------------------------------------

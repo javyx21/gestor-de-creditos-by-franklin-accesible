@@ -50,6 +50,25 @@ def _proceso_sigue_vivo(pid):
     return str(pid) in resultado.stdout
 
 
+_INTENTOS_EXTRACCION = 5
+_ESPERA_ENTRE_INTENTOS_SEGUNDOS = 1.0
+
+
+def _registrar(ruta_log, mensaje):
+    """Este proceso corre sin consola (--onefile, invocado con Popen desde
+    la app principal) — si algo falla acá, antes no quedaba ningún rastro en
+    ningún lado, ni para el usuario ni para investigar después. Un log de
+    texto plano junto a la app es la forma más simple de que un fallo silente
+    dejara de ser completamente invisible. No lanza si no puede escribir
+    (por ejemplo, carpeta_app sin permisos de escritura) — un log que falla
+    no debe tumbar el proceso de actualización en sí."""
+    try:
+        with open(ruta_log, "a", encoding="utf-8") as archivo:
+            archivo.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {mensaje}\n")
+    except OSError:
+        pass
+
+
 def main():
     if len(sys.argv) != 5:
         return 1
@@ -58,6 +77,7 @@ def main():
     ruta_zip = Path(sys.argv[2])
     carpeta_app = Path(sys.argv[3])
     ruta_exe_principal = Path(sys.argv[4])
+    ruta_log = carpeta_app / "GestorDeCredito_Updater.log"
 
     # Windows no deja sobrescribir un .exe/.dll mientras el proceso que lo
     # tiene abierto sigue vivo — hay que confirmar la salida real del
@@ -66,10 +86,60 @@ def main():
     while _proceso_sigue_vivo(pid_principal) and time.time() < limite:
         time.sleep(0.5)
 
-    with zipfile.ZipFile(ruta_zip, "r") as zip_actualizacion:
-        zip_actualizacion.extractall(carpeta_app)
+    # Real reporte de usuario (2026-08-20): tras "Actualizar ahora", la app
+    # quedó en un estado peor que antes — ni actualizada ni el .zip
+    # descargado, sin ningún rastro de qué pasó. Causas reales identificadas
+    # acá, ambas corregidas:
+    if _proceso_sigue_vivo(pid_principal):
+        # 1. Si el proceso principal nunca llegó a cerrar del todo (podía
+        #    pasar sin que nada lo avisara), la versión anterior intentaba
+        #    extraer igual — sobre un .exe todavía abierto, eso revienta con
+        #    PermissionError sin capturar, dejando la extracción a medias y
+        #    sin relanzar nada. Ahora se aborta ANTES de tocar archivos y se
+        #    relanza la app vieja tal cual estaba, en vez de arriesgar una
+        #    carpeta a medio actualizar.
+        _registrar(
+            ruta_log,
+            f"El proceso principal (PID {pid_principal}) seguía vivo tras "
+            f"{_TIMEOUT_ESPERA_CIERRE_SEGUNDOS}s de espera. Se aborta la "
+            "actualización sin modificar archivos.",
+        )
+        subprocess.Popen([str(ruta_exe_principal)], cwd=str(carpeta_app))
+        return 1
+
+    # 2. Aunque tasklist ya no liste el proceso, Windows puede tardar un
+    #    instante extra en soltar el handle del archivo (una condición de
+    #    carrera real, no solo teórica) — extraer inmediatamente después
+    #    podía toparse con el mismo PermissionError sin capturar. Ahora se
+    #    reintenta unas pocas veces con una pequeña espera entre intentos
+    #    antes de rendirse.
+    ultimo_error = None
+    for intento in range(1, _INTENTOS_EXTRACCION + 1):
+        try:
+            with zipfile.ZipFile(ruta_zip, "r") as zip_actualizacion:
+                zip_actualizacion.extractall(carpeta_app)
+            ultimo_error = None
+            break
+        except (PermissionError, OSError) as exc:
+            ultimo_error = exc
+            _registrar(ruta_log, f"Intento {intento}/{_INTENTOS_EXTRACCION} de extracción falló: {exc}")
+            if intento < _INTENTOS_EXTRACCION:
+                time.sleep(_ESPERA_ENTRE_INTENTOS_SEGUNDOS)
+
+    if ultimo_error is not None:
+        # Se agotaron los reintentos: no se borra el .zip (permite reintentar
+        # más adelante sin volver a descargar) y se relanza la app vieja para
+        # que el usuario nunca se quede sin ninguna versión funcionando.
+        _registrar(
+            ruta_log,
+            f"Se agotaron los {_INTENTOS_EXTRACCION} intentos de extracción "
+            f"({ultimo_error}). Se relanza la app sin aplicar la actualización.",
+        )
+        subprocess.Popen([str(ruta_exe_principal)], cwd=str(carpeta_app))
+        return 1
 
     ruta_zip.unlink(missing_ok=True)
+    _registrar(ruta_log, "Actualización aplicada correctamente.")
 
     subprocess.Popen([str(ruta_exe_principal)], cwd=str(carpeta_app))
     return 0

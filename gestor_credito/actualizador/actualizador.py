@@ -108,15 +108,33 @@ def _calcular_sha256(ruta):
     return hash_sha256.hexdigest()
 
 
-def descargar_actualizacion(url_descarga, sha256_esperado, destino):
+def descargar_actualizacion(url_descarga, sha256_esperado, destino, timeout=30):
     """Descarga el .zip de la actualización a `destino` (Path) y verifica su
     SHA256 contra `sha256_esperado`. Si no coincide, borra el archivo
     descargado y lanza RuntimeError — mejor no dejar un .zip corrupto/
     interrumpido a medio camino tirado en el disco, que además nunca debe
-    llegar a aplicarse."""
+    llegar a aplicarse.
+
+    Real bug encontrado por el usuario (2026-08-20): la versión anterior
+    usaba `urllib.request.urlretrieve(url, destino)`, que no acepta ningún
+    timeout — si la conexión se cuelga a medio descargar (red de oficina con
+    proxy/firewall inestable, por ejemplo), la descarga queda esperando
+    indefinidamente, sin avisar nada y sin que "Actualizar ahora" cierre ni
+    reaccione nunca. Reescrito con `urlopen(..., timeout=timeout)` + lectura
+    manual por bloques: ese timeout aplica a cada operación de red
+    individual (conectar, cada `read()`), no a la descarga completa — una
+    conexión lenta pero que sigue entregando datos no se corta, solo una que
+    se cuelga de verdad. También borra el archivo parcial en CUALQUIER
+    fallo de red (antes solo se borraba si el checksum no coincidía,
+    dejando un .zip a medio descargar tirado en el disco si la red fallaba
+    a mitad de camino)."""
     try:
-        urllib.request.urlretrieve(url_descarga, destino)
-    except (urllib.error.URLError, OSError) as exc:
+        with urllib.request.urlopen(url_descarga, timeout=timeout) as respuesta:
+            with open(destino, "wb") as archivo:
+                for bloque in iter(lambda: respuesta.read(1024 * 1024), b""):
+                    archivo.write(bloque)
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        Path(destino).unlink(missing_ok=True)
         raise RuntimeError(f"No se pudo descargar la actualización: {exc}") from exc
 
     sha256_real = _calcular_sha256(destino)
