@@ -1,3 +1,4 @@
+import math
 from datetime import date
 
 import wx
@@ -713,10 +714,21 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         llamador, sin importar qué tenga elegido periodicidad_choice en ese
         momento — así Ctrl+T da la cuota quincenal y Ctrl+Shift+T la
         mensual sin que el oficial tenga que cambiar el combo y volver a
-        calcular para conseguir la otra variante. Monto y cuota van con dos
+        calcular para conseguir la otra variante. Monto va con dos
         decimales y sin separador de miles, mismo criterio ya establecido
         para toda salida de texto de este panel (ver "No thousands
         separator..." en CLAUDE.md); plazo va tal cual, en meses enteros.
+
+        **La cuota copiada, y SOLO ella, se redondea hacia arriba a un
+        entero** (`math.ceil`, no `round`) — pedido explícito del usuario
+        (2026-08-20): "de 21.01 pase a 22, de 21.30 pase a 22... no importa
+        cual sea siempre tiene que pasarlo arriba", y aclaró que es
+        exclusivo de este texto copiado — el cálculo real
+        (`evaluar_capacidad()`), los labels de "Resultados" en pantalla y
+        lo que anuncia Ctrl+Shift+R siguen mostrando `resultado.cuota_usd`
+        exacto, con decimales, sin tocar. No usar `round()` acá: 21.01
+        debe subir a 22 igual que 21.99, algo que un redondeo normal no
+        haría.
 
         Devuelve None (sin armar ningún texto) si los datos no alcanzan —
         el llamador ya se encarga de avisar el error, acá no hace falta
@@ -738,13 +750,15 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
             deuda_activa_cordobas=entradas["deuda_activa_cordobas"],
         )
 
+        cuota_redondeada = math.ceil(resultado.cuota_usd)
+
         # Formato exacto pedido por el usuario, incluida la línea de plazo
         # con un espacio final antes del salto de línea — no es un error de
         # tipeo, se preserva tal cual se pidió.
         return (
             f"monto de USD ${entradas['monto_credito_usd']:.2f}\n"
             f"plazo de {entradas['plazo_meses']} meses \n"
-            f"cuota {etiqueta_periodicidad} aproximada de USD ${resultado.cuota_usd:.2f}"
+            f"cuota {etiqueta_periodicidad} aproximada de USD ${cuota_redondeada}"
         )
 
     def _copiar_al_portapapeles(self, texto):

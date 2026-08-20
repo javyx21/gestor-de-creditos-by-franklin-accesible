@@ -15,6 +15,9 @@ comparan el resultado contra evaluar_capacidad() calculado directamente con
 la tasa esperada — para detectar cualquier desincronización entre lo que la
 UI muestra y lo que debería calcular."""
 
+import math
+from types import SimpleNamespace
+
 import wx
 import pytest
 
@@ -590,11 +593,15 @@ def test_ctrl_t_copia_resumen_con_cuota_quincenal(calc, conn, monkeypatch):
 
     calc._copiar_resumen_quincenal()
 
-    cuota_quincenal = _cuota_esperada(calc, 0.18, periodicidad="Quincenal")
+    # La cuota copiada se redondea hacia arriba a un entero (pedido explícito
+    # del usuario, 2026-08-20) — el cálculo real sigue exacto, ver
+    # test_ctrl_shift_q_anuncia_el_pasivo_laboral_ya_calculado y demás
+    # pruebas del motor de cálculo, que no cambian.
+    cuota_quincenal = math.ceil(_cuota_esperada(calc, 0.18, periodicidad="Quincenal"))
     assert copiados == [
         "monto de USD $1140.00\n"
         "plazo de 24 meses \n"
-        f"cuota quincenal aproximada de USD ${cuota_quincenal:.2f}"
+        f"cuota quincenal aproximada de USD ${cuota_quincenal}"
     ]
 
 
@@ -605,12 +612,45 @@ def test_ctrl_shift_t_copia_resumen_con_cuota_mensual(calc, conn, monkeypatch):
 
     calc._copiar_resumen_mensual()
 
-    cuota_mensual = _cuota_esperada(calc, 0.18, periodicidad="Mensual")
+    cuota_mensual = math.ceil(_cuota_esperada(calc, 0.18, periodicidad="Mensual"))
     assert copiados == [
         "monto de USD $1140.00\n"
         "plazo de 24 meses \n"
-        f"cuota mensual aproximada de USD ${cuota_mensual:.2f}"
+        f"cuota mensual aproximada de USD ${cuota_mensual}"
     ]
+
+
+@pytest.mark.parametrize(
+    "cuota_cruda, cuota_esperada_copiada",
+    [
+        (21.01, 22),  # pedido explícito del usuario: 21.01 -> 22
+        (21.30, 22),  # ... y 21.30 -> 22, no al más cercano (round() daría 21)
+        (21.99, 22),
+        (21.00, 21),  # ya es entero, no hay nada que redondear hacia arriba
+    ],
+)
+def test_copiar_resumen_redondea_la_cuota_hacia_arriba(
+    calc, conn, monkeypatch, cuota_cruda, cuota_esperada_copiada
+):
+    # Pedido explícito del usuario (2026-08-20): el redondeo hacia arriba es
+    # EXCLUSIVO del texto copiado — evaluar_capacidad() sigue devolviendo el
+    # valor exacto sin tocar (ver ResultadoCapacidad.cuota_usd en
+    # gestor_credito/calculo/capacidad.py, sin cambios), acá se fuerza un
+    # resultado con decimales conocidos para probar el redondeo en sí mismo,
+    # aislado de la fórmula real.
+    copiados = _simular_portapapeles(calc, monkeypatch)
+    _llenar_formulario(calc, periodicidad_indice=0)
+    _elegir_empresa(calc, "MIDESA")
+
+    resultado_falso = SimpleNamespace(cuota_usd=cuota_cruda)
+    monkeypatch.setattr(
+        "gestor_credito.ui.calculadora_panel.evaluar_capacidad",
+        lambda **kwargs: resultado_falso,
+    )
+
+    calc._copiar_resumen_quincenal()
+
+    assert copiados[0].endswith(f"cuota quincenal aproximada de USD ${cuota_esperada_copiada}")
 
 
 def test_copiar_resumen_ignora_la_periodicidad_elegida_en_el_combo(calc, conn, monkeypatch):
