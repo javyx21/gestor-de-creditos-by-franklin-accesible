@@ -1692,6 +1692,40 @@ Actualizaciones ▸ Buscar actualizaciones" on the rebuilt `.exe` and observing 
 upload --clobber`, same tag) with the corrected `.zip` and its new `sha256` in `version.json`,
 since nothing had actually consumed the broken ones yet.
 
+**Second real bug, `v1.0.1` (same day), THIS one actually consumed by the user before being
+caught**: after fixing the above, `v1.0.1` was built to test the Ctrl+T/Ctrl+Shift+T cuota-rounding
+change (see that section) — the user ran the real update from their installed `v1.0.0` portable
+copy for real: "Buscar actualizaciones" found `v1.0.1`, "Instalar actualización" downloaded it,
+closed the app, and relaunched — but then "Buscar actualizaciones" *again* reported the same
+update as still pending, and the app folder had grown a **nested duplicate subfolder** with the
+new files inside it instead of the existing files being overwritten. **Root cause: how the release
+`.zip` was built, not the app or updater code** — `updater/actualizar_app.py`'s own docstring
+already documented the contract correctly ("el .zip debe contener el contenido de
+`dist/GestorDeCredito/` SIN este mismo `GestorDeCredito_Updater.exe`", i.e. `GestorDeCredito.exe`
+and `_internal/` loose at the zip's root) and `zipfile.extractall(carpeta_app)` in that script
+already assumes exactly that shape — but both `v1.0.0`'s and `v1.0.1`'s zips were built with
+PowerShell's `Compress-Archive -Path 'GestorDeCredito' -DestinationPath ...`, which zips the
+**folder itself** as one entry, not its contents — so the zip actually contained
+`GestorDeCredito/GestorDeCredito.exe` etc. Extracting that into the already-existing
+`...\GestorDeCredito\` app folder creates `...\GestorDeCredito\GestorDeCredito\...` — a nested
+copy — instead of overwriting anything at the root, which is exactly what the user saw and
+correctly diagnosed themselves before any code was touched. **Fix: build the zip from the folder's
+CONTENTS, not the folder** — `Compress-Archive -Path 'GestorDeCredito.exe','_internal'
+-DestinationPath ...` (list the items *inside* the folder explicitly, not the folder path itself).
+Verified two ways before republishing: (1) re-`Expand-Archive`d the new zip and confirmed
+`GestorDeCredito.exe` sits at the archive root, not under a subfolder; (2) ran the *exact*
+extraction line `updater/actualizar_app.py` uses
+(`zipfile.ZipFile(ruta_zip).extractall(carpeta_app)`) against a throwaway fake app folder
+pre-populated with a placeholder old `.exe`, and confirmed the real new `.exe` lands directly at
+`carpeta_app\GestorDeCredito.exe` (overwritten in place, correct file size/type, no nesting).
+`v1.0.1`'s assets were replaced in place the same way as `v1.0.0`'s fix above. **The user still had
+to manually delete the leftover nested subfolder from their own already-broken update attempt** —
+republishing a corrected release doesn't retroactively fix a folder that already got polluted by
+the bad one; that part isn't something a future release can clean up on its own.
+**Whoever builds a release `.zip` by hand in the future: always re-`Expand-Archive` it afterward
+and confirm `GestorDeCredito.exe` is at the top level before publishing — this exact mistake is
+easy to make again with `Compress-Archive` if given a folder path instead of its contents.**
+
 ## Architecture
 
 ```
