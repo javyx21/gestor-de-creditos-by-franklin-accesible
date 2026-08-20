@@ -1726,6 +1726,95 @@ the bad one; that part isn't something a future release can clean up on its own.
 and confirm `GestorDeCredito.exe` is at the top level before publishing — this exact mistake is
 easy to make again with `Compress-Archive` if given a folder path instead of its contents.**
 
+**Third real bug, `v1.0.2`–`v1.0.8` (same day): the app process never actually closed after
+"Instalar actualización"**, discovered when the user ran the real update for real from their
+installed `v1.0.0` copy. Two genuinely separate problems got found and fixed along the way before
+the real root cause surfaced — worth knowing the order, because each fix was real and still stands
+even though neither one was *the* fix for the third problem:
+
+1. **`descargar_actualizacion()` had no timeout** — it used `urllib.request.urlretrieve(url,
+   destino)`, which never times out; a stalled connection (proxy/firewall hiccup) left "Actualizar
+   ahora" stuck on "Descargando..." forever, with no error and no way out. Fixed by rewriting it
+   with `urlopen(url, timeout=30)` + manual chunked reads — the timeout applies per network
+   operation (connect, each `read()`), not to the whole download, so a slow-but-live connection
+   isn't punished, only a truly stalled one is. Also now deletes the partial file on ANY network
+   failure, not just a checksum mismatch as before.
+2. **`updater/actualizar_app.py` had no tolerance for the main process not being fully gone** —
+   if `_proceso_sigue_vivo()` still said yes after the 30s wait, or if Windows hadn't quite
+   released the file handle yet even after the process was gone (a real race condition, not just
+   theoretical), `zipfile.extractall()` would hit an uncaught `PermissionError` mid-extraction,
+   silently corrupting the update with nothing relaunched and no way to know what happened. Fixed
+   with: abort cleanly (no files touched) if the main PID is still alive after the wait, up to 5
+   retries with a 1s gap if extraction hits a locked file, never delete the `.zip` on failure (so a
+   retry doesn't need to re-download), and — always — relaunch *some* working copy of the app so
+   the user is never left with nothing running. Also added `GestorDeCredito_Updater.log` next to
+   the app, since this process runs with no console and previously failed completely invisibly.
+
+Both of the above are real, correct fixes — but after them, the user tried again and the app **still**
+never closed. This is the part that took four more live-reproduced dead ends before the real cause
+surfaced, in order, each one genuinely plausible and each one wrong:
+
+3. `wx.Exit()` called directly from `_on_descarga_completa()` — theory: it runs nested inside the
+   modal loop of `ShowModal()` (itself invoked from within `buscar_actualizaciones()`'s own
+   `wx.CallAfter`), so forcing an exit without unwinding that modal first leaves the native message
+   loop stuck. **Reproduced live, did not fix it.**
+4. `self.EndModal(wx.ID_OK)` before a `wx.CallAfter(wx.Exit)` — theory: let the modal loop return
+   normally first, defer the actual exit to the next event-loop tick. **Reproduced live, did not
+   fix it** — the process still never disappeared from `tasklist`; pywinauto showed the
+   "Actualización disponible" window still `visible=True` but `is_active()`/responding `False`,
+   meaning something DID stop the message pump, but the process itself never died.
+5. `os._exit(0)` — theory: skip wx and any event loop entirely by dropping straight to the C
+   runtime's exit. **Reproduced live, did not fix it either.** On Windows, `os._exit()` still goes
+   through `ExitProcess()`, which Microsoft documents as waiting for every loaded DLL's
+   `DLL_PROCESS_DETACH` before the process actually dies — with this many bundled native DLLs (wx,
+   numpy, PIL, lxml, pywin32, nvdaControllerClient, sqlite3, …), that's a real, plausible stall
+   point, not a theoretical one.
+6. `ctypes.windll.kernel32.TerminateProcess(GetCurrentProcess(), 0)` direct — theory:
+   `TerminateProcess()` is documented to skip `DLL_PROCESS_DETACH` entirely, unlike `ExitProcess()`.
+   **Reproduced live, STILL did not fix it** — same symptom, process never disappeared.
+7. `subprocess.Popen(["taskkill", "/F", "/PID", str(os.getpid())])` — reusing the exact command that
+   had reliably closed every one of these stuck processes *from outside* throughout this whole
+   diagnostic session. **First try: also failed identically, same live symptom** — which, at this
+   point, was the real signal that every theory about *which exit call to use* had been wrong from
+   the start, not just this one.
+
+**What actually turned out to be true, found by instrumenting `_on_descarga_completa()` with a
+step-by-step log file** (temporary, written to `%TEMP%\GestorDeCredito_diag.log`, removed once
+diagnosed): every single line of that function — `aplicar_actualizacion()`, `anunciar_voz_nvda()`,
+and even the final `subprocess.Popen(taskkill)` — **returned successfully every time**, logged and
+confirmed. The code was fine on attempts 3 through 7 alike. The actual cause: **the real-world test
+folder (`D:\GestorDeCredito`, the user's actual pendrive copy) had been corrupted by the *first*
+bug in this saga** (the nested-folder `.zip` structure bug, `v1.0.1` above) and never fully
+recovered by later attempts that only ever aborted safely without ever successfully overwriting
+anything — so every one of attempts 3–7 was being tested against files that were already in a bad
+state, most likely a partially-overwritten or duplicated native DLL. Confirmed by testing against a
+genuinely fresh `rm`+recopy of the app folder: the very same `taskkill /F` code from attempt 7,
+completely unchanged, closed the process in **4.5 seconds**, no hang, no duplicate processes, clean
+relaunch.
+
+**`taskkill /F` (attempt 7) is what shipped**, not because it was proven uniquely necessary (any of
+3–6 may well have worked fine too against a clean folder — this was never re-tested, since 7 was
+already confirmed working) but because it's the most failure-proof option available: no dependency
+on wx, on any event loop, or on any DLL's cleanup path, and it's the exact mechanism already proven
+to close a stuck `GestorDeCredito.exe` from outside throughout this whole session.
+
+**Lessons that matter beyond this one bug:**
+- When a live-reproduced bug survives several genuinely-plausible, independently-reasoned fixes in
+  a row, stop hypothesizing about *which fix* and add real instrumentation (a step-by-step log
+  file) to see how far execution actually gets — guessing blind past the second failed attempt
+  wastes far more cycles than a five-minute diagnostic log would.
+- **A test environment can itself be the bug.** A folder that went through an earlier real failure
+  (corrupted files, a partial extraction, a stuck DLL) is not a valid target for testing a *later*,
+  unrelated-looking fix — always re-test against a freshly deployed copy before concluding a fix
+  doesn't work, especially after any bug that touches the files on disk.
+- **Driving the actual compiled `.exe` live via `pywinauto` (`backend="win32"` — the `uia` backend's
+  `menu_select()` raised `IndexError` navigating this app's cascading submenu, `win32` didn't) was
+  what caught all of this** — none of it was visible from source-level testing or from importing
+  `verificar_actualizacion()`/`descargar_actualizacion()` directly. When a bug is specifically about
+  process lifetime, window state, or what a compiled build does that source doesn't, drive the real
+  `.exe` with real clicks and watch real `tasklist`/`Get-CimInstance Win32_Process` output — don't
+  trust a green source-level check to mean the compiled artifact behaves the same way.
+
 ## Architecture
 
 ```

@@ -115,33 +115,26 @@ class ActualizacionDisponibleDialog(wx.Dialog):
         # pueda seguir hablando.
         anunciar_voz_nvda("Actualización descargada. Cerrando la aplicación para aplicarla.")
 
-        # Bug real reportado por el usuario (2026-08-20), reproducido en vivo
-        # CUATRO VECES, cada intento descartando la teoría del anterior:
-        # 1. wx.Exit() directo — no cerraba.
-        # 2. EndModal() + wx.Exit() diferido con wx.CallAfter (teoría: bucle
-        #    modal anidado que nunca entrega el CallAfter) — tampoco cerraba.
-        # 3. os._exit(0) (teoría: ExitProcess() esperando DLL_PROCESS_DETACH
-        #    de alguna de las muchas DLLs nativas empaquetadas) — TAMPOCO
-        #    cerraba.
-        # 4. ctypes.windll.kernel32.TerminateProcess(GetCurrentProcess(), 0)
-        #    directo — TAMPOCO cerraba, a pesar de ser en teoría la llamada
-        #    más contundente disponible. Sospecha (no confirmada): en un
-        #    ctypes de 64 bits, sin declarar argtypes/restype, tanto el
-        #    valor que devuelve GetCurrentProcess() como el que recibe
-        #    TerminateProcess() se marshalan por defecto como un entero C de
-        #    32 bits — un handle de 64 bits mal truncado ahí puede volver
-        #    TerminateProcess() una llamada que falla en silencio.
-        #
-        # Fix definitivo: en vez de seguir afinando la llamada directa a la
-        # API de Win32 (cada intento anterior parecía sólido en el papel y
-        # no funcionó en la práctica), se reutiliza el ÚNICO mecanismo que
-        # de verdad cerró estos procesos colgados durante todo este
-        # diagnóstico en vivo: `taskkill /F /PID <pid>` — lanzado como
-        # subproceso contra el propio PID. Verificado empíricamente muchas
-        # veces esta misma sesión (siempre cerró lo que ningún otro método
-        # lograba cerrar), así que en vez de confiar en una cuarta teoría
-        # sin poder probarla antes de publicar, se usa directamente la
-        # herramienta que ya demostró funcionar de verdad.
+        # Bug real reportado por el usuario (2026-08-20): la primera vez que
+        # se instaló una actualización con éxito, el proceso original quedó
+        # colgado sin cerrar nunca — reproducido en vivo varias veces
+        # seguidas, probando wx.Exit() directo, EndModal()+wx.CallAfter,
+        # os._exit() y TerminateProcess() por ctypes, TODOS con el mismo
+        # resultado. Instrumentado con un log paso a paso (temporal, ya
+        # quitado) para descartar teorías sin poder confirmarlas: el propio
+        # código llegaba sin problema hasta acá cada vez — `aplicar_
+        # actualizacion()`, `anunciar_voz_nvda()` y hasta el
+        # `subprocess.Popen(taskkill)` de más abajo retornaban bien. La
+        # causa real terminó siendo otra: la carpeta de la app usada para
+        # las pruebas en vivo venía arrastrando archivos corruptos/mezclados
+        # del PRIMER bug de esta sesión (el del .zip con la carpeta anidada,
+        # ver el historial de v1.0.1 más arriba) — con una carpeta realmente
+        # limpia, `taskkill /F /PID <pid>` cierra el proceso en pocos
+        # segundos, sin problema. Se deja este mecanismo (en vez de volver a
+        # wx.Exit()) porque además de haber quedado confirmado que funciona,
+        # es el más a prueba de fallos: no depende de wx, de ningún bucle de
+        # eventos, ni de la limpieza de ninguna DLL — es el mismo mecanismo
+        # que usa `taskkill /F` desde fuera del proceso.
         subprocess.Popen(["taskkill", "/F", "/PID", str(os.getpid())])
 
 
