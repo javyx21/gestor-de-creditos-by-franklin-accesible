@@ -109,10 +109,31 @@ class ActualizacionDisponibleDialog(wx.Dialog):
             return
 
         # Mismo motivo que tenía ayuda_panel.py: el anuncio sale ANTES de
-        # wx.Exit() porque, una vez cerrada la app, no queda nada corriendo
-        # que pueda seguir hablando.
+        # cerrar la app porque, una vez cerrada, no queda nada corriendo que
+        # pueda seguir hablando.
         anunciar_voz_nvda("Actualización descargada. Cerrando la aplicación para aplicarla.")
-        wx.Exit()
+
+        # Bug real reportado por el usuario (2026-08-20), reproducido en vivo:
+        # llamar wx.Exit() DIRECTO acá nunca cerraba el proceso — este
+        # handler corre dentro del bucle modal propio de ShowModal() (llega
+        # vía wx.CallAfter desde el hilo de descarga, que el bucle modal
+        # también bombea), y forzar wx.Exit() sin haber cerrado antes ese
+        # modal deja el bucle nativo de Windows esperando algo que la salida
+        # de emergencia ya destruyó — el proceso queda colgado para siempre,
+        # sin cerrar ni actualizar. Confirmado con un cronómetro real: el PID
+        # seguía vivo pasados los 30s de espera del actualizador externo, que
+        # entonces abortaba (correcto, no corrompía nada) y relanzaba una
+        # SEGUNDA copia de la app — quedando dos procesos corriendo a la vez,
+        # exactamente lo que reportó el usuario.
+        #
+        # Fix: EndModal() primero (la forma correcta de cerrar un diálogo
+        # modal desde su propio handler — deja que ShowModal() en
+        # buscar_actualizaciones() retorne y destruya el diálogo con
+        # normalidad) y wx.Exit() recién DESPUÉS, diferido con wx.CallAfter
+        # para que corra una vez que el bucle modal ya terminó de
+        # desenrollarse, no desde adentro.
+        self.EndModal(wx.ID_OK)
+        wx.CallAfter(wx.Exit)
 
 
 def buscar_actualizaciones(parent, al_completar):
