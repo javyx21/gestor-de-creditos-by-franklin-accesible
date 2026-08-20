@@ -1662,6 +1662,36 @@ above for the full repo/URL story and the real (not mocked) end-to-end verificat
 after publishing. The local `C:\GestorCreditoBuild\` folder is scratch build output, not part of
 the repo (outside it entirely) — safe to delete and rebuild from scratch any time.
 
+**Real bug in that first `v1.0.0` build, found by the user testing the actual portable copy (same
+day)**: the very first build above was compiled BEFORE `URL_VERSION_JSON` got its real value in
+the source (that edit happened later the same session) and was never rebuilt afterward — so the
+`.exe` the user copied to test still had the old, empty `URL_VERSION_JSON` baked in, and "Buscar
+actualizaciones" failed with "No hay una URL de actualizaciones configurada" despite the *source*
+and the already-published release both being correct by that point. **Lesson: verifying
+`verificar_actualizacion()` by importing the live source (`python -c "from gestor_credito...
+import verificar_actualizacion"`) only proves the source is right — it says nothing about whether
+an already-compiled `.exe` was built from that same source.** A compiled artifact must be
+re-verified after ANY source change that could affect it, not assumed current just because the
+source looks right. Also, **grepping a PyInstaller `.exe`/`.pyz` for a plain-text string to check
+whether it's embedded doesn't work** — the PYZ archive is zlib-compressed as a whole, so `grep`
+finds nothing even for strings that ARE present (confirmed by grepping for an unrelated string
+known to exist — same false negative). The reliable way to inspect what's actually inside a built
+`.exe`: pull the `PYZ.pyz` entry out of the `.exe`'s `CArchive`
+(`PyInstaller.archive.readers.CArchiveReader(...).extract('PYZ.pyz')`), open that as a
+`ZlibArchiveReader`, `.extract('<dotted.module.name>')` to get the real `code` object, and inspect
+`co_consts` — or, more true-to-life (and what actually caught this bug for real): drive the
+compiled `.exe` itself through pywinauto (`backend="win32"`, since this app's native Win32 menu
+bar isn't well represented by the `uia` backend for cascading submenus — `menu_select()` on `uia`
+raised `IndexError` navigating into "Actualizaciones ▶", `win32` worked) and read the real result
+`wx.MessageBox` that appears. Fixed by a clean rebuild (fresh `--distpath`/`--workpath`, no stale
+PyInstaller cache) from the corrected source, confirmed via the `co_consts` inspection above that
+the real URL is now actually embedded, then re-verified by actually clicking through "Ayuda ▸
+Actualizaciones ▸ Buscar actualizaciones" on the rebuilt `.exe` and observing the real
+"Sin actualizaciones disponibles" confirmation — not just re-running the source-level check. The
+`v1.0.0` release assets on `gestor-de-credito-releases` were then replaced in place (`gh release
+upload --clobber`, same tag) with the corrected `.zip` and its new `sha256` in `version.json`,
+since nothing had actually consumed the broken ones yet.
+
 ## Architecture
 
 ```
