@@ -1,4 +1,4 @@
-import os
+import ctypes
 import tempfile
 from pathlib import Path
 
@@ -115,30 +115,39 @@ class ActualizacionDisponibleDialog(wx.Dialog):
         anunciar_voz_nvda("Actualización descargada. Cerrando la aplicación para aplicarla.")
 
         # Bug real reportado por el usuario (2026-08-20), reproducido en vivo
-        # DOS VECES: la primera con wx.Exit() directo, la segunda con un
-        # primer intento de fix (EndModal() + wx.Exit() diferido con
-        # wx.CallAfter) — ninguna de las dos cerraba el proceso de verdad.
-        # Este handler corre anidado varios niveles de profundidad dentro de
-        # bucles modales/CallAfter (ShowModal() de buscar_actualizaciones(),
-        # a su vez invocado desde OTRO wx.CallAfter del hilo de "Buscar
-        # actualizaciones", más el propio CallAfter del hilo de descarga) —
-        # confirmado en vivo con un cronómetro real que ese anidamiento hace
-        # que un wx.CallAfter programado acá adentro puede no llegar a
-        # entregarse nunca en el bucle de eventos externo, sin importar
-        # cuántas capas de EndModal/Destroy se intenten desenredar antes.
+        # TRES VECES, cada intento descartando la teoría del anterior:
+        # 1. wx.Exit() directo — no cerraba.
+        # 2. EndModal() + wx.Exit() diferido con wx.CallAfter (teoría: bucle
+        #    modal anidado que nunca entrega el CallAfter) — tampoco cerraba.
+        # 3. os._exit(0) (teoría: alguna capa de wx/CallAfter estaba de por
+        #    medio) — TAMPOCO cerraba, y esta vez la causa quedó confirmada
+        #    de forma directa: con el proceso todavía "vivo" según tasklist,
+        #    pywinauto mostró que su ventana ("Actualización disponible")
+        #    seguía visible en pantalla pero con is_active()=False — es
+        #    decir, el bucle de mensajes ya había dejado de bombear (algo SÍ
+        #    llegó a llamar a la salida), pero el proceso en sí no
+        #    terminaba de morir.
         #
-        # Fix definitivo: en vez de pedirle a wx que cierre "con educación"
-        # (con el riesgo real de quedar colgado en algún bucle anidado que
-        # nunca vuelve a la superficie), se termina el proceso a nivel del
-        # sistema operativo con os._exit() — no depende de wx, de ningún
-        # bucle de eventos, ni de que ningún CallAfter se entregue. Es
-        # exactamente lo que este momento necesita: el actualizador externo
-        # ya está lanzado y esperando a que este PID desaparezca, así que no
-        # hace falta ningún cierre "prolijo" de wx — el proceso completo
-        # (con la ventana modal y todo) simplemente deja de existir. Ya no
-        # hace falta EndModal() tampoco: si el proceso entero muere, no
-        # importa si el diálogo seguía técnicamente "abierto".
-        os._exit(0)
+        # Causa real: en Windows, incluso os._exit() de Python baja hasta
+        # ExitProcess() de la API de Win32 — y ExitProcess() SÍ espera a que
+        # cada DLL cargada en el proceso reciba y termine de procesar
+        # DLL_PROCESS_DETACH antes de dejar morir el proceso (documentado
+        # así por Microsoft). Esta app empaqueta muchísimas DLLs nativas
+        # (wx, numpy, PIL, lxml, pywin32, nvdaControllerClient, sqlite3...)
+        # — si el detach de cualquiera de ellas se cuelga o tarda, el
+        # proceso entero queda "vivo" para tasklist indefinidamente, aunque
+        # ya no responda a nada.
+        #
+        # Fix definitivo: TerminateProcess() de la propia API de Win32
+        # (vía ctypes, sin pasar por el runtime de C) — a diferencia de
+        # ExitProcess(), Microsoft documenta explícitamente que
+        # TerminateProcess() NO notifica DLL_PROCESS_DETACH a nada: el
+        # proceso desaparece de inmediato, sin esperar ninguna limpieza. Es
+        # el mismo mecanismo que usa `taskkill /F` — que, no es casualidad,
+        # fue lo único que logró cerrar de verdad los procesos colgados de
+        # las dos pruebas anteriores durante el diagnóstico.
+        kernel32 = ctypes.windll.kernel32
+        kernel32.TerminateProcess(kernel32.GetCurrentProcess(), 0)
 
 
 def buscar_actualizaciones(parent, al_completar):
