@@ -43,7 +43,7 @@ _INDICE_NOMBRE = 3
 _SELECT_BASE = """
     SELECT id, no_credito, cedula, nombre_cliente, fecha_desembolso, fecha_vencimiento,
            monto_desembolsado, estado_credito, empresa_convenio, plazo_credito, numero_cuotas,
-           cuotas_pagadas, estado_credito_fecha_cambio
+           cuotas_pagadas, estado_credito_fecha_cambio, saldo_principal, saldo_intereses
     FROM reporte_credito
 """
 

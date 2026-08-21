@@ -90,8 +90,9 @@ def test_nombre_accesible_de_la_lista():
     # una sola columna "Número de Cuotas" mostraba en realidad cuotas_pagadas).
     assert COLUMNAS == [
         "Fecha Desembolso", "Fecha Vencimiento", "No. Crédito", "Monto Desembolsado",
-        "Nombre del Cliente", "Identificación", "Empresa Convenio", "Estado del Crédito",
-        "Plazo del Crédito", "Número de Cuotas", "Cuotas Pagadas", "Cuotas Pendientes",
+        "Saldo a la fecha", "Nombre del Cliente", "Identificación", "Empresa Convenio",
+        "Estado del Crédito", "Plazo del Crédito", "Número de Cuotas", "Cuotas Pagadas",
+        "Cuotas Pendientes",
     ]
 
 
@@ -170,10 +171,27 @@ def test_celda_vacia_para_campos_sin_valor(panel, conn):
     _crear_credito(conn, "C-1", estado="Corriente", empresa_convenio=None, plazo_credito=None)
     panel.recargar()
 
-    fila_empresa = _filas_lista(panel, 6)  # columna "Empresa Convenio"
-    fila_plazo = _filas_lista(panel, 8)  # columna "Plazo del Crédito"
+    fila_empresa = _filas_lista(panel, 7)  # columna "Empresa Convenio"
+    fila_plazo = _filas_lista(panel, 9)  # columna "Plazo del Crédito"
     assert fila_empresa == [CreditosPanel.CELDA_VACIA]
     assert fila_plazo == [CreditosPanel.CELDA_VACIA]
+
+
+def test_saldo_a_la_fecha_suma_principal_e_intereses(panel, conn):
+    # Pedido explícito del usuario (2026-08-21): "el saldo a la fecha es la
+    # suma de saldo principal más el saldo de intereses" — saldo_principal y
+    # saldo_intereses en sí no tienen columna propia visible (ver COLUMNAS).
+    _crear_credito(conn, "C-1", estado="Corriente", saldo_principal=1000.50, saldo_intereses=25.75)
+    panel.recargar()
+
+    assert _filas_lista(panel, 4) == ["1026.25"]  # columna "Saldo a la fecha"
+
+
+def test_saldo_a_la_fecha_vacio_si_falta_alguno_de_los_dos(panel, conn):
+    _crear_credito(conn, "C-1", estado="Corriente", saldo_principal=1000.0, saldo_intereses=None)
+    panel.recargar()
+
+    assert _filas_lista(panel, 4) == [CreditosPanel.CELDA_VACIA]
 
 
 def test_seleccionar_credito_actualiza_la_etiqueta(panel, conn):

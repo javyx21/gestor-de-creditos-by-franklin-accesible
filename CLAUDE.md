@@ -70,6 +70,7 @@ reporte_credito(id, no_credito TEXT NOT NULL UNIQUE, cedula TEXT NOT NULL,
                  plazo_credito INTEGER,       -- MONTHS, not installment count
                  numero_cuotas INTEGER,       -- total installments (nullable pre-2026-08-16 rows)
                  cuotas_pagadas INTEGER,
+                 saldo_principal REAL, saldo_intereses REAL,  -- feed-only, see below, no own list column
                  estado_credito_fecha_cambio TEXT NOT NULL, fecha_actualizacion_registro)
 ```
 
@@ -356,11 +357,24 @@ ingresos extra, monto/plazo/periodicidad/deuda activa, then Calcular. Nothing is
 ### Historial de Créditos (`creditos_panel.py`, `db/reporte_creditos.py`)
 
 Read-only lookup over `reporte_credito` (no FK to cliente/caso, deliberately independent — same
-principle as `convenio_tasa`/`calculo_credito`). 12-column list (must stay in sync with
-`buscar_creditos()`'s SELECT order): Fecha Desembolso, Fecha Vencimiento, No. Crédito, Monto
-Desembolsado, Nombre del Cliente, Identificación, Empresa Convenio, Estado del Crédito, Plazo del
+principle as `convenio_tasa`/`calculo_credito`). 13-column list (`COLUMNAS` in `creditos_panel.py`
+— column order is independent of `buscar_creditos()`'s SELECT order, `_fila_a_columnas()` maps
+between the two): Fecha Desembolso, Fecha Vencimiento, No. Crédito, Monto Desembolsado, **Saldo a
+la fecha**, Nombre del Cliente, Identificación, Empresa Convenio, Estado del Crédito, Plazo del
 Crédito, Número de Cuotas, Cuotas Pagadas, Cuotas Pendientes. Same `CELDA_VACIA` placeholder as
 Casos. Selecting a row shows a read-only one-line summary, no edit fields.
+
+**Saldo a la fecha** (added 2026-08-21, explicit user request) = `saldo_principal +
+saldo_intereses`, computed in `_formatear_saldo_a_la_fecha()` at display time — same principle as
+Cuotas Pendientes (computed, never its own stored column). `saldo_principal`/`saldo_intereses`
+(imported from the real report's `SALDO_PRINCIPAL`/`SALDO_INTERESES` columns) exist in the schema
+and the importer purely to feed this sum — **they have no column of their own in the list**,
+explicit user request ("son relleno... solo se muestra el saldo a la fecha"). Empty (not `0`) if
+either input is `None` — a partial sum would look like a complete one. Of the 94 columns in the
+real report headers, the user marked exactly 13 as needed (yellow highlight in the sample file);
+9 were already covered, these 2 were the only genuinely new ones. Two other highlighted columns —
+`ES_CONVENIO` and `FECHA_REPORTE` — were explicitly declined ("ignórala, no la vamos a usar") and
+are not imported.
 
 Filters (all AND together, all live-reload on `EVT_CHOICE`, count announced via `anunciar_voz_nvda`
 on Enter — same `FindFocus()` pattern as Casos):

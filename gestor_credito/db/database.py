@@ -187,6 +187,14 @@ CREATE TABLE IF NOT EXISTS reporte_credito (
     numero_cuotas INTEGER,
     cuotas_pagadas INTEGER,
 
+    -- Agregadas 2026-08-21 a pedido explícito del usuario: NO se muestran
+    -- como columnas propias en Historial de Créditos (ui/creditos_panel.py)
+    -- — solo alimentan la columna calculada "Saldo a la fecha" = SALDO_PRINCIPAL
+    -- + SALDO_INTERESES, mismo criterio ya usado para "Cuotas Pendientes"
+    -- (se calcula al mostrar, nunca se guarda como su propia columna aparte).
+    saldo_principal REAL,
+    saldo_intereses REAL,
+
     -- Desde cuándo estado_credito tiene su valor actual — mismo patrón que
     -- caso.estado_solicitud_fecha_cambio (ver Domain model). Se usa para
     -- ordenar la vista "Finalizados (Cancelado)" por más recientemente
@@ -281,6 +289,12 @@ def _migrar_reporte_credito(conn):
             "UPDATE reporte_credito SET estado_credito_fecha_cambio = datetime('now') "
             "WHERE estado_credito_fecha_cambio IS NULL"
         )
+
+    if "saldo_principal" not in columnas:
+        conn.execute("ALTER TABLE reporte_credito ADD COLUMN saldo_principal REAL")
+
+    if "saldo_intereses" not in columnas:
+        conn.execute("ALTER TABLE reporte_credito ADD COLUMN saldo_intereses REAL")
 
 
 def init_db():

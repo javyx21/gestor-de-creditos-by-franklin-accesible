@@ -29,10 +29,20 @@ from gestor_credito.ui.sonido import SONIDO_BORRAR, reproducir_sonido
 # columna "Número de Cuotas" que en realidad mostraba cuotas_pagadas (no el
 # total de cuotas), un error de rótulo que quedó corregido de paso al separar
 # ambos valores.
+#
+# "Saldo a la fecha" agregada 2026-08-21, pedido explícito del usuario: se
+# calcula sumando saldo_principal + saldo_intereses (columnas nuevas del
+# reporte real, ver database.py/reporte_creditos_importer.py) — esas dos NO
+# tienen columna propia acá, el usuario pidió explícitamente que queden
+# ocultas ("son relleno... solo se muestra el saldo a la fecha"), mismo
+# criterio ya usado para "Cuotas Pendientes" (calculada, no importada tal
+# cual). Ubicada junto a "Monto Desembolsado" porque ambas son cifras de
+# dinero del crédito.
 COLUMNAS = [
     "Fecha Desembolso", "Fecha Vencimiento", "No. Crédito", "Monto Desembolsado",
-    "Nombre del Cliente", "Identificación", "Empresa Convenio", "Estado del Crédito",
-    "Plazo del Crédito", "Número de Cuotas", "Cuotas Pagadas", "Cuotas Pendientes",
+    "Saldo a la fecha", "Nombre del Cliente", "Identificación", "Empresa Convenio",
+    "Estado del Crédito", "Plazo del Crédito", "Número de Cuotas", "Cuotas Pagadas",
+    "Cuotas Pendientes",
 ]
 
 # Opciones del selector "Estado" — pedido explícito del usuario (2026-08-16):
@@ -432,7 +442,7 @@ class CreditosPanel(wx.Panel):
         (
             _id, no_credito, cedula, nombre_cliente, fecha_desembolso, fecha_vencimiento,
             monto_desembolsado, estado_credito, empresa_convenio, plazo_credito, numero_cuotas,
-            cuotas_pagadas, _estado_credito_fecha_cambio,
+            cuotas_pagadas, _estado_credito_fecha_cambio, saldo_principal, saldo_intereses,
         ) = fila
 
         monto_texto = f"{monto_desembolsado:.2f}" if monto_desembolsado is not None else ""
@@ -440,12 +450,13 @@ class CreditosPanel(wx.Panel):
         numero_cuotas_texto = str(numero_cuotas) if numero_cuotas is not None else ""
         cuotas_pagadas_texto = str(cuotas_pagadas) if cuotas_pagadas is not None else ""
         cuotas_pendientes_texto = cls._formatear_cuotas_pendientes(numero_cuotas, cuotas_pagadas)
+        saldo_a_la_fecha_texto = cls._formatear_saldo_a_la_fecha(saldo_principal, saldo_intereses)
 
         valores = [
             formatear_fecha(fecha_desembolso), formatear_fecha(fecha_vencimiento), no_credito or "",
-            monto_texto, nombre_cliente or "", cedula or "", empresa_convenio or "",
-            estado_credito or "", plazo_texto, numero_cuotas_texto, cuotas_pagadas_texto,
-            cuotas_pendientes_texto,
+            monto_texto, saldo_a_la_fecha_texto, nombre_cliente or "", cedula or "",
+            empresa_convenio or "", estado_credito or "", plazo_texto, numero_cuotas_texto,
+            cuotas_pagadas_texto, cuotas_pendientes_texto,
         ]
         # Celda vacía en vez de texto en blanco: mismo motivo que
         # CasosPanel._fila_a_columnas — NVDA lee una celda realmente vacía
@@ -458,13 +469,25 @@ class CreditosPanel(wx.Panel):
             return ""
         return str(max(numero_cuotas - cuotas_pagadas, 0))
 
+    @staticmethod
+    def _formatear_saldo_a_la_fecha(saldo_principal, saldo_intereses):
+        """Saldo a la fecha = saldo_principal + saldo_intereses — pedido
+        explícito del usuario (2026-08-21): "el saldo a la fecha es la suma
+        de saldo principal más el saldo de intereses". Sin ambos valores no
+        hay suma confiable que mostrar (mismo criterio que
+        _formatear_cuotas_pendientes): mejor celda vacía que un total parcial
+        que parezca completo sin serlo."""
+        if saldo_principal is None or saldo_intereses is None:
+            return ""
+        return f"{saldo_principal + saldo_intereses:.2f}"
+
     def _on_seleccionar_credito(self, event):
         indice = event.GetIndex()
         fila = self._filas[indice]
         (
             _id, no_credito, cedula, nombre_cliente, _fecha_desembolso, _fecha_vencimiento,
             _monto_desembolsado, estado_credito, _empresa_convenio, _plazo_credito, numero_cuotas,
-            cuotas_pagadas, _estado_credito_fecha_cambio,
+            cuotas_pagadas, _estado_credito_fecha_cambio, _saldo_principal, _saldo_intereses,
         ) = fila
         pendientes_texto = self._formatear_cuotas_pendientes(numero_cuotas, cuotas_pagadas) or (
             CreditosPanel.CELDA_VACIA

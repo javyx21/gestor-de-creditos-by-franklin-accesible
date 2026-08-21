@@ -8,7 +8,7 @@ from gestor_credito.db.database import get_connection
 
 DATE_FIELDS = {"fecha_desembolso", "fecha_vencimiento"}
 INT_FIELDS = {"plazo_credito", "numero_cuotas", "cuotas_pagadas"}
-FLOAT_FIELDS = {"monto_desembolsado"}
+FLOAT_FIELDS = {"monto_desembolsado", "saldo_principal", "saldo_intereses"}
 
 _ESPACIOS_MULTIPLES = re.compile(r"\s+")
 
@@ -38,12 +38,22 @@ COLUMN_ALIASES = {
     "numero cuotas": "numero_cuotas",
     "numero de cuotas": "numero_cuotas",
     "cuotas pagadas": "cuotas_pagadas",
+    # Agregadas 2026-08-21, pedido explícito del usuario: de las 13 columnas
+    # que resaltó en el reporte real, estas dos son las únicas dos genuinamente
+    # nuevas que sí hace falta importar — alimentan la columna calculada
+    # "Saldo a la fecha" en Historial de Créditos (ver creditos_panel.py), no
+    # tienen columna propia visible. ES_CONVENIO y FECHA_REPORTE, también
+    # resaltadas, se descartaron a propósito (pedido explícito del usuario:
+    # "ignórala ya que no la vamos a usar").
+    "saldo principal": "saldo_principal",
+    "saldo intereses": "saldo_intereses",
 }
 
 CREDITO_COLUMNS = [
     "cedula", "nombre_cliente", "fecha_desembolso", "fecha_vencimiento",
     "monto_desembolsado", "estado_credito", "empresa_convenio",
     "plazo_credito", "numero_cuotas", "cuotas_pagadas",
+    "saldo_principal", "saldo_intereses",
 ]
 
 
@@ -72,7 +82,7 @@ def import_reporte_creditos(file_path):
 
     workbook = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
     sheet = workbook.active
-    headers = _read_headers(sheet)
+    fila_encabezado, headers = _localizar_fila_encabezado(sheet)
 
     faltantes = {"no_credito", "cedula"} - headers.keys()
     if faltantes:
@@ -82,7 +92,9 @@ def import_reporte_creditos(file_path):
 
     conn = get_connection()
     try:
-        for row_number, row in enumerate(sheet.iter_rows(min_row=2), start=2):
+        for row_number, row in enumerate(
+            sheet.iter_rows(min_row=fila_encabezado + 1), start=fila_encabezado + 1
+        ):
             try:
                 data = _row_to_dict(row, headers)
                 no_credito = (data.get("no_credito") or "").strip()
@@ -118,14 +130,51 @@ def import_reporte_creditos(file_path):
     return resumen
 
 
-def _read_headers(sheet):
-    headers = {}
-    primera_fila = next(sheet.iter_rows(min_row=1, max_row=1))
-    for col_index, cell in enumerate(primera_fila):
-        field = COLUMN_ALIASES.get(_normalize_header(cell.value))
-        if field:
-            headers[field] = col_index
-    return headers
+# Cuántas filas se revisan buscando el encabezado real — el reporte real
+# trae una fila de título antes de los encabezados (bug real encontrado
+# 2026-08-21 validando contra un archivo real de producción: "REPORTE DE
+# DATOS DE CREDITOS AL DD/MM/AAAA" en la fila 2, con la fila 1 completamente
+# vacía, y los encabezados reales recién en la fila 3 — con el código
+# anterior, que asumía la fila 1 a secas, el import fallaba siempre con
+# "Faltan columnas obligatorias en el Excel: cedula, no_credito" contra
+# cualquier archivo con este formato real). 15 filas es margen de sobra para
+# cualquier preámbulo razonable sin arriesgar confundir una fila de datos
+# con el encabezado.
+_MAX_FILAS_BUSQUEDA_ENCABEZADO = 15
+
+
+def _localizar_fila_encabezado(sheet):
+    """Devuelve (numero_fila, headers) de la fila, entre las primeras
+    _MAX_FILAS_BUSQUEDA_ENCABEZADO, que tiene más coincidencias contra
+    COLUMN_ALIASES — no se puede asumir que los encabezados siempre están en
+    la fila 1 (ver comentario de la constante arriba). Una fila de título o
+    una fila de datos normalmente no coincide con ningún alias conocido (0
+    coincidencias), así que la fila de encabezados reales gana por amplio
+    margen incluso sin conocer de antemano en qué fila está.
+
+    Si ninguna fila tiene coincidencias, devuelve (1, {}) — el llamador ya
+    valida que falten "no_credito"/"cedula" y lanza el mismo error de
+    siempre, con un mensaje que sigue siendo correcto aunque la causa real
+    sea "no se encontró ninguna fila de encabezados", no solo "esta fila no
+    los tiene"."""
+    mejor_numero_fila = 1
+    mejor_headers = {}
+    mejor_cantidad = 0
+
+    for numero_fila, fila in enumerate(
+        sheet.iter_rows(min_row=1, max_row=_MAX_FILAS_BUSQUEDA_ENCABEZADO), start=1
+    ):
+        headers_fila = {}
+        for col_index, cell in enumerate(fila):
+            field = COLUMN_ALIASES.get(_normalize_header(cell.value))
+            if field:
+                headers_fila[field] = col_index
+        if len(headers_fila) > mejor_cantidad:
+            mejor_cantidad = len(headers_fila)
+            mejor_numero_fila = numero_fila
+            mejor_headers = headers_fila
+
+    return mejor_numero_fila, mejor_headers
 
 
 def _normalize_header(value):

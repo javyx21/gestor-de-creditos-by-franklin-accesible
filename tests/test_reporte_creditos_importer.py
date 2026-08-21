@@ -14,7 +14,7 @@ from gestor_credito.importer.reporte_creditos_importer import import_reporte_cre
 HEADERS = [
     "FECHA_DESEMBOLSO", "FECHA_VENCIMIENTO", "NO_CREDITO", "NO_CLIENTE_SIAF",
     "NOMBRE_CLIENTE", "ESTADO_CREDITO", "PRODUCTO_CREDITO", "SALDO_PRINCIPAL",
-    "MONTO_DESEMBOLSADO", "EMPRESA_DE_CONVENIO", "NO_IDENTIFICACION",
+    "SALDO_INTERESES", "MONTO_DESEMBOLSADO", "EMPRESA_DE_CONVENIO", "NO_IDENTIFICACION",
     "MONTO_GARANTIA", "PLAZO_CREDITO", "NUMERO_CUOTAS", "CUOTAS_PAGADAS",
 ]
 
@@ -29,6 +29,7 @@ def _fila(**overrides):
         "ESTADO_CREDITO": "Corriente",
         "PRODUCTO_CREDITO": "CREDINOMINA",
         "SALDO_PRINCIPAL": 1132.2337,
+        "SALDO_INTERESES": 45.6,
         "MONTO_DESEMBOLSADO": 2007.0443,
         "EMPRESA_DE_CONVENIO": "AGROSACO",
         "NO_IDENTIFICACION": "0012510940057N",
@@ -140,10 +141,10 @@ def test_no_credito_como_numero_se_guarda_como_texto(db, tmp_path):
 
 
 def test_columnas_no_mapeadas_del_reporte_real_se_ignoran(db, tmp_path):
-    """SALDO_PRINCIPAL, MONTO_GARANTIA, PRODUCTO_CREDITO y NO_CLIENTE_SIAF
-    existen en el Excel real pero no forman parte del mapeo pedido — deben
-    ignorarse sin romper nada. NUMERO_CUOTAS sí se mapea (ver
-    test_numero_cuotas_se_importa)."""
+    """MONTO_GARANTIA, PRODUCTO_CREDITO y NO_CLIENTE_SIAF existen en el Excel
+    real pero no forman parte del mapeo pedido — deben ignorarse sin romper
+    nada. NUMERO_CUOTAS y SALDO_PRINCIPAL sí se mapean (ver
+    test_numero_cuotas_se_importa/test_saldo_principal_se_importa)."""
     excel_path = tmp_path / "reporte.xlsx"
     _escribir_excel(excel_path, [_fila()])
 
@@ -243,6 +244,39 @@ def test_numero_cuotas_se_importa(db, tmp_path):
     assert numero_cuotas == 46
 
 
+def test_saldo_principal_se_importa(db, tmp_path):
+    """Agregada 2026-08-21, pedido explícito del usuario: sin esta columna
+    (y saldo_intereses) no hay forma de calcular "Saldo a la fecha" en
+    Historial de Créditos (ver creditos_panel.py)."""
+    excel_path = tmp_path / "reporte.xlsx"
+    _escribir_excel(excel_path, [_fila(SALDO_PRINCIPAL=1500.75)])
+
+    import_reporte_creditos(excel_path)
+
+    conn = db.get_connection()
+    try:
+        saldo_principal = conn.execute("SELECT saldo_principal FROM reporte_credito").fetchone()[0]
+    finally:
+        conn.close()
+
+    assert saldo_principal == pytest.approx(1500.75)
+
+
+def test_saldo_intereses_se_importa(db, tmp_path):
+    excel_path = tmp_path / "reporte.xlsx"
+    _escribir_excel(excel_path, [_fila(SALDO_INTERESES=32.10)])
+
+    import_reporte_creditos(excel_path)
+
+    conn = db.get_connection()
+    try:
+        saldo_intereses = conn.execute("SELECT saldo_intereses FROM reporte_credito").fetchone()[0]
+    finally:
+        conn.close()
+
+    assert saldo_intereses == pytest.approx(32.10)
+
+
 def test_estado_credito_fecha_cambio_se_estampa_al_insertar(db, tmp_path):
     excel_path = tmp_path / "reporte.xlsx"
     _escribir_excel(excel_path, [_fila()])
@@ -320,6 +354,28 @@ def test_estado_credito_fecha_cambio_se_actualiza_si_el_estado_cambia(db, tmp_pa
     assert fecha != "2000-01-01 00:00:00"
 
 
+def test_encabezados_con_fila_de_titulo_antes_tambien_se_reconocen(db, tmp_path):
+    """Bug real encontrado 2026-08-21 validando contra un archivo de
+    producción real: la fila 1 estaba completamente vacía, la fila 2 traía
+    un título ("REPORTE DE DATOS DE CREDITOS AL 21/08/2026") y los
+    encabezados reales recién estaban en la fila 3 — con el código anterior
+    (que asumía la fila 1 a secas), el import fallaba siempre con "Faltan
+    columnas obligatorias" contra cualquier archivo con este formato."""
+    excel_path = tmp_path / "reporte.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append([])  # fila 1: vacía
+    ws.append(["REPORTE DE DATOS DE CREDITOS AL 21/08/2026"])  # fila 2: título
+    ws.append(HEADERS)  # fila 3: encabezados reales
+    ws.append(_fila())  # fila 4: primer dato
+    wb.save(excel_path)
+
+    resumen = import_reporte_creditos(excel_path)
+
+    assert resumen.creditos_nuevos == 1
+    assert resumen.filas_omitidas == []
+
+
 def test_encabezados_con_espacio_en_vez_de_guion_bajo_tambien_matchean(db, tmp_path):
     """_normalize_header() convierte "_" a espacio antes de buscar el alias,
     así que encabezados con espacio en vez de guion bajo (o las variantes con
@@ -328,7 +384,7 @@ def test_encabezados_con_espacio_en_vez_de_guion_bajo_tambien_matchean(db, tmp_p
     headers_alternativos = [
         "FECHA_DESEMBOLSO", "FECHA_VENCIMIENTO", "NO_CREDITO", "NO_CLIENTE_SIAF",
         "NOMBRE del CLIENTE", "ESTADO_CREDITO", "PRODUCTO_CREDITO", "SALDO_PRINCIPAL",
-        "MONTO_DESEMBOLSADO", "EMPRESA_DE_CONVENIO", "NO_IDENTIFICACION",
+        "SALDO_INTERESES", "MONTO_DESEMBOLSADO", "EMPRESA_DE_CONVENIO", "NO_IDENTIFICACION",
         "MONTO_GARANTIA", "PLAZO del CREDITO", "NUMERO_CUOTAS", "CUOTAS_PAGADAS",
     ]
     excel_path = tmp_path / "reporte.xlsx"
