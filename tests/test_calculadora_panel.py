@@ -188,17 +188,17 @@ def test_alternar_empresa_despues_de_calcular_recalcula_solo_con_la_tasa_nueva(c
     """Fix del reporte real (2026-07-12), calificado como fallo crítico:
     "el sistema siempre devuelve el mismo resultado... no recalcula al
     cambiar el foco de la empresa seleccionada". Antes, cambiar la empresa
-    tras Calcular solo actualizaba tasa_texto y dejaba el cuadro de
-    Resultados con el número de la empresa ANTERIOR, indistinguible de un
-    cálculo válido. Ahora, si ya había un resultado, cambiar de empresa
-    fuerza un recálculo limpio en silencio (sin wx.MessageBox ni voz)."""
+    tras Calcular no forzaba un recálculo y dejaba el cuadro de Resultados
+    con el número de la empresa ANTERIOR, indistinguible de un cálculo
+    válido. Ahora, si ya había un resultado, cambiar de empresa fuerza un
+    recálculo limpio en silencio (sin wx.MessageBox ni voz)."""
     _llenar_formulario(calc)
     _elegir_empresa(calc, "MIDESA")
     calc._on_calcular(None)
     assert calc._ultimo_resultado.cuota_usd == pytest.approx(_cuota_esperada(calc, 0.18))
 
     _elegir_empresa(calc, "NICAES")
-    assert calc.tasa_texto.GetLabel() == "Tasa: 60%"
+    assert calc._convenios["NICAES"] == pytest.approx(0.60)
     # Recalculado SOLO, sin volver a presionar Calcular.
     assert calc._ultimo_resultado.cuota_usd == pytest.approx(_cuota_esperada(calc, 0.60))
     assert "60" not in calc.resultado_cuota.GetLabel()  # no queda texto de la tasa vieja
@@ -241,8 +241,7 @@ def test_recargar_calculadora_ve_una_tasa_editada_directo_en_bd(calc, conn):
     calc.recargar()
 
     assert calc._convenios["MIDESA"] == pytest.approx(0.99)
-    _elegir_empresa(calc, "MIDESA")
-    assert calc.tasa_texto.GetLabel() == "Tasa: 99%"
+    _elegir_empresa(calc, "MIDESA")  # no revienta al elegir con la tasa ya actualizada
 
 
 def test_recargar_solo_ya_recalcula_sin_volver_a_elegir_la_empresa_ni_presionar_calcular(calc, conn):
@@ -259,7 +258,7 @@ def test_recargar_solo_ya_recalcula_sin_volver_a_elegir_la_empresa_ni_presionar_
     guardar_tasa(conn, "MIDESA", 0.50)
     calc.recargar()
 
-    assert calc.tasa_texto.GetLabel() == "Tasa: 50%"
+    assert calc._convenios["MIDESA"] == pytest.approx(0.50)
     assert calc._ultimo_resultado.cuota_usd == pytest.approx(_cuota_esperada(calc, 0.50))
 
 
@@ -307,7 +306,6 @@ def test_editar_tasa_en_configuracion_se_refleja_en_calculadora_tras_recargar(ca
     assert calc._convenios["MIDESA"] == pytest.approx(0.05)
 
     _elegir_empresa(calc, "MIDESA")
-    assert calc.tasa_texto.GetLabel() == "Tasa: 5%"
 
     calc._on_calcular(None)
     cuota_despues = calc._ultimo_resultado.cuota_usd
@@ -345,7 +343,7 @@ def test_recargar_preserva_la_empresa_elegida_y_su_tasa_actualizada(calc, conn):
     calc.recargar()
 
     assert calc._empresa_seleccionada() == "NICAES"
-    assert calc.tasa_texto.GetLabel() == "Tasa: 77%"
+    assert calc._convenios["NICAES"] == pytest.approx(0.77)
     calc._on_calcular(None)
     assert calc._ultimo_resultado.cuota_usd == pytest.approx(_cuota_esperada(calc, 0.77))
 
@@ -761,9 +759,6 @@ def test_calcular_llena_la_cuota_redondeada_al_entero_hacia_arriba(calc, conn):
     assert cuota_exacta != esperado_usd  # la muestra no es un entero exacto de por sí
     assert calc._cuota_redondeada_usd == esperado_usd
     assert calc._cuota_redondeada_cordobas == pytest.approx(esperado_usd * TIPO_CAMBIO_FIJO)
-    assert calc.resultado_cuota_redondeada.GetLabel() == (
-        f"Cuota redondeada: US${esperado_usd} (C${esperado_usd * TIPO_CAMBIO_FIJO:.2f})"
-    )
 
 
 def test_cuota_redondeada_sube_incluso_desde_una_fraccion_pequena(calc, conn, monkeypatch):
@@ -802,7 +797,6 @@ def test_limpiar_formulario_limpia_tambien_la_cuota_redondeada(calc, conn):
 
     assert calc._cuota_redondeada_usd is None
     assert calc._cuota_redondeada_cordobas is None
-    assert calc.resultado_cuota_redondeada.GetLabel() == "Cuota redondeada: —"
 
 
 def test_ctrl_r_anuncia_la_cuota_redondeada_ya_calculada(calc, conn, monkeypatch):
@@ -861,3 +855,137 @@ def test_char_hook_ctrl_r_sin_shift_dispara_el_anuncio_no_el_calculo(calc, conn,
     assert calc._ultimo_resultado is calculos_antes  # no se recalculó
     assert len(llamadas) == 1
     assert str(calc._cuota_redondeada_usd) in llamadas[0]
+
+
+# ---- Guardar cálculo en PDF (Ctrl+P / botón "Guardar PDF", pedido -------
+# ---- explícito del usuario, 2026-08-21) ----------------------------------
+
+def test_construir_datos_calculo_tiene_los_14_campos_pedidos_por_el_usuario(calc, conn):
+    """Exactamente los 8 datos de entrada + 6 resultados que el usuario
+    confirmó que deben quedar visibles (2026-08-21) — ni la cuota
+    redondeada ni la tasa por separado, que ahora son solo por voz."""
+    _llenar_formulario(calc)
+    _elegir_empresa(calc, "MIDESA")
+    calc._on_calcular(None)
+
+    campos = calc._construir_datos_calculo()
+    etiquetas = [etiqueta for etiqueta, _valor in campos]
+
+    assert len(campos) == 14
+    assert etiquetas == [
+        "Empresa convenio",
+        "Fecha de ingreso a la empresa",
+        "Salario bruto mensual",
+        "Ingresos extra",
+        "Monto del crédito",
+        "Plazo",
+        "Periodicidad",
+        "Cuotas de deudas activas externas",
+        "Salario bruto (sin deducciones)",
+        "Salario neto (con deducciones)",
+        "Pasivo laboral (respaldo del cliente)",
+        "Cuota calculada",
+        "Cobertura de pasivo laboral",
+        "Nivel de endeudamiento",
+    ]
+    assert not any("redondeada" in etiqueta.lower() for etiqueta in etiquetas)
+    assert not any(etiqueta.lower() == "tasa" for etiqueta in etiquetas)
+
+    valores = dict(campos)
+    assert valores["Empresa convenio"] == "MIDESA"
+    assert valores["Cuota calculada"] == (
+        f"US${calc._ultimo_resultado.cuota_usd:.2f} (C${calc._ultimo_resultado.cuota_cordobas:.2f})"
+    )
+
+
+def test_construir_datos_calculo_refleja_el_ultimo_calcular_no_lo_tipeado_despues(calc, conn):
+    """El PDF tiene que ser coherente: si el oficial cambió un campo
+    después de Calcular sin volver a presionar el botón, los 14 campos
+    siguen mostrando el cálculo real (_ultimas_entradas/_ultimo_resultado),
+    no una mezcla de datos viejos y el texto nuevo sin calcular."""
+    _llenar_formulario(calc, monto="1140")
+    _elegir_empresa(calc, "MIDESA")
+    calc._on_calcular(None)
+
+    calc.monto_texto.SetValue("9999")  # tipeado después, sin recalcular
+
+    valores = dict(calc._construir_datos_calculo())
+    assert valores["Monto del crédito"] == "US$1140.00"
+
+
+def test_guardar_pdf_en_ruta_escribe_el_archivo_y_avisa_por_voz_y_estado(calc, conn, monkeypatch, tmp_path):
+    llamadas_voz = []
+    monkeypatch.setattr(
+        "gestor_credito.ui.calculadora_panel.anunciar_voz_nvda",
+        lambda texto: llamadas_voz.append(texto),
+    )
+    _llenar_formulario(calc)
+    _elegir_empresa(calc, "MIDESA")
+    calc._on_calcular(None)
+    llamadas_voz.clear()  # descarta el anuncio del propio Calcular
+    ruta = tmp_path / "Calculo_credito_prueba.pdf"
+
+    calc._guardar_pdf_en_ruta(str(ruta))
+
+    assert ruta.exists()
+    assert ruta.read_bytes().startswith(b"%PDF-")
+    assert len(llamadas_voz) == 1
+    assert str(ruta) in llamadas_voz[0]
+    assert calc.GetTopLevelParent().GetStatusBar().GetStatusText() == llamadas_voz[0]
+
+
+def test_on_guardar_pdf_sin_calcular_antes_avisa_con_messagebox_y_no_escribe_nada(
+    calc, conn, monkeypatch, tmp_path
+):
+    """Mismo criterio que _leer_entradas/_on_calcular: sin un cálculo
+    previo no hay nada coherente que exportar. wx.MessageBox se
+    intercepta (mismo patrón que test_copiar_resumen_con_datos_incompletos_
+    no_copia_ni_revienta) para no abrir un modal real en la prueba."""
+    llamadas_mensaje = []
+    monkeypatch.setattr(wx, "MessageBox", lambda *a, **k: llamadas_mensaje.append(a) or wx.OK)
+    assert calc._ultimo_resultado is None
+
+    calc._on_guardar_pdf(None)
+
+    assert len(llamadas_mensaje) == 1
+    assert "calcul" in llamadas_mensaje[0][0].lower()
+
+
+def test_char_hook_ctrl_p_guarda_el_pdf(calc, conn, monkeypatch, tmp_path):
+    """Ctrl+P (sin Shift) dispara el guardado — pero como abre un
+    wx.FileDialog real (modal), se reemplaza _on_guardar_pdf por una
+    versión que bypasea el diálogo, mismo criterio que el resto de esta
+    batería para acciones que abrirían UI nativa interactiva."""
+    llamados = []
+    monkeypatch.setattr(calc, "_on_guardar_pdf", lambda event: llamados.append(event))
+    _llenar_formulario(calc)
+    _elegir_empresa(calc, "MIDESA")
+    calc._on_calcular(None)
+
+    evento = wx.KeyEvent(wx.wxEVT_CHAR_HOOK)
+    evento.SetControlDown(True)
+    evento.SetShiftDown(False)
+    evento.SetKeyCode(ord("P"))
+    calc._on_atajo_verbalizacion(evento)
+
+    assert len(llamados) == 1
+
+
+def test_limpiar_formulario_limpia_tambien_las_ultimas_entradas(calc, conn):
+    _llenar_formulario(calc)
+    _elegir_empresa(calc, "MIDESA")
+    calc._on_calcular(None)
+    assert calc._ultimas_entradas is not None
+
+    calc.limpiar_formulario()
+
+    assert calc._ultimas_entradas is None
+
+
+def test_no_quedan_widgets_visibles_de_tasa_ni_cuota_redondeada(calc, conn):
+    """Pedido explícito del usuario (2026-08-21): esos dos datos pasan a
+    ser solo por voz (Ctrl+Shift+E ya escucha la empresa, la tasa ya se oye
+    dentro del ítem de empresa_choice, y Ctrl+R sigue anunciando la cuota
+    redondeada) — no deben tener un wx.StaticText propio en el panel."""
+    assert not hasattr(calc, "tasa_texto")
+    assert not hasattr(calc, "resultado_cuota_redondeada")

@@ -1,5 +1,5 @@
 import math
-from datetime import date
+from datetime import date, datetime
 
 import wx
 import wx.lib.scrolledpanel as scrolledpanel
@@ -14,6 +14,7 @@ from gestor_credito.calculo.deducciones import calcular_salario_neto_mensual
 from gestor_credito.calculo.pasivo_laboral import calcular_pasivo_laboral
 from gestor_credito.db.convenios import listar_convenios
 from gestor_credito.db.database import get_connection
+from gestor_credito.export.pdf_export import generar_pdf_calculo
 from gestor_credito.ui.accesibilidad import activar_con_enter, anunciar_voz_nvda, nombre_accesible
 from gestor_credito.ui.fechas import parsear_fecha_ui
 from gestor_credito.ui.logo import AppLogo
@@ -116,6 +117,13 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         # _calcular_y_mostrar), igual que resultado_cuota.
         self._cuota_redondeada_usd = None
         self._cuota_redondeada_cordobas = None
+        # Snapshot de los datos de entrada que produjeron _ultimo_resultado —
+        # pedido explícito del usuario (2026-08-21) para el PDF exportable
+        # (ver _construir_datos_calculo/_on_guardar_pdf): el PDF tiene que
+        # reflejar exactamente los datos del último Calcular, nunca lo que
+        # haya quedado tipeado después sin recalcular. Mismo criterio que
+        # _ultimo_resultado: se limpia junto con él en _limpiar_resultados.
+        self._ultimas_entradas = None
 
         sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(AppLogo(self), 0, wx.ALIGN_LEFT | wx.ALL, 4)
@@ -166,14 +174,25 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
 
         # B5: empresa convenio (tipeada/elegida a mano, nunca prellenada) ->
         # resuelve B12 (tasa) por VLOOKUP contra convenio_tasa.
+        #
+        # La tasa YA NO tiene una etiqueta visible aparte (pedido explícito
+        # del usuario, 2026-08-21: "cosas que he realizado para ciegos que
+        # no deberían de estarse mostrando") — no hace falta: el texto del
+        # propio ítem elegido en empresa_choice ya incluye la tasa (ver
+        # _texto_opcion_empresa, ej. "MIDESA: Tasa: 18%"), y NVDA lo anuncia
+        # igual con el combo enfocado, esté abierto o cerrado. La etiqueta
+        # separada era solo una ayuda visual para personas videntes, no
+        # aportaba nada por voz que no se escuchara ya. Elegir una empresa
+        # sigue forzando el mismo recálculo silencioso de siempre.
         empresa_label = wx.StaticText(contenedor, label="Empresa convenio:")
         self.empresa_choice = wx.Choice(contenedor, choices=[])
         nombre_accesible(self.empresa_choice, "Empresa convenio")
-        self.empresa_choice.Bind(wx.EVT_CHOICE, lambda event: self._actualizar_tasa_mostrada())
-        self.tasa_texto = wx.StaticText(contenedor, label="Tasa: —")
+        self.empresa_choice.Bind(
+            wx.EVT_CHOICE, lambda event: self._refrescar_resultado_tras_cambio_de_tasa()
+        )
         grilla.Add(empresa_label, 0, wx.ALIGN_CENTER_VERTICAL)
         grilla.Add(self.empresa_choice, 0, wx.EXPAND)
-        grilla.Add(self.tasa_texto, 0, wx.ALIGN_CENTER_VERTICAL)
+        grilla.Add(wx.StaticText(contenedor, label=""))
         grilla.Add(wx.StaticText(contenedor, label=""))
 
         # B6/B7: premisa del pasivo laboral (fecha de ingreso + salario bruto).
@@ -258,7 +277,22 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         self.calcular_btn = wx.Button(contenedor, label="Calcular")
         self.calcular_btn.Bind(wx.EVT_BUTTON, self._on_calcular)
         activar_con_enter(self.calcular_btn)
-        box.Add(self.calcular_btn, 0)
+
+        # Guardar PDF: pedido explícito del usuario (2026-08-21) para poder
+        # adjuntar el cálculo al expediente físico/digital del cliente — ver
+        # _on_guardar_pdf/_guardar_pdf_en_ruta/_construir_datos_calculo más
+        # abajo. Requiere un Calcular previo (mismo criterio que Ctrl+R para
+        # la cuota redondeada), así que vive al lado del botón Calcular, no
+        # en Resultados. Atajo Ctrl+P (libre en toda la app, sin colisión —
+        # ver _on_atajo_verbalizacion) además del botón, mismo patrón dual
+        # botón+atajo que ya tiene Calcular.
+        botones_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        botones_sizer.Add(self.calcular_btn, 0)
+        self.guardar_pdf_btn = wx.Button(contenedor, label="Guardar PDF")
+        self.guardar_pdf_btn.Bind(wx.EVT_BUTTON, self._on_guardar_pdf)
+        activar_con_enter(self.guardar_pdf_btn)
+        botones_sizer.Add(self.guardar_pdf_btn, 0, wx.LEFT, 8)
+        box.Add(botones_sizer, 0)
 
         return box
 
@@ -276,12 +310,6 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
             return None
         return self._empresas_por_indice[indice]
 
-    def _actualizar_tasa_mostrada(self):
-        empresa = self._empresa_seleccionada()
-        tasa = self._convenios.get(empresa)
-        self.tasa_texto.SetLabel("Tasa: sin configurar" if tasa is None else f"Tasa: {tasa:.0%}")
-        self._refrescar_resultado_tras_cambio_de_tasa()
-
     # ---- Resultados ---------------------------------------------------
     # Orden y contenido calcan Calculadora!B7:B19 del Excel de referencia.
 
@@ -293,18 +321,19 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         self.resultado_pasivo_laboral = wx.StaticText(contenedor, label="Pasivo laboral: —")
         self.resultado_salario_neto = wx.StaticText(contenedor, label="Salario neto mensual: —")
         self.resultado_cuota = wx.StaticText(contenedor, label="Cuota calculada: —")
-        # Cuota redondeada al entero x TIPO_CAMBIO_FIJO en córdobas — Ctrl+R
-        # la anuncia por voz (ver _anunciar_cuota_redondeada). Ubicada justo
-        # debajo de "Cuota calculada" porque es una variante directa de ese
-        # mismo dato, no un cálculo aparte.
-        self.resultado_cuota_redondeada = wx.StaticText(contenedor, label="Cuota redondeada: —")
         self.resultado_cobertura = wx.StaticText(contenedor, label="Cobertura de pasivo laboral: —")
         self.resultado_endeudamiento = wx.StaticText(contenedor, label="Nivel de endeudamiento: —")
 
+        # La cuota redondeada (Ctrl+R) YA NO tiene una etiqueta visible acá
+        # — pedido explícito del usuario (2026-08-21): es un dato que solo
+        # necesita en voz, calculado igual en _calcular_y_mostrar y guardado
+        # en _cuota_redondeada_usd/_cordobas, pero sin ocupar espacio ni
+        # texto en Resultados. Mismo criterio que ya se usaba para el
+        # nombre de empresa (Ctrl+Shift+E: se anuncia por voz sin tener su
+        # propia etiqueta separada en pantalla).
         for control in (
             self.resultado_salario_bruto, self.resultado_pasivo_laboral, self.resultado_salario_neto,
-            self.resultado_cuota, self.resultado_cuota_redondeada,
-            self.resultado_cobertura, self.resultado_endeudamiento,
+            self.resultado_cuota, self.resultado_cobertura, self.resultado_endeudamiento,
         ):
             box.Add(control, 0, wx.BOTTOM, 4)
 
@@ -504,6 +533,7 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         # _actualizar_pasivo_laboral_en_vivo/_actualizar_salario_neto_en_vivo),
         # y ninguno de los dos interfiere con el otro.
         self._ultimo_resultado = resultado
+        self._ultimas_entradas = entradas
 
         # Ya deberían estar al día por los listeners EVT_TEXT de fecha/
         # salario/extra, pero se vuelven a llamar acá para que cada una siga
@@ -538,12 +568,9 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         # TIPO_CAMBIO_FIJO para su equivalente en córdobas. Pedido explícito
         # del usuario (2026-08-20): Ctrl+R lee estos dos valores en voz alta
         # (ver _anunciar_cuota_redondeada) sin recalcular nada por su cuenta.
+        # Sin etiqueta visible propia (ver _crear_resultados) — solo voz.
         self._cuota_redondeada_usd = math.ceil(resultado.cuota_usd)
         self._cuota_redondeada_cordobas = self._cuota_redondeada_usd * TIPO_CAMBIO_FIJO
-        self.resultado_cuota_redondeada.SetLabel(
-            f"Cuota redondeada: US${self._cuota_redondeada_usd} "
-            f"(C${self._cuota_redondeada_cordobas:.2f})"
-        )
         self.resultado_cobertura.SetLabel(
             f"Cobertura de pasivo laboral: {resultado.cobertura_pasivo_laboral:.0%}"
         )
@@ -553,11 +580,10 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
 
         if not hablar:
             # Refresco silencioso (cambio de empresa/tasa, ver
-            # _refrescar_resultado_tras_cambio_de_tasa): mismo criterio que
-            # ya usa tasa_texto (se actualiza en cada cambio del combo sin
-            # anunciarse por voz) — anunciar acá también convertiría cada
-            # flecha sobre empresa_choice en un anuncio hablado, exactamente
-            # el tipo de ruido que ya se evitó a propósito para ese combo.
+            # _refrescar_resultado_tras_cambio_de_tasa) — anunciar acá
+            # convertiría cada flecha sobre empresa_choice en un anuncio
+            # hablado, exactamente el tipo de ruido que ya se evita a
+            # propósito para ese combo (NVDA ya lee el texto del ítem solo).
             return
 
         # Pedido explícito del usuario (2026-07-12): sin el pasivo laboral
@@ -588,11 +614,11 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         2026-08-16, mismo día que pasó a calcularse en vivo — antes SÍ se
         pisaba acá porque solo existía como parte de un Calcular completo."""
         self._ultimo_resultado = None
+        self._ultimas_entradas = None
         self._cuota_redondeada_usd = None
         self._cuota_redondeada_cordobas = None
         self.resultado_salario_bruto.SetLabel("Salario bruto: —")
         self.resultado_cuota.SetLabel("Cuota calculada: —")
-        self.resultado_cuota_redondeada.SetLabel("Cuota redondeada: —")
         self.resultado_cobertura.SetLabel("Cobertura de pasivo laboral: —")
         self.resultado_endeudamiento.SetLabel("Nivel de endeudamiento: —")
 
@@ -612,8 +638,8 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
 
         Si ya había un resultado y el formulario sigue teniendo datos
         válidos, se recalcula en silencio con la tasa/empresa actuales (sin
-        wx.MessageBox ni voz — esto no es una acción explícita del usuario,
-        mismo criterio que tasa_texto). Si el formulario YA NO alcanza para
+        wx.MessageBox ni voz — esto no es una acción explícita del usuario).
+        Si el formulario YA NO alcanza para
         calcular (p. ej. se cambió a una empresa sin tasa configurada), se
         limpia el cuadro en vez de dejar el número de la empresa anterior
         mostrado como si siguiera vigente — eso es exactamente lo que se
@@ -675,7 +701,7 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         reproducir_sonido(SONIDO_BORRAR)
         self.fecha_ingreso_texto.SetFocus()
 
-    # ---- Atajos de verbalización pura (Ctrl+Shift+Q/W/E/T, Ctrl+T/R) ------
+    # ---- Atajos de verbalización pura (Ctrl+Shift+Q/W/E/T, Ctrl+T/R/P) ----
 
     def _on_atajo_verbalizacion(self, event):
         if event.ControlDown() and event.ShiftDown() and not event.AltDown():
@@ -721,6 +747,15 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
                 # existe — ver MainFrame._enfocar_resultados_segun_pestana_activa),
                 # así que reutilizarlo acá no pisa ningún otro atajo.
                 self._anunciar_cuota_redondeada()
+                return
+            if event.GetKeyCode() == ord("P"):
+                # Ctrl+P: guardar el cálculo en PDF, mismo atajo dual
+                # botón+teclado que el resto de las acciones de este panel —
+                # ver _on_guardar_pdf. Libre en toda la app (ningún otro
+                # panel/menú usa Ctrl+P), pedido explícito del usuario
+                # (2026-08-21) para poder adjuntarlo al expediente del
+                # cliente.
+                self._on_guardar_pdf(None)
                 return
         elif (
             not event.ControlDown() and not event.ShiftDown() and not event.AltDown()
@@ -887,6 +922,98 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
             f"equivalentes a {self._cuota_redondeada_cordobas:.2f} córdobas."
         )
 
+    # ---- Guardar cálculo en PDF (Ctrl+P / botón "Guardar PDF") ------------
+    # Pedido explícito del usuario (2026-08-21): poder adjuntar el cálculo
+    # ya hecho al expediente físico/digital de un cliente. La Calculadora
+    # sigue sin guardar nada en la base de datos (ver la clase) — esto es
+    # exclusivamente un archivo que el oficial elige dónde guardar cada vez.
+
+    def _construir_datos_calculo(self):
+        """Arma la lista ordenada de 14 campos (8 de entrada + 6 de
+        resultado) que va al PDF — exactamente los que el usuario pidió que
+        quedaran visibles en pantalla (ver CLAUDE.md, sección Calculadora),
+        ni uno más: nunca un aviso transitorio como "copiado al
+        portapapeles" ni datos que solo existen por voz (Cuota redondeada,
+        Tasa). Usa _ultimas_entradas/_ultimo_resultado (el snapshot del
+        último Calcular, ver _calcular_y_mostrar) en vez de releer los
+        controles en vivo — si el oficial tipeó algo después sin volver a
+        calcular, el PDF debe seguir reflejando el cálculo real, no una
+        mezcla de datos viejos y nuevos. Solo tiene sentido llamarla con un
+        cálculo ya hecho (ver _on_guardar_pdf, que lo garantiza antes)."""
+        entradas = self._ultimas_entradas
+        resultado = self._ultimo_resultado
+        salario_bruto_usd = entradas["salario_bruto_cordobas"] / entradas["tipo_cambio"]
+
+        return [
+            ("Empresa convenio", entradas["empresa_convenio"]),
+            ("Fecha de ingreso a la empresa", entradas["fecha_ingreso"].strftime("%d/%m/%Y")),
+            ("Salario bruto mensual", f"C${entradas['salario_bruto_cordobas']:.2f}"),
+            ("Ingresos extra", f"C${entradas['ingresos_extra_cordobas']:.2f}"),
+            ("Monto del crédito", f"US${entradas['monto_credito_usd']:.2f}"),
+            ("Plazo", f"{entradas['plazo_meses']} meses"),
+            ("Periodicidad", entradas["periodicidad"]),
+            ("Cuotas de deudas activas externas", f"C${entradas['deuda_activa_cordobas']:.2f}"),
+            (
+                "Salario bruto (sin deducciones)",
+                f"C${entradas['salario_bruto_cordobas']:.2f} (US${salario_bruto_usd:.2f})",
+            ),
+            (
+                "Salario neto (con deducciones)",
+                f"C${self._salario_neto_cordobas:.2f} (US${self._salario_neto_usd:.2f})",
+            ),
+            (
+                "Pasivo laboral (respaldo del cliente)",
+                f"C${self._pasivo_laboral_cordobas:.2f} (US${self._pasivo_laboral_usd:.2f})",
+            ),
+            ("Cuota calculada", f"US${resultado.cuota_usd:.2f} (C${resultado.cuota_cordobas:.2f})"),
+            ("Cobertura de pasivo laboral", f"{resultado.cobertura_pasivo_laboral:.0%}"),
+            ("Nivel de endeudamiento", f"{resultado.nivel_endeudamiento:.0%}"),
+        ]
+
+    def _on_guardar_pdf(self, event):
+        """Ctrl+P / botón "Guardar PDF": exige un Calcular previo (mismo
+        criterio que Ctrl+R para la cuota redondeada — sin eso no hay nada
+        coherente que exportar), después pregunta dónde guardar con
+        wx.FileDialog nativo (excepción ya aceptada a "sin popups", igual
+        que la importación de Excel) con un nombre sugerido por fecha y
+        hora del cálculo (pedido explícito del usuario, 2026-08-21) que el
+        oficial puede sobrescribir ahí mismo. El trabajo real vive en
+        _guardar_pdf_en_ruta, separado a propósito para poder probarlo sin
+        el diálogo real (que es modal e interactivo, no se puede invocar en
+        una prueba automatizada — mismo patrón que _seleccionar_archivo_
+        simulado en tests/test_configuracion_creditos.py)."""
+        if self._ultimo_resultado is None:
+            wx.MessageBox(
+                "Todavía no hay ningún cálculo para guardar. Presioná Calcular primero.",
+                "Nada que guardar", wx.OK | wx.ICON_ERROR, self,
+            )
+            return
+
+        ahora = datetime.now()
+        nombre_sugerido = f"Calculo_credito_{ahora.strftime('%d-%m-%Y_%H%M')}.pdf"
+        with wx.FileDialog(
+            self, "Guardar cálculo como PDF",
+            defaultFile=nombre_sugerido, wildcard="Archivos PDF (*.pdf)|*.pdf",
+            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
+        ) as dialogo:
+            if dialogo.ShowModal() != wx.ID_OK:
+                return
+            ruta = dialogo.GetPath()
+
+        self._guardar_pdf_en_ruta(ruta, fecha_hora=ahora)
+
+    def _guardar_pdf_en_ruta(self, ruta, fecha_hora=None):
+        try:
+            generar_pdf_calculo(ruta, self._construir_datos_calculo(), fecha_hora=fecha_hora)
+        except OSError as exc:
+            wx.MessageBox(
+                f"No se pudo guardar el PDF: {exc}", "Error al guardar", wx.OK | wx.ICON_ERROR, self,
+            )
+            return
+        mensaje = f"PDF guardado en: {ruta}"
+        self.GetTopLevelParent().SetStatusText(mensaje)
+        anunciar_voz_nvda(mensaje)
+
     def _anunciar_salario_neto(self):
         """Ctrl+Shift+W: igual que _anunciar_pasivo_laboral (mismo patrón,
         misma fuente de datos en vivo) pero para el salario con deducciones
@@ -961,7 +1088,7 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
 
         if empresa_previa and empresa_previa in self._empresas_por_indice:
             self.empresa_choice.SetSelection(self._empresas_por_indice.index(empresa_previa))
-            self._actualizar_tasa_mostrada()
+            self._refrescar_resultado_tras_cambio_de_tasa()
         elif empresa_previa:
             # La empresa que estaba elegida se borró (Configuración >
             # "Eliminar empresa") mientras esta pestaña seguía abierta con un

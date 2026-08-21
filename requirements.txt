@@ -1,5 +1,6 @@
 wxPython
 openpyxl
 python-docx
+reportlab
 pytest
 pyinstaller

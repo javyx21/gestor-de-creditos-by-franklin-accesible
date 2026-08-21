@@ -56,8 +56,8 @@ ATAJOS = [
     (
         None, None, "Ctrl+R", "Historial de Créditos",
         "Ir a la lista de resultados de Historial de Créditos — mismo atajo físico "
-        "que en Casos, cada pestaña define su propio efecto (en Calculadora no hace "
-        "nada, no hay una lista de resultados ahí)",
+        "que en Casos, cada pestaña define su propio efecto (en Calculadora anuncia "
+        "la cuota redondeada, ver la fila de Calculadora más abajo)",
         None,
     ),
     (
@@ -295,6 +295,27 @@ ATAJOS = [
     (
         None, None, "Ctrl+Shift+T", "Calculadora",
         "Igual que Ctrl+T, pero con la cuota MENSUAL aproximada en vez de la quincenal",
+        None,
+    ),
+    (
+        None, None, "Ctrl+R (en Calculadora)", "Calculadora",
+        "Anunciar por voz la cuota ya calculada redondeada hacia arriba al entero "
+        "(ej. de 19.25 a 20 dólares) y su equivalente en córdobas, sin recalcular "
+        "nada — distinto de Ctrl+Shift+R, que sí dispara el cálculo. Requiere haber "
+        "calculado antes; si no, avisa por voz en vez de fallar en silencio. Sin "
+        "etiqueta visible propia en Resultados (pedido explícito del usuario, "
+        "2026-08-21): es un dato que solo hace falta por voz",
+        None,
+    ),
+    (
+        None, None, "Ctrl+P", "Calculadora",
+        "Guardar el cálculo ya realizado como un PDF (empresa, fecha de ingreso, "
+        "salario, ingresos extra, monto, plazo, periodicidad, deudas activas, y los "
+        "6 resultados: salario bruto, salario neto, pasivo laboral, cuota, cobertura "
+        "y nivel de endeudamiento) — pedido explícito del usuario (2026-08-21) para "
+        "adjuntarlo al expediente del cliente. Abre un wx.FileDialog nativo con un "
+        "nombre sugerido por fecha y hora; requiere haber calculado antes, igual que "
+        "Ctrl+R",
         None,
     ),
     (

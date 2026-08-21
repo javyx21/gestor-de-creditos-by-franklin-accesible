@@ -306,12 +306,43 @@ ingresos extra, monto/plazo/periodicidad/deuda activa, then Calcular. Nothing is
   verify the exact rate while arrowing — added after a real incident where a stale DB row (MIDESA
   at 0.70 instead of 0.18) went unnoticed. Selection is tracked by index (`_empresa_seleccionada()`),
   not `GetStringSelection()`, since the displayed text now includes the tasa. Enter/Space on the
-  choice speaks `"Seleccionada {empresa}"` only (no tasa — redundant, reported as noisy).
+  choice speaks `"Seleccionada {empresa}"` only (no tasa — redundant, reported as noisy). The
+  separate visible `"Tasa: X%"` label next to the combo was **removed** (2026-08-21, explicit user
+  request, see below) — NVDA already announces the tasa via the combo's own selected text (open or
+  closed), so the label added nothing by voice, only visual clutter.
+- **Ctrl+R** (no Shift) speaks the already-calculated cuota rounded up to the nearest whole number
+  (`math.ceil`, e.g. 19.25 → 20) times `TIPO_CAMBIO_FIJO`, without recalculating — distinct from
+  Ctrl+Shift+R, which does recalculate. Requires a prior Calcular (unlike Q/W, which are live); if
+  none yet, speaks a "todavía no" message instead of failing silently. No visible label in
+  Resultados (2026-08-21, explicit user request) — same pattern as the empresa name (Ctrl+Shift+E),
+  voice-only, no dedicated on-screen text.
+- **Screen-visible content is a deliberately curated subset** (explicit user request, 2026-08-21,
+  from someone who uses the app daily with NVDA: "cosas que he realizado para ciegos que no
+  deberían de estarse mostrando"). Exactly 8 input fields + 6 result labels stay visible: Empresa,
+  Fecha de ingreso, Salario, Ingresos extra, Monto del crédito, Plazo, Periodicidad, Cuotas de
+  deudas activas + Salario bruto, Salario neto, Pasivo laboral, Cuota calculada, Cobertura de
+  pasivo laboral, Nivel de endeudamiento. Cuota redondeada and the standalone Tasa label are
+  voice-only (see above) — nothing else has been added or removed from this list since; before
+  adding a new visible label to this panel, confirm it belongs in that set.
+- **Ctrl+P / "Guardar PDF" button**: exports the last Calcular's 8 inputs + 6 results (the same
+  set as the bullet above, nothing else — never a transient status message like "copiado al
+  portapapeles") to a PDF via `wx.FileDialog` (`gestor_credito/export/pdf_export.py`,
+  `generar_pdf_calculo()` — pure function, no DB/UI, same pattern as `word_export.py`). Explicit
+  user request (2026-08-21): a printable file to attach to a client's physical/digital expediente
+  — the Calculadora itself still saves nothing, this is a one-off export the officer places
+  wherever they want. Default filename is date/time-based (`Calculo_credito_DD-MM-AAAA_HHMM.pdf`,
+  editable in the dialog) since the panel has no client identity to name it after. Requires a
+  prior Calcular, same `wx.MessageBox` guard as Ctrl+R. `_on_guardar_pdf` (shows the real dialog)
+  and `_guardar_pdf_en_ruta` (does the actual work) are split on purpose so tests can bypass the
+  modal dialog — same pattern as `_seleccionar_archivo_simulado` in
+  `tests/test_configuracion_creditos.py`. `_ultimas_entradas` snapshots the exact inputs behind
+  `_ultimo_resultado` so the PDF can't mix a stale calculation with fields edited afterward without
+  recalculating.
 - `TIPO_CAMBIO_FIJO = 36.6243` is a hardcoded constant, not a field — explicitly temporary per the
   user, don't move it into a future rate-config screen preemptively.
-- Validation errors use `wx.MessageBox` (missing/invalid fields, empresa with no tasa). A
-  successful Calcular writes to result labels AND speaks via `anunciar_voz_nvda()` directly (not
-  the weaker status-bar live region).
+- Validation errors use `wx.MessageBox` (missing/invalid fields, empresa with no tasa, no prior
+  Calcular for Ctrl+R/Ctrl+P). A successful Calcular writes to result labels AND speaks via
+  `anunciar_voz_nvda()` directly (not the weaker status-bar live region).
 
 ### Historial de Créditos (`creditos_panel.py`, `db/reporte_creditos.py`)
 
@@ -432,8 +463,8 @@ pytest                  # run tests
 pytest tests/test_database.py::test_init_db_creates_file   # run a single test
 ```
 
-wxPython/openpyxl/python-docx are already in the global Python install on this machine; `pytest`
-is not — `pip install -r requirements.txt` (or `pip install pytest`) first.
+wxPython/openpyxl/python-docx/reportlab are already in the global Python install on this machine;
+`pytest` is not — `pip install -r requirements.txt` (or `pip install pytest`) first.
 
 ### Empaquetado portable (pendrive)
 
@@ -511,6 +542,7 @@ gestor_credito/
   export/
     excel_export.py              # openpyxl-based report export (not yet implemented)
     word_export.py                # python-docx-based document export
+    pdf_export.py                  # reportlab-based PDF export (Calculadora "Guardar PDF")
 data/
   gestor_credito.db              # SQLite file, created on first run, git-ignored
 tests/                            # pytest, mirrors the gestor_credito/ package layout
