@@ -337,7 +337,16 @@ ingresos extra, monto/plazo/periodicidad/deuda activa, then Calcular. Nothing is
   modal dialog — same pattern as `_seleccionar_archivo_simulado` in
   `tests/test_configuracion_creditos.py`. `_ultimas_entradas` snapshots the exact inputs behind
   `_ultimo_resultado` so the PDF can't mix a stale calculation with fields edited afterward without
-  recalculating.
+  recalculating. **Header carries a branding block** (explicit user request, 2026-08-21, picked
+  from 5 options offered — "identidad + contacto"): the same logo as `ui/logo.py` (`LOGO_PATH`,
+  same relative-path resolution, works both from source and the PyInstaller build) plus
+  `MARCA_NOMBRE = "Franklin Accesible"` and `MARCA_TELEFONO = "+505 5771 4938"` — so the PDF is
+  self-sufficient if it ends up loose in a physical expediente without the rest of the paperwork.
+  The logo file itself is 2048x2048px (~2MB) — embedding it at that resolution bloated every PDF to
+  ~2.4MB for no visible gain at a 1.6cm print size, so `pdf_export.py` downsamples it with Pillow
+  (`Image.thumbnail`, 300px cap) before handing it to reportlab's `drawImage` via `ImageReader` —
+  brings a typical PDF down to ~60KB. If the logo file is missing, the name/phone still draw (same
+  graceful-degradation as `AppLogo`), just without the image.
 - `TIPO_CAMBIO_FIJO = 36.6243` is a hardcoded constant, not a field — explicitly temporary per the
   user, don't move it into a future rate-config screen preemptively.
 - Validation errors use `wx.MessageBox` (missing/invalid fields, empresa with no tasa, no prior
