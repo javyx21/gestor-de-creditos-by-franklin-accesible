@@ -4,6 +4,7 @@ from gestor_credito.db.database import get_connection
 from gestor_credito.db.reporte_creditos import (
     ESTADO_CREDITO_ACTIVO,
     ESTADO_CREDITO_FINALIZADO,
+    ESTADOS_CREDITO_ALERTA,
     ESTADO_TODOS,
     buscar_creditos,
     obtener_empresas_convenio,
@@ -16,7 +17,11 @@ from gestor_credito.ui.accesibilidad import (
 )
 from gestor_credito.ui.fechas import formatear_fecha
 from gestor_credito.ui.logo import AppLogo
-from gestor_credito.ui.sonido import SONIDO_BORRAR, reproducir_sonido
+from gestor_credito.ui.sonido import (
+    SONIDO_BORRAR,
+    SONIDO_FILA_CREDITO_VENCIDO_SANEADO,
+    reproducir_sonido,
+)
 
 # Orden de columnas de la lista — similar al diseño de CasosPanel (pedido
 # explícito del usuario), y en el mismo orden en que se mapean los campos del
@@ -70,6 +75,13 @@ ESTADO_OPCIONES = [
 # real de empresa, así que _empresa_seleccionada() lo distingue por índice 0.
 _EMPRESA_TODAS = "Todas las empresas"
 
+# Posición de estado_credito dentro de las tuplas que devuelve
+# buscar_creditos() (ver _SELECT_BASE en db/reporte_creditos.py) — usada por
+# la alerta visual/sonora de créditos Vencido/Saneado (ver
+# _refrescar_lista/_on_seleccionar_credito), mismo criterio que
+# _INDICE_ESTADO_SOLICITUD_FILA en casos_panel.py.
+_INDICE_ESTADO_CREDITO_FILA = 7
+
 
 class CreditosPanel(wx.Panel):
     """Pestaña "Historial de Créditos" — módulo nuevo e independiente (ver
@@ -84,6 +96,13 @@ class CreditosPanel(wx.Panel):
     del reporte desde acá."""
 
     CELDA_VACIA = "Celda vacía"
+
+    # Alerta visual para créditos Vencido/Saneado (pedido explícito del
+    # usuario, 2026-08-21) — mismos colores exactos que ya usa Casos para
+    # "Documentos pendientes" (casos_panel.py), ya verificados con buen
+    # contraste (~7.5:1); no se inventan colores nuevos acá.
+    _COLOR_FONDO_CREDITO_ALERTA = wx.Colour(255, 214, 214)
+    _COLOR_TEXTO_CREDITO_ALERTA = wx.Colour(139, 0, 0)
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -431,6 +450,11 @@ class CreditosPanel(wx.Panel):
                 indice = self.lista.InsertItem(self.lista.GetItemCount(), valores[0])
                 for columna, valor in enumerate(valores[1:], start=1):
                     self.lista.SetItem(indice, columna, valor)
+
+                estado_credito = fila[_INDICE_ESTADO_CREDITO_FILA]
+                if self._es_credito_en_alerta(estado_credito):
+                    self.lista.SetItemBackgroundColour(indice, self._COLOR_FONDO_CREDITO_ALERTA)
+                    self.lista.SetItemTextColour(indice, self._COLOR_TEXTO_CREDITO_ALERTA)
             # El ancho de columnas ya se fija una sola vez en __init__.
         finally:
             self.lista.Thaw()
@@ -462,6 +486,15 @@ class CreditosPanel(wx.Panel):
         # CasosPanel._fila_a_columnas — NVDA lee una celda realmente vacía
         # repitiendo solo el nombre de columna, sin ningún valor después.
         return [valor if valor else cls.CELDA_VACIA for valor in valores]
+
+    @staticmethod
+    def _es_credito_en_alerta(estado_credito):
+        """Vencido/Saneado — pedido explícito del usuario (2026-08-21): mismo
+        equivalente visual/auditivo que ya tiene Casos para "Documentos
+        pendientes" (ver casos_panel.py). Usado tanto para el resaltado en
+        rojo de la fila (_refrescar_lista) como para el sonido de navegación
+        (_on_seleccionar_credito)."""
+        return estado_credito in ESTADOS_CREDITO_ALERTA
 
     @staticmethod
     def _formatear_cuotas_pendientes(numero_cuotas, cuotas_pagadas):
@@ -497,3 +530,11 @@ class CreditosPanel(wx.Panel):
             f"Estado: {estado_credito or CreditosPanel.CELDA_VACIA} — "
             f"Cuotas pendientes: {pendientes_texto}"
         )
+
+        # Equivalente auditivo, para el usuario ciego, del resaltado en rojo
+        # que ve un vidente en esta misma fila (ver _refrescar_lista): suena
+        # cada vez que la selección llega a un crédito Vencido o Saneado, sea
+        # por flechas, Tab o clic — EVT_LIST_ITEM_SELECTED cubre los tres.
+        # Mismo patrón que CasosPanel._on_seleccionar_caso.
+        if self._es_credito_en_alerta(estado_credito):
+            reproducir_sonido(SONIDO_FILA_CREDITO_VENCIDO_SANEADO)

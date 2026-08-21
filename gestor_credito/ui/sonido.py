@@ -26,6 +26,15 @@ SONIDO_BORRAR = "borrar.wav"
 # que alguien le lea la lista de Notificaciones para enterarse.
 SONIDO_FILA_DOCUMENTOS_PENDIENTES = "documentoPendiente.wav"
 
+# Mismo archivo que SONIDO_FILA_DOCUMENTOS_PENDIENTES, constante propia a
+# propósito (mismo criterio que el resto de este módulo: una constante por
+# concepto de alerta, aunque comparta el .wav) — pedido explícito del
+# usuario (2026-08-21): "el mismo sonido que emite... lo repliques" para
+# créditos en Historial de Créditos cuyo estado sea Vencido o Saneado (ver
+# CreditosPanel._on_seleccionar_credito/_refrescar_lista), mismo equivalente
+# auditivo del resaltado en rojo que ya usa Casos.
+SONIDO_FILA_CREDITO_VENCIDO_SANEADO = "documentoPendiente.wav"
+
 
 def reproducir_sonido(nombre_archivo):
     """Reproduce un .wav de gestor_credito/assets/sonidos/ en forma asíncrona.

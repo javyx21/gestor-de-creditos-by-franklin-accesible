@@ -337,3 +337,101 @@ def test_limpiar_busqueda_reproduce_el_sonido_de_borrado(panel, conn, monkeypatc
     panel.limpiar_busqueda()
 
     assert llamadas == [SONIDO_BORRAR]
+
+
+# ---- Alerta visual/sonora para créditos Vencido/Saneado (pedido explícito ---
+# ---- del usuario, 2026-08-21 — mismo equivalente que Documentos ------------
+# ---- pendientes ya tiene en Casos) -----------------------------------------
+
+def test_fila_vencido_se_resalta_en_rojo(panel, conn):
+    _crear_credito(conn, "C-1", estado="Vencido")
+    panel.estado_choice.SetSelection(2)  # "Todos los estados"
+    panel._cargar_creditos(avisar_sin_resultados=False)
+
+    assert panel.lista.GetItemBackgroundColour(0) == CreditosPanel._COLOR_FONDO_CREDITO_ALERTA
+    assert panel.lista.GetItemTextColour(0) == CreditosPanel._COLOR_TEXTO_CREDITO_ALERTA
+
+
+def test_fila_saneado_se_resalta_en_rojo(panel, conn):
+    _crear_credito(conn, "C-1", estado="Saneado")
+    panel.estado_choice.SetSelection(2)  # "Todos los estados"
+    panel._cargar_creditos(avisar_sin_resultados=False)
+
+    assert panel.lista.GetItemBackgroundColour(0) == CreditosPanel._COLOR_FONDO_CREDITO_ALERTA
+    assert panel.lista.GetItemTextColour(0) == CreditosPanel._COLOR_TEXTO_CREDITO_ALERTA
+
+
+def test_fila_corriente_no_se_resalta(panel, conn):
+    _crear_credito(conn, "C-1", estado="Corriente")
+    panel.recargar()
+
+    color_defecto = panel.lista.GetItemBackgroundColour(0)
+    assert color_defecto != CreditosPanel._COLOR_FONDO_CREDITO_ALERTA
+
+
+def test_seleccionar_credito_vencido_reproduce_el_sonido(panel, conn, monkeypatch):
+    llamadas = []
+    monkeypatch.setattr(
+        "gestor_credito.ui.creditos_panel.reproducir_sonido",
+        lambda nombre: llamadas.append(nombre),
+    )
+    from gestor_credito.ui.sonido import SONIDO_FILA_CREDITO_VENCIDO_SANEADO
+
+    _crear_credito(conn, "C-1", estado="Vencido")
+    panel.estado_choice.SetSelection(2)  # "Todos los estados"
+    panel._cargar_creditos(avisar_sin_resultados=False)
+
+    evento = wx.ListEvent(wx.wxEVT_LIST_ITEM_SELECTED, panel.lista.GetId())
+    evento.SetIndex(0)
+    panel._on_seleccionar_credito(evento)
+
+    assert llamadas == [SONIDO_FILA_CREDITO_VENCIDO_SANEADO]
+
+
+def test_seleccionar_credito_saneado_reproduce_el_sonido(panel, conn, monkeypatch):
+    llamadas = []
+    monkeypatch.setattr(
+        "gestor_credito.ui.creditos_panel.reproducir_sonido",
+        lambda nombre: llamadas.append(nombre),
+    )
+    from gestor_credito.ui.sonido import SONIDO_FILA_CREDITO_VENCIDO_SANEADO
+
+    _crear_credito(conn, "C-1", estado="Saneado")
+    panel.estado_choice.SetSelection(2)  # "Todos los estados"
+    panel._cargar_creditos(avisar_sin_resultados=False)
+
+    evento = wx.ListEvent(wx.wxEVT_LIST_ITEM_SELECTED, panel.lista.GetId())
+    evento.SetIndex(0)
+    panel._on_seleccionar_credito(evento)
+
+    assert llamadas == [SONIDO_FILA_CREDITO_VENCIDO_SANEADO]
+
+
+def test_seleccionar_credito_corriente_no_reproduce_sonido(panel, conn, monkeypatch):
+    llamadas = []
+    monkeypatch.setattr(
+        "gestor_credito.ui.creditos_panel.reproducir_sonido",
+        lambda nombre: llamadas.append(nombre),
+    )
+    _crear_credito(conn, "C-1", estado="Corriente")
+    panel.recargar()
+
+    evento = wx.ListEvent(wx.wxEVT_LIST_ITEM_SELECTED, panel.lista.GetId())
+    evento.SetIndex(0)
+    panel._on_seleccionar_credito(evento)
+
+    assert llamadas == []
+
+
+def test_vista_por_defecto_de_activos_no_cambia_con_la_alerta_nueva(panel, conn):
+    # Pedido explícito del usuario (2026-08-21): la alerta es puramente
+    # decorativa sobre lo que ya se muestra — la vista por defecto
+    # ("Activos") sigue excluyendo Vencido/Saneado exactamente igual que
+    # antes de este cambio, ningún filtro se tocó.
+    _crear_credito(conn, "C-1", cedula="001", estado="Corriente")
+    _crear_credito(conn, "C-2", cedula="002", estado="Vencido")
+    _crear_credito(conn, "C-3", cedula="003", estado="Saneado")
+    panel.recargar()
+
+    assert panel.lista.GetItemCount() == 1
+    assert _filas_lista(panel, 2) == ["C-1"]

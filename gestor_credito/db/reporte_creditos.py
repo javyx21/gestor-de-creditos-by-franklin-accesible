@@ -6,6 +6,16 @@ from gestor_credito.db.casos import clasificar_termino_busqueda
 # "Activo" en la vista por defecto (crédito al día, pagándose con normalidad).
 ESTADO_CREDITO_ACTIVO = "Corriente"
 
+# Alerta visual/sonora en la lista de Historial de Créditos (pedido explícito
+# del usuario, 2026-08-21): mismo equivalente auditivo/visual que ya tiene
+# Casos para "Documentos pendientes" (ver casos_panel.py), acá para créditos
+# en alguno de estos dos estados — ver CreditosPanel._es_credito_en_alerta,
+# _refrescar_lista, _on_seleccionar_credito. No cambia ningún filtro
+# existente: es puramente decorativo sobre las filas que ya se muestran.
+ESTADO_CREDITO_VENCIDO = "Vencido"
+ESTADO_CREDITO_SANEADO = "Saneado"
+ESTADOS_CREDITO_ALERTA = (ESTADO_CREDITO_VENCIDO, ESTADO_CREDITO_SANEADO)
+
 # Estados textuales que el usuario considera "finalizado" (pedido explícito,
 # 2026-08-16, segunda ronda: "estado sea 'Cancelado' / 'Finalizado'"). Ninguna
 # fila real verificada usa literalmente "Finalizado" (los valores reales de

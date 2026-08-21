@@ -393,6 +393,19 @@ on Enter — same `FindFocus()` pattern as Casos):
 - Cédula/nombre search does **not** override the Estado filter (unlike Casos' ejecutivo override)
   — to search a specific client across all statuses, explicitly pick "Todos los estados".
 
+**Vencido/Saneado row alert** (added 2026-08-21, explicit user request): same visual+audio
+equivalent Casos already has for "Documentos pendientes" (see below), here for
+`estado_credito` in `ESTADOS_CREDITO_ALERTA` (`db/reporte_creditos.py`: `ESTADO_CREDITO_VENCIDO`
+= "Vencido", `ESTADO_CREDITO_SANEADO` = "Saneado"). Rows highlight in the same red
+(`wx.Colour(255,214,214)` bg / `wx.Colour(139,0,0)` text, same contrast already verified for
+Casos) and `SONIDO_FILA_CREDITO_VENCIDO_SANEADO` (`documentoPendiente.wav` — same file as Casos'
+alert, own named constant per this app's one-constant-per-alert-concept convention) plays on
+`EVT_LIST_ITEM_SELECTED`. Purely decorative on top of whatever `buscar_creditos()` already
+returns — **does not touch any filter**: the default "Activos (Corriente)" view still excludes
+Vencido/Saneado rows exactly as before this change (explicit user confirmation: seeing them in
+the default view isn't wanted, but when a client is searched and "Todos los estados" is picked,
+the row must be identifiable at a glance/by ear without re-reading the Estado column by hand).
+
 `_cargar_creditos()`/`_cargar_empresas()` run their SQLite queries via `ejecutar_en_segundo_plano()`
 (`accesibilidad.py`) — a background thread + `wx.CallAfter` back to the UI thread — because running
 them inline froze NVDA's speech (the UI thread not pumping messages while a query is in flight).
