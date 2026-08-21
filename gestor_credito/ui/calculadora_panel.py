@@ -109,6 +109,13 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         # pasivos".
         self._salario_neto_cordobas = None
         self._salario_neto_usd = None
+        # Cuota redondeada hacia arriba al entero (ej. 19.25 -> 20) x
+        # TIPO_CAMBIO_FIJO, en córdobas — pedido explícito del usuario
+        # (2026-08-20): a diferencia del pasivo laboral/salario neto, esta NO
+        # se calcula en vivo, depende de que ya haya corrido un Calcular (ver
+        # _calcular_y_mostrar), igual que resultado_cuota.
+        self._cuota_redondeada_usd = None
+        self._cuota_redondeada_cordobas = None
 
         sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(AppLogo(self), 0, wx.ALIGN_LEFT | wx.ALL, 4)
@@ -129,7 +136,11 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         # a anunciar, dispara el cálculo completo — es el ÚNICO atajo de
         # teclado para calcular, ver el botón "Calcular" (sin mnemónico desde
         # que se sacó Alt+A, pedido explícito del usuario: "no dupliques
-        # funciones"). Mismo mecanismo EVT_CHAR_HOOK a nivel de panel que ya
+        # funciones"). Ctrl+R, sin Shift (pedido explícito del usuario,
+        # 2026-08-20, "lo más parecido" a Ctrl+Shift+R), solo anuncia la
+        # cuota ya calculada redondeada al entero x TIPO_CAMBIO_FIJO — ver
+        # _anunciar_cuota_redondeada; no recalcula nada por su cuenta.
+        # Mismo mecanismo EVT_CHAR_HOOK a nivel de panel que ya
         # usa CasosPanel para el combo "Filtrar por alerta" (necesario
         # porque, a diferencia de un wx.Dialog, un wx.Panel dentro de un
         # wx.Notebook no recibe atajos de teclado "globales" por ningún otro
@@ -282,12 +293,18 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         self.resultado_pasivo_laboral = wx.StaticText(contenedor, label="Pasivo laboral: —")
         self.resultado_salario_neto = wx.StaticText(contenedor, label="Salario neto mensual: —")
         self.resultado_cuota = wx.StaticText(contenedor, label="Cuota calculada: —")
+        # Cuota redondeada al entero x TIPO_CAMBIO_FIJO en córdobas — Ctrl+R
+        # la anuncia por voz (ver _anunciar_cuota_redondeada). Ubicada justo
+        # debajo de "Cuota calculada" porque es una variante directa de ese
+        # mismo dato, no un cálculo aparte.
+        self.resultado_cuota_redondeada = wx.StaticText(contenedor, label="Cuota redondeada: —")
         self.resultado_cobertura = wx.StaticText(contenedor, label="Cobertura de pasivo laboral: —")
         self.resultado_endeudamiento = wx.StaticText(contenedor, label="Nivel de endeudamiento: —")
 
         for control in (
             self.resultado_salario_bruto, self.resultado_pasivo_laboral, self.resultado_salario_neto,
-            self.resultado_cuota, self.resultado_cobertura, self.resultado_endeudamiento,
+            self.resultado_cuota, self.resultado_cuota_redondeada,
+            self.resultado_cobertura, self.resultado_endeudamiento,
         ):
             box.Add(control, 0, wx.BOTTOM, 4)
 
@@ -515,6 +532,18 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         self.resultado_cuota.SetLabel(
             f"Cuota calculada: US${resultado.cuota_usd:.2f} (C${resultado.cuota_cordobas:.2f})"
         )
+        # Redondeo hacia arriba al entero (math.ceil, no round — 19.25 debe
+        # subir a 20 igual que 19.99, mismo criterio ya usado en
+        # _resumen_credito para Ctrl+T/Ctrl+Shift+T), multiplicado por
+        # TIPO_CAMBIO_FIJO para su equivalente en córdobas. Pedido explícito
+        # del usuario (2026-08-20): Ctrl+R lee estos dos valores en voz alta
+        # (ver _anunciar_cuota_redondeada) sin recalcular nada por su cuenta.
+        self._cuota_redondeada_usd = math.ceil(resultado.cuota_usd)
+        self._cuota_redondeada_cordobas = self._cuota_redondeada_usd * TIPO_CAMBIO_FIJO
+        self.resultado_cuota_redondeada.SetLabel(
+            f"Cuota redondeada: US${self._cuota_redondeada_usd} "
+            f"(C${self._cuota_redondeada_cordobas:.2f})"
+        )
         self.resultado_cobertura.SetLabel(
             f"Cobertura de pasivo laboral: {resultado.cobertura_pasivo_laboral:.0%}"
         )
@@ -559,8 +588,11 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         2026-08-16, mismo día que pasó a calcularse en vivo — antes SÍ se
         pisaba acá porque solo existía como parte de un Calcular completo."""
         self._ultimo_resultado = None
+        self._cuota_redondeada_usd = None
+        self._cuota_redondeada_cordobas = None
         self.resultado_salario_bruto.SetLabel("Salario bruto: —")
         self.resultado_cuota.SetLabel("Cuota calculada: —")
+        self.resultado_cuota_redondeada.SetLabel("Cuota redondeada: —")
         self.resultado_cobertura.SetLabel("Cobertura de pasivo laboral: —")
         self.resultado_endeudamiento.SetLabel("Nivel de endeudamiento: —")
 
@@ -643,7 +675,7 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         reproducir_sonido(SONIDO_BORRAR)
         self.fecha_ingreso_texto.SetFocus()
 
-    # ---- Atajos de verbalización pura (Ctrl+Shift+Q/W/E/R) ----------------
+    # ---- Atajos de verbalización pura (Ctrl+Shift+Q/W/E/T, Ctrl+T/R) ------
 
     def _on_atajo_verbalizacion(self, event):
         if event.ControlDown() and event.ShiftDown() and not event.AltDown():
@@ -680,6 +712,15 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
                 # explícito del usuario (2026-08-16), ver
                 # _copiar_resumen_quincenal/_resumen_credito.
                 self._copiar_resumen_quincenal()
+                return
+            if event.GetKeyCode() == ord("R"):
+                # Ctrl+R (sin Shift, "lo más parecido" a Ctrl+Shift+R —
+                # pedido explícito del usuario, 2026-08-20): a nivel global
+                # Ctrl+R no hace nada en esta pestaña (enfoca la lista de
+                # resultados en Casos/Historial de Créditos, que acá no
+                # existe — ver MainFrame._enfocar_resultados_segun_pestana_activa),
+                # así que reutilizarlo acá no pisa ningún otro atajo.
+                self._anunciar_cuota_redondeada()
                 return
         elif (
             not event.ControlDown() and not event.ShiftDown() and not event.AltDown()
@@ -824,6 +865,26 @@ class CalculadoraPanel(scrolledpanel.ScrolledPanel):
         anunciar_voz_nvda(
             f"Pasivo laboral: {self._pasivo_laboral_usd:.2f} dólares y "
             f"{self._pasivo_laboral_cordobas:.2f} córdobas."
+        )
+
+    def _anunciar_cuota_redondeada(self):
+        """Ctrl+R: habla la cuota redondeada hacia arriba al entero (ej. de
+        19.25 a 20 dólares) multiplicada por TIPO_CAMBIO_FIJO — el mismo
+        número que está en "Cuota redondeada" dentro de Resultados,
+        calculado junto con el resto en _calcular_y_mostrar. A diferencia de
+        Ctrl+Shift+Q/W (pasivo laboral/salario neto, que se recalculan en
+        vivo sin depender de Calcular), este valor depende de un Calcular
+        previo (Ctrl+Shift+R o el botón), así que si todavía no hay uno
+        avisa por voz en vez de fallar en silencio."""
+        if self._cuota_redondeada_usd is None:
+            anunciar_voz_nvda(
+                "Todavía no se ha calculado ninguna cuota. "
+                "Presioná Control, Shift, R primero."
+            )
+            return
+        anunciar_voz_nvda(
+            f"Cuota redondeada: {self._cuota_redondeada_usd} dólares, "
+            f"equivalentes a {self._cuota_redondeada_cordobas:.2f} córdobas."
         )
 
     def _anunciar_salario_neto(self):

@@ -744,3 +744,120 @@ def test_copiar_al_portapapeles_usa_el_portapapeles_real_de_windows(calc, conn):
         wx.MilliSleep(20)
 
     pytest.fail("no se pudo leer de vuelta el portapapeles real de Windows")
+
+
+# ---- Cuota redondeada x TIPO_CAMBIO_FIJO (Ctrl+R, pedido explícito del ----
+# ---- usuario, 2026-08-20: "lo más parecido" a Ctrl+Shift+R) --------------
+
+def test_calcular_llena_la_cuota_redondeada_al_entero_hacia_arriba(calc, conn):
+    _llenar_formulario(calc)
+    _elegir_empresa(calc, "MIDESA")
+
+    calc._on_calcular(None)
+
+    import math
+    cuota_exacta = calc._ultimo_resultado.cuota_usd
+    esperado_usd = math.ceil(cuota_exacta)
+    assert cuota_exacta != esperado_usd  # la muestra no es un entero exacto de por sí
+    assert calc._cuota_redondeada_usd == esperado_usd
+    assert calc._cuota_redondeada_cordobas == pytest.approx(esperado_usd * TIPO_CAMBIO_FIJO)
+    assert calc.resultado_cuota_redondeada.GetLabel() == (
+        f"Cuota redondeada: US${esperado_usd} (C${esperado_usd * TIPO_CAMBIO_FIJO:.2f})"
+    )
+
+
+def test_cuota_redondeada_sube_incluso_desde_una_fraccion_pequena(calc, conn, monkeypatch):
+    # Pedido explícito del usuario: de 19.25 a 20, no a 19 — math.ceil, no
+    # round(). Se fuerza evaluar_capacidad() a devolver una cuota con una
+    # fracción chica para probar el caso límite sin depender de qué tasa da
+    # justo esa fracción.
+    from gestor_credito.calculo.capacidad import ResultadoCapacidad
+
+    resultado_falso = ResultadoCapacidad(
+        pasivo_laboral_cordobas=0.0, pasivo_laboral_usd=0.0,
+        salario_neto_cordobas=0.0, salario_neto_usd=0.0,
+        cuota_usd=19.01, cuota_cordobas=19.01 * TIPO_CAMBIO_FIJO,
+        cobertura_pasivo_laboral=0.0, nivel_endeudamiento=0.0,
+    )
+    monkeypatch.setattr(
+        "gestor_credito.ui.calculadora_panel.evaluar_capacidad",
+        lambda **kwargs: resultado_falso,
+    )
+    _llenar_formulario(calc)
+    _elegir_empresa(calc, "MIDESA")
+
+    calc._on_calcular(None)
+
+    assert calc._cuota_redondeada_usd == 20
+    assert calc._cuota_redondeada_cordobas == pytest.approx(20 * TIPO_CAMBIO_FIJO)
+
+
+def test_limpiar_formulario_limpia_tambien_la_cuota_redondeada(calc, conn):
+    _llenar_formulario(calc)
+    _elegir_empresa(calc, "MIDESA")
+    calc._on_calcular(None)
+    assert calc._cuota_redondeada_usd is not None
+
+    calc.limpiar_formulario()
+
+    assert calc._cuota_redondeada_usd is None
+    assert calc._cuota_redondeada_cordobas is None
+    assert calc.resultado_cuota_redondeada.GetLabel() == "Cuota redondeada: —"
+
+
+def test_ctrl_r_anuncia_la_cuota_redondeada_ya_calculada(calc, conn, monkeypatch):
+    llamadas = []
+    monkeypatch.setattr(
+        "gestor_credito.ui.calculadora_panel.anunciar_voz_nvda",
+        lambda texto: llamadas.append(texto),
+    )
+    _llenar_formulario(calc)
+    _elegir_empresa(calc, "MIDESA")
+    calc._on_calcular(None)
+    llamadas.clear()  # descarta el anuncio del propio Calcular
+
+    calc._anunciar_cuota_redondeada()
+
+    assert len(llamadas) == 1
+    assert str(calc._cuota_redondeada_usd) in llamadas[0]
+    assert f"{calc._cuota_redondeada_cordobas:.2f}" in llamadas[0]
+
+
+def test_ctrl_r_sin_calcular_antes_avisa_en_vez_de_fallar(calc, conn, monkeypatch):
+    llamadas = []
+    monkeypatch.setattr(
+        "gestor_credito.ui.calculadora_panel.anunciar_voz_nvda",
+        lambda texto: llamadas.append(texto),
+    )
+
+    calc._anunciar_cuota_redondeada()  # no debe lanzar
+
+    assert len(llamadas) == 1
+    assert "todavía" in llamadas[0].lower()
+
+
+def test_char_hook_ctrl_r_sin_shift_dispara_el_anuncio_no_el_calculo(calc, conn, monkeypatch):
+    # Ctrl+R (sin Shift) debe SOLO anunciar la cuota ya calculada, sin
+    # disparar un Calcular nuevo — eso sigue siendo exclusivo de
+    # Ctrl+Shift+R. Se simula el mismo camino real: EVT_CHAR_HOOK a nivel de
+    # panel, igual que el resto de los atajos de esta pestaña.
+    llamadas = []
+    monkeypatch.setattr(
+        "gestor_credito.ui.calculadora_panel.anunciar_voz_nvda",
+        lambda texto: llamadas.append(texto),
+    )
+    _llenar_formulario(calc)
+    _elegir_empresa(calc, "MIDESA")
+    calc._on_calcular(None)
+    llamadas.clear()
+    calculos_antes = calc._ultimo_resultado
+
+    evento = wx.KeyEvent(wx.wxEVT_CHAR_HOOK)
+    evento.SetControlDown(True)
+    evento.SetShiftDown(False)
+    evento.SetKeyCode(ord("R"))
+    calc._on_atajo_verbalizacion(evento)
+
+    assert calc._ultimo_resultado is calculos_antes  # no se recalculó
+    assert len(llamadas) == 1
+    assert str(calc._cuota_redondeada_usd) in llamadas[0]
