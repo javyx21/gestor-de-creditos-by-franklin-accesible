@@ -135,18 +135,28 @@ until the next reimport brings a newer value from MIDESA, at which point Excel w
 
 ## Configuración (agente actual)
 
-`configuracion_panel.py` sets the user's own agent name into `configuracion('ejecutivo_actual', ...)`
-(`db/configuracion.py`, `CLAVE_EJECUTIVO_ACTUAL`) — a single global setting. Agent picker is a
-closed `wx.Choice` populated from `obtener_ejecutivos()` (editable combo box and plain textbox were
-tried first and rejected — see Judgment calls below) + "Guardar y usar este agente" button. Scopes:
+`configuracion_panel.py` (`ConfiguracionCasosPanel`) sets the user's own agent name into
+`configuracion('ejecutivo_actual', ...)` (`db/configuracion.py`, `CLAVE_EJECUTIVO_ACTUAL`) — a
+single global setting. Agent picker is a closed `wx.Choice` populated from `obtener_ejecutivos()`
+(editable combo box and plain textbox were tried first and rejected — see Judgment calls below) +
+"Guardar y usar este agente" button. Scopes:
 
 - **Casos tab default view**: empty search box → only casos with matching `ejecutivo`. A specific
   cédula/nombre search overrides this and searches across all agents.
 - **Alertas 1 & 2**: only surface cases/clientes whose `caso.ejecutivo` matches. For Alerta 1
   (client-level), match via the ejecutivo of the caso that introduced that cliente.
 
-Excel import UI (both bitácora and reporte de créditos) also lives on this tab — one-time/infrequent
-setup, unlike the daily-use Casos tab.
+**Three separate panels/dialogs, one per category** (`configuracion_panel.py`:
+`ConfiguracionCasosPanel` — agente + importar bitácora + vaciar base de datos;
+`ConfiguracionCalculadoraPanel` — empresas convenio/tasas; `ConfiguracionCreditosPanel` — importar
+reporte de créditos), each opened directly from its own item under the "&Configuración" cascading
+menu in `main_frame.py` (see UI structure below). Until 2026-08-22 these were a single
+`ConfiguracionPanel` class with an internal `wx.TreeCtrl` of the same 3 categories (added
+2026-07-12 from previously-stacked sections) — retired per explicit user request: with the menu
+itself now doing that categorization (same cascading-menu pattern already validated for Ayuda ▸
+Actualizaciones, see below), the internal tree was a redundant extra navigation step. Each panel is
+a plain `wx.Panel` with its own logo/title, opened via the same generic `MainFrame._abrir_dialogo`
+used everywhere else — no shared base class beyond that.
 
 ## Alerts / workflow — `db/alertas.py` (pure queries) + `ui/notificaciones_panel.py`
 
@@ -222,11 +232,21 @@ independent of `ejecutivo_actual`.
 ## UI structure (current)
 
 `MainFrame` hosts a `wx.Notebook` with **3 tabs**: Casos, Calculadora de Crédito, Historial de
-Créditos. Everything else — Notificaciones, Configuración, Ayuda, and Actualizaciones (a cascading
-submenu under Ayuda) — lives in a classic Windows menu bar as modal `wx.Dialog`s (`_PanelDialog` in
-`main_frame.py`), per explicit user request about how they navigate with NVDA (menus over extra
-tabs, for setup/lookup screens that aren't daily-use). `EVT_NOTEBOOK_PAGE_CHANGED` calls
-`recargar()` on the newly active tab.
+Créditos. Everything else — Notificaciones, Configuración (a cascading menu, see below), Ayuda, and
+Actualizaciones (a cascading submenu under Ayuda) — lives in a classic Windows menu bar as modal
+`wx.Dialog`s (`_PanelDialog` in `main_frame.py`), per explicit user request about how they navigate
+with NVDA (menus over extra tabs, for setup/lookup screens that aren't daily-use).
+`EVT_NOTEBOOK_PAGE_CHANGED` calls `recargar()` on the newly active tab.
+
+**"&Configuración" is itself a cascading menu** (2026-08-22, explicit user request, same pattern as
+Ayuda ▸ Actualizaciones below): 3 flat items — "Configuración de Casos...", "Configuración de la
+Calculadora...", "Configuración de Reporte de Créditos..." — each opening its own dialog directly
+(`MainFrame._on_abrir_configuracion_casos/_calculadora/_creditos`, each just a thin call to
+`_abrir_dialogo` with the matching panel class from `configuracion_panel.py`), instead of the old
+single "Configuración..." item that opened one dialog with an internal category tree to navigate
+first. `_abrir_dialogo` itself is unchanged and still reloads Casos/Calculadora/Créditos
+unconditionally after ANY of the three closes (see its docstring) — no per-category special-casing
+needed there.
 
 Global shortcuts (`ui/atajos.py`), dispatched per active notebook tab in `main_frame.py`:
 - **Ctrl+F** — focus search box (Casos, Historial de Créditos; no-op on Calculadora).
@@ -677,7 +697,7 @@ gestor_credito/
     calculadora_panel.py            # "Calculadora de Crédito" tab
     creditos_panel.py               # "Historial de Créditos" tab
     notificaciones_panel.py         # Notificaciones dialog
-    configuracion_panel.py          # Configuración dialog (agente + importar bitácora/reporte)
+    configuracion_panel.py          # 3 dialogs (Casos/Calculadora/Créditos), see Configuración cascading menu
     ayuda_panel.py                  # Ayuda dialog — ONLY the keyboard shortcut reference
     actualizacion_dialog.py          # "Ayuda ▸ Actualizaciones" logic, wired from main_frame's menu
   db/

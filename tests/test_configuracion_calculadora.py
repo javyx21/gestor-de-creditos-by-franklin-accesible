@@ -1,19 +1,24 @@
-"""Pruebas de extremo a extremo del panel Configuración > Configuración de la
-Calculadora (empresas convenio / tasas) — construyen un ConfiguracionPanel
-real (no mocks) contra una base de datos temporal, y simulan exactamente el
-escenario reportado por el usuario (2026-07-12): varios cambios consecutivos
-de tasa, reapertura del panel, alta y baja de empresas — verificando en cada
-paso que lo que la base de datos tiene, lo que _convenios_cargados (el caché
-en memoria del panel) tiene, y lo que la lista/campos muestran en pantalla
-coinciden entre sí. No se pudo reproducir ninguna divergencia con estas
-pruebas, pero quedan como regresión permanente."""
+"""Pruebas de extremo a extremo de "Configuración ▸ Configuración de la
+Calculadora" (empresas convenio / tasas) — construyen un
+ConfiguracionCalculadoraPanel real (no mocks) contra una base de datos
+temporal, y simulan exactamente el escenario reportado por el usuario
+(2026-07-12): varios cambios consecutivos de tasa, reapertura del panel,
+alta y baja de empresas — verificando en cada paso que lo que la base de
+datos tiene, lo que _convenios_cargados (el caché en memoria del panel)
+tiene, y lo que la lista/campos muestran en pantalla coinciden entre sí. No
+se pudo reproducir ninguna divergencia con estas pruebas, pero quedan como
+regresión permanente.
+
+Hasta 2026-08-22 este panel era una de 3 categorías dentro de un único
+ConfiguracionPanel con árbol interno — ahora es su propia clase, abierta
+directo desde el menú de cascada "Configuración" (ver main_frame.py)."""
 
 import wx
 import pytest
 
 from gestor_credito.db import database
 from gestor_credito.db.convenios import obtener_tasa
-from gestor_credito.ui.configuracion_panel import ConfiguracionPanel
+from gestor_credito.ui.configuracion_panel import ConfiguracionCalculadoraPanel
 
 
 @pytest.fixture(scope="module")
@@ -31,7 +36,7 @@ def conn(tmp_path, monkeypatch):
 
 
 def _frame_con_status_bar():
-    """ConfiguracionPanel llama self.GetTopLevelParent().SetStatusText(...)
+    """ConfiguracionCalculadoraPanel llama self.GetTopLevelParent().SetStatusText(...)
     tras cada guardado (igual que en la app real, donde el padre real es
     _PanelDialog, que expone su propio SetStatusText) — un wx.Frame liso
     no tiene barra de estado a menos que se la pidamos explícitamente."""
@@ -43,7 +48,7 @@ def _frame_con_status_bar():
 @pytest.fixture
 def panel(app, conn):
     frame = _frame_con_status_bar()
-    panel = ConfiguracionPanel(frame)
+    panel = ConfiguracionCalculadoraPanel(frame)
     yield panel
     frame.Destroy()
 
@@ -106,16 +111,17 @@ def test_cinco_ediciones_consecutivas_persisten_la_ultima(panel, conn):
 
 def test_reabrir_el_panel_muestra_el_ultimo_valor_guardado(app, conn):
     frame = _frame_con_status_bar()
-    panel1 = ConfiguracionPanel(frame)
+    panel1 = ConfiguracionCalculadoraPanel(frame)
     _editar_tasa(panel1, "MIDESA", "60")
     _editar_tasa(panel1, "MIDESA", "70")
     frame.Destroy()
 
-    # "Reabrir el panel" = una instancia nueva de ConfiguracionPanel, tal
-    # cual hace _PanelDialog en main_frame.py cada vez que se abre el menú
-    # Configuración (nunca reutiliza una instancia anterior).
+    # "Reabrir el panel" = una instancia nueva de ConfiguracionCalculadoraPanel,
+    # tal cual hace _PanelDialog en main_frame.py cada vez que se abre
+    # Configuración > Configuración de la Calculadora (nunca reutiliza una
+    # instancia anterior).
     frame2 = _frame_con_status_bar()
-    panel2 = ConfiguracionPanel(frame2)
+    panel2 = ConfiguracionCalculadoraPanel(frame2)
     assert dict(panel2._convenios_cargados)["MIDESA"] == 0.7
     assert _tasa_en_lista(panel2, "MIDESA") == "70%"
     frame2.Destroy()
@@ -159,7 +165,7 @@ def test_agregar_empresa_nueva_y_luego_editarla_persiste(panel, conn):
 
 def test_eliminar_empresa_la_quita_y_no_reaparece_al_reabrir(app, conn):
     frame = _frame_con_status_bar()
-    panel1 = ConfiguracionPanel(frame)
+    panel1 = ConfiguracionCalculadoraPanel(frame)
     panel1._on_nueva_empresa(None)
     panel1.convenio_empresa_texto.SetValue("EMPRESA DE PRUEBA")
     panel1.convenio_tasa_texto.SetValue("18.5")
@@ -178,7 +184,7 @@ def test_eliminar_empresa_la_quita_y_no_reaparece_al_reabrir(app, conn):
     assert obtener_tasa(conn, "EMPRESA DE PRUEBA") is None
 
     frame2 = _frame_con_status_bar()
-    panel2 = ConfiguracionPanel(frame2)
+    panel2 = ConfiguracionCalculadoraPanel(frame2)
     assert "EMPRESA DE PRUEBA" not in dict(panel2._convenios_cargados)
     assert _tasa_en_lista(panel2, "EMPRESA DE PRUEBA") is None
     frame2.Destroy()

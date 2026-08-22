@@ -10,6 +10,19 @@ from gestor_credito.importer.reporte_creditos_importer import import_reporte_cre
 from gestor_credito.ui.accesibilidad import activar_con_enter, anunciar_voz_nvda, nombre_accesible
 from gestor_credito.ui.logo import AppLogo
 
+# Hasta 2026-08-22 este módulo era un único ConfiguracionPanel con un
+# wx.TreeCtrl de categorías (Casos / Calculadora / Reporte de Créditos) a la
+# izquierda y el contenido correspondiente al costado — reestructurado así el
+# 2026-07-12 (ver historial de este archivo) desde las secciones apiladas que
+# tenía antes. Pedido explícito del usuario (2026-08-22): acceder a cada
+# categoría directo desde un menú de cascada en la barra (mismo patrón que
+# Ayuda > Actualizaciones), sin pasar primero por un diálogo genérico y
+# navegar un árbol interno para llegar a la sección buscada. Con el menú
+# haciendo ahora ese trabajo de categorización, el árbol interno quedó
+# redundante — se elimina y el módulo pasa a ser 3 paneles independientes,
+# cada uno con su propio wx.Dialog vía MainFrame._abrir_dialogo (ver
+# main_frame.py), en vez de una sola clase con conmutación interna.
+
 
 def _formatear_tasa_porcentaje(tasa):
     """Tasa (fracción, 0.18 = 18%) a texto plano de porcentaje sin ceros de
@@ -24,26 +37,29 @@ def _formatear_tasa_porcentaje(tasa):
     return texto
 
 
-class ConfiguracionPanel(wx.Panel):
+class ConfiguracionCasosPanel(wx.Panel):
+    """"Configuración ▸ Configuración de Casos": agente/ejecutivo actual,
+    importar la bitácora de MIDESA, y vaciar la base de datos. Abierto desde
+    MainFrame en su propio diálogo modal."""
+
     def __init__(self, parent):
         super().__init__(parent)
 
         self._file_path = None
-        self._file_path_creditos = None
-        self._convenios_cargados = []
 
         sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(AppLogo(self), 0, wx.ALIGN_LEFT | wx.ALL, 4)
 
-        titulo = wx.StaticText(self, label="Configuración")
+        titulo = wx.StaticText(self, label="Configuración de Casos")
         titulo.SetFont(titulo.GetFont().Bold())
         sizer.Add(titulo, 0, wx.ALL, 8)
 
-        sizer.Add(self._crear_arbol_y_contenido(), 1, wx.EXPAND | wx.ALL, 8)
+        sizer.Add(self._crear_seccion_agente(self), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        sizer.Add(self._crear_seccion_importar(self), 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        sizer.Add(self._crear_seccion_peligro(self), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
         self.SetSizer(sizer)
         self._cargar_agente_actual()
-        self._cargar_convenios()
 
         # wx.Choice envuelve un combobox nativo de Windows que se queda con la
         # tecla Enter antes de que llegue a un EVT_KEY_DOWN normal (probado:
@@ -51,174 +67,20 @@ class ConfiguracionPanel(wx.Panel):
         # EVT_CHAR_HOOK sí la intercepta más arriba, antes que el control
         # nativo la consuma — necesario para que Enter dispare el guardado
         # estando parado en la lista, sin depender de Tab hasta el botón
-        # (falla de teclado real, WCAG 2.1.1, confirmada por el usuario). El
-        # mismo handler ahora también resuelve Enter/Tab sobre el árbol de
-        # categorías (ver _on_char_hook más abajo).
+        # (falla de teclado real, WCAG 2.1.1, confirmada por el usuario).
         self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
-
-        # Estado inicial: "Configuración de Casos" seleccionada y mostrada
-        # (mismo contenido que se veía de entrada antes de existir el árbol),
-        # con el foco arrancando en el árbol — punto de entrada de la nueva
-        # navegación, pedido explícito del usuario (2026-07-12).
-        self.arbol_categorias.SelectItem(self.item_casos)
-        self._mostrar_panel(self.panel_casos)
-        self.arbol_categorias.SetFocus()
-
-    # ---- Árbol de categorías + panel de contenido -----------------------
-
-    def _crear_arbol_y_contenido(self):
-        """Reestructuración pedida explícitamente por el usuario (2026-07-12):
-        un wx.TreeCtrl a la izquierda con categorías principales
-        ("Configuración de Casos", "Configuración de la Calculadora",
-        "Configuración de Reporte de Créditos" — esta última agregada el
-        mismo día, al construir el módulo Historial de Créditos) y el
-        contenido correspondiente a la derecha, en vez de las secciones
-        apiladas que tenía este panel antes. Mismo control ya usado y
-        probado en este proyecto para Notificaciones (self.arbol en
-        notificaciones_panel.py) — wx.TreeCtrl es un control nativo de
-        Windows con soporte MSAA/UIA de fábrica, no uno nuevo para la app.
-
-        Navegación, tal como la pidió el usuario:
-        - Flechas arriba/abajo sobre el árbol: mueven la selección entre
-          categorías — comportamiento nativo del control, sin acción extra
-          de este código. A propósito NO cambia el panel visible por sí
-          sola (mismo criterio que ya usan filtro_alerta_choice/
-          agentes_choice/empresa_choice en el resto de la app: arrastrar
-          flechas es "mirar", no "confirmar").
-        - Enter sobre el árbol: "activa" (muestra) la sección
-          correspondiente a la categoría seleccionada, sin mover el foco —
-          para poder seguir comparando categorías antes de decidir.
-        - Tab sobre el árbol: además de activar la sección, mueve el foco
-          directo al primer campo editable de esa sección — sin depender de
-          haber presionado Enter antes, para que "Tab" funcione siempre tal
-          cual se pidió, sin importar el orden de teclas que use la persona.
-        Ver _on_char_hook.
-        """
-        fila = wx.BoxSizer(wx.HORIZONTAL)
-
-        self.arbol_categorias = wx.TreeCtrl(
-            self, style=wx.TR_DEFAULT_STYLE | wx.TR_HIDE_ROOT | wx.TR_NO_LINES,
-            size=(260, -1),
-        )
-        nombre_accesible(self.arbol_categorias, "Categorías de configuración")
-        raiz = self.arbol_categorias.AddRoot("Configuración")
-        self.item_casos = self.arbol_categorias.AppendItem(raiz, "Configuración de Casos")
-        self.item_calculadora = self.arbol_categorias.AppendItem(raiz, "Configuración de la Calculadora")
-        self.item_creditos = self.arbol_categorias.AppendItem(raiz, "Configuración de Reporte de Créditos")
-        self.arbol_categorias.Bind(wx.EVT_TREE_SEL_CHANGED, self._on_seleccionar_categoria)
-        fila.Add(self.arbol_categorias, 0, wx.EXPAND | wx.RIGHT, 8)
-
-        self.sizer_derecha = wx.BoxSizer(wx.VERTICAL)
-        self.panel_casos = wx.Panel(self)
-        self.panel_calculadora = wx.Panel(self)
-        self.panel_creditos = wx.Panel(self)
-        self._crear_contenido_casos(self.panel_casos)
-        self._crear_contenido_calculadora(self.panel_calculadora)
-        self._crear_contenido_creditos(self.panel_creditos)
-        self.sizer_derecha.Add(self.panel_casos, 1, wx.EXPAND)
-        self.sizer_derecha.Add(self.panel_calculadora, 1, wx.EXPAND)
-        self.sizer_derecha.Add(self.panel_creditos, 1, wx.EXPAND)
-        fila.Add(self.sizer_derecha, 1, wx.EXPAND)
-
-        return fila
-
-    def _mostrar_panel(self, panel_a_mostrar):
-        for panel in (self.panel_casos, self.panel_calculadora, self.panel_creditos):
-            self.sizer_derecha.Show(panel, panel is panel_a_mostrar)
-        self.sizer_derecha.Layout()
-
-    def _panel_para_item(self, item):
-        if item == self.item_calculadora:
-            return self.panel_calculadora
-        if item == self.item_creditos:
-            return self.panel_creditos
-        return self.panel_casos
-
-    def _primer_control_para_item(self, item):
-        if item == self.item_calculadora:
-            return self.convenios_lista
-        if item == self.item_creditos:
-            return self.seleccionar_creditos_btn
-        return self.agentes_choice
-
-    def _activar_categoria_seleccionada(self, enfocar_primer_campo=False):
-        item = self.arbol_categorias.GetSelection()
-        if not item.IsOk():
-            return
-        self._mostrar_panel(self._panel_para_item(item))
-        if enfocar_primer_campo:
-            self._primer_control_para_item(item).SetFocus()
-
-    def _on_seleccionar_categoria(self, event):
-        """Reporte real del usuario (2026-07-12): arrastrando las flechas
-        entre "Configuración de Casos"/"Configuración de la Calculadora",
-        NVDA no indicaba cuál quedaba seleccionada — a diferencia de
-        convenios_lista (un wx.ListCtrl), donde SÍ se escucha el estado
-        "seleccionado" de forma nativa. Un wx.TreeCtrl de selección simple
-        no expone ese mismo aviso: moverse con flechas cambia el foco Y la
-        selección a la vez, así que NVDA no lo trata como un estado
-        "adicional" digno de anunciarse por separado (a diferencia de una
-        lista, donde foco y selección pueden diferir). Se anuncia acá de
-        forma explícita, por voz — mismo mecanismo ya usado en esta app
-        para cualquier estado que resultó no ser confiable por la vía
-        nativa (ver anunciar_voz_nvda en accesibilidad.py) — en cada cambio
-        de selección del árbol, sea por flechas o por clic.
-
-        Texto corto ("Casos"/"Calculadora"), no el texto completo del ítem
-        del árbol ("Configuración de Casos"/"Configuración de la
-        Calculadora") — mismo criterio que ya se aplicó al anuncio de
-        cambio de pestaña en main_frame.py: "Configuración" ya es el
-        título de esta misma pantalla, repetirlo en cada flecha es
-        redundante (pedido explícito del usuario, mismo día, sobre el
-        anuncio de pestañas: "no es necesario repetir la palabra")."""
-        item = event.GetItem()
-        if item.IsOk():
-            if item == self.item_calculadora:
-                nombre_corto = "Calculadora"
-            elif item == self.item_creditos:
-                nombre_corto = "Reporte de Créditos"
-            else:
-                nombre_corto = "Casos"
-            anunciar_voz_nvda(f"{nombre_corto}, seleccionado")
-        event.Skip()
 
     def _on_char_hook(self, event):
         codigo = event.GetKeyCode()
-        foco = wx.Window.FindFocus()
-
-        if foco is self.agentes_choice and codigo in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
+        if (
+            wx.Window.FindFocus() is self.agentes_choice
+            and codigo in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER)
+        ):
             self._on_guardar_agente(event)
             return
-
-        if foco is self.arbol_categorias:
-            if codigo in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
-                self._activar_categoria_seleccionada()
-                return
-            if codigo == wx.WXK_TAB and not event.ShiftDown() and not event.ControlDown():
-                self._activar_categoria_seleccionada(enfocar_primer_campo=True)
-                return
-
-        # Reporte real del usuario (2026-07-12): parado en el cuadro de
-        # tasa, presionar Enter no hacía nada — había que ir a buscar el
-        # botón "Guardar cambios" a mano. wx.TextCtrl de una sola línea no
-        # confirma Enter como clic de botón por sí solo (mismo motivo por
-        # el que existe activar_con_enter para botones sueltos); acá el
-        # arreglo es tomar el valor y guardar directo, sin exigir Tab hasta
-        # el botón.
-        if foco is self.convenio_tasa_texto and codigo in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
-            self._on_guardar_convenio(event, mensaje_hablado="Tasa actualizada.")
-            return
-
         event.Skip()
 
-    # ---- Configuración de Casos ------------------------------------------
-
-    def _crear_contenido_casos(self, panel):
-        sizer = wx.BoxSizer(wx.VERTICAL)
-        sizer.Add(self._crear_seccion_agente(panel), 0, wx.EXPAND | wx.BOTTOM, 8)
-        sizer.Add(self._crear_seccion_importar(panel), 1, wx.EXPAND | wx.BOTTOM, 8)
-        sizer.Add(self._crear_seccion_peligro(panel), 0, wx.EXPAND)
-        panel.SetSizer(sizer)
+    # ---- Mi agente / ejecutivo -------------------------------------------
 
     def _crear_seccion_agente(self, panel):
         box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Mi agente / ejecutivo")
@@ -436,19 +298,53 @@ class ConfiguracionPanel(wx.Panel):
         self._mostrar_agentes_existentes(ejecutivos)
         self._seleccionar_agente_actual(actual)
 
-    # ---- Configuración de la Calculadora (empresas convenio / tasas) ----
-    # Pedido explícito del usuario (2026-07-12): poder editar, añadir y
-    # eliminar empresas convenio y sus tasas desde acá — hasta ahora
-    # calculadora_panel.py solo las mostraba de solo lectura (ver CLAUDE.md,
-    # sección Calculadora de Crédito: "editar tasas, agregar empresas... es
-    # trabajo futuro"). Reutiliza listar_convenios/guardar_tasa (ya
-    # existían, guardar_tasa ya hacía upsert) más el nuevo eliminar_convenio
-    # (db/convenios.py). El tipo de cambio sigue sin ser editable a
-    # propósito — sigue fijo en TIPO_CAMBIO_FIJO (calculadora_panel.py), eso
-    # no fue parte de este pedido.
 
-    def _crear_contenido_calculadora(self, panel):
+class ConfiguracionCalculadoraPanel(wx.Panel):
+    """"Configuración ▸ Configuración de la Calculadora": editar, añadir y
+    eliminar empresas convenio y sus tasas de interés — pedido explícito del
+    usuario (2026-07-12), reutiliza listar_convenios/guardar_tasa (ya
+    existían, guardar_tasa ya hacía upsert) más eliminar_convenio
+    (db/convenios.py). El tipo de cambio sigue sin ser editable a propósito
+    — sigue fijo en TIPO_CAMBIO_FIJO (calculadora_panel.py), eso no fue
+    parte de este pedido."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+
+        self._convenios_cargados = []
+
         sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(AppLogo(self), 0, wx.ALIGN_LEFT | wx.ALL, 4)
+
+        titulo = wx.StaticText(self, label="Configuración de la Calculadora")
+        titulo.SetFont(titulo.GetFont().Bold())
+        sizer.Add(titulo, 0, wx.ALL, 8)
+
+        sizer.Add(self._crear_seccion_convenios(self), 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+
+        self.SetSizer(sizer)
+        self._cargar_convenios()
+
+        # Reporte real del usuario (2026-07-12): parado en el cuadro de
+        # tasa, presionar Enter no hacía nada — había que ir a buscar el
+        # botón "Guardar cambios" a mano. wx.TextCtrl de una sola línea no
+        # confirma Enter como clic de botón por sí solo (mismo motivo por
+        # el que existe activar_con_enter para botones sueltos); acá el
+        # arreglo es tomar el valor y guardar directo, sin exigir Tab hasta
+        # el botón.
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+
+    def _on_char_hook(self, event):
+        codigo = event.GetKeyCode()
+        if (
+            wx.Window.FindFocus() is self.convenio_tasa_texto
+            and codigo in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER)
+        ):
+            self._on_guardar_convenio(event, mensaje_hablado="Tasa actualizada.")
+            return
+        event.Skip()
+
+    def _crear_seccion_convenios(self, panel):
         box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Empresas convenio y tasas de interés")
         contenedor = box.GetStaticBox()
 
@@ -491,8 +387,7 @@ class ConfiguracionPanel(wx.Panel):
         self.convenio_mensaje = wx.StaticText(contenedor, label="")
         box.Add(self.convenio_mensaje, 0)
 
-        sizer.Add(box, 1, wx.EXPAND)
-        panel.SetSizer(sizer)
+        return box
 
     def _cargar_convenios(self):
         conn = get_connection()
@@ -521,7 +416,7 @@ class ConfiguracionPanel(wx.Panel):
         `eliminar_convenio_btn` seguía habilitado aunque nada estuviera
         realmente seleccionado — daba la sensación de que el cambio no
         había quedado guardado, aunque los datos en sí sí persistían bien
-        (verificado con pruebas exhaustivas, ver tests/test_configuracion_panel.py).
+        (verificado con pruebas exhaustivas, ver tests/test_configuracion_calculadora.py).
         Reseleccionar la fila deja lista/campos/botón coherentes entre sí y
         confirma, de forma visible y audible, cuál es el valor que quedó
         realmente guardado."""
@@ -644,15 +539,34 @@ class ConfiguracionPanel(wx.Panel):
         # solo no se escucha de forma confiable.
         anunciar_voz_nvda(mensaje)
 
-    # ---- Configuración de Reporte de Créditos ----------------------------
-    # Módulo nuevo (2026-07-12): igual que la bitácora de MIDESA, importar es
-    # una acción de configuración puntual — vive acá, no en CreditosPanel (la
-    # pestaña "Historial de Créditos" es solo de consulta). Mismo patrón
-    # exacto que _crear_seccion_importar()/_on_seleccionar_archivo()/
-    # _on_importar() más arriba, adaptado a reporte_creditos_importer.py.
 
-    def _crear_contenido_creditos(self, panel):
+class ConfiguracionCreditosPanel(wx.Panel):
+    """"Configuración ▸ Configuración de Reporte de Créditos": importar el
+    reporte de créditos (recursos/reporte.xlsx). Igual que la bitácora de
+    MIDESA, importar es una acción de configuración puntual — vive acá, no
+    en CreditosPanel (la pestaña "Historial de Créditos" es solo de
+    consulta)."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+
+        self._file_path_creditos = None
+
         sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(AppLogo(self), 0, wx.ALIGN_LEFT | wx.ALL, 4)
+
+        titulo = wx.StaticText(self, label="Configuración de Reporte de Créditos")
+        titulo.SetFont(titulo.GetFont().Bold())
+        sizer.Add(titulo, 0, wx.ALL, 8)
+
+        sizer.Add(
+            self._crear_seccion_importar_creditos(self), 1,
+            wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8,
+        )
+
+        self.SetSizer(sizer)
+
+    def _crear_seccion_importar_creditos(self, panel):
         box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Importar reporte de créditos")
         contenedor = box.GetStaticBox()
 
@@ -686,8 +600,7 @@ class ConfiguracionPanel(wx.Panel):
         nombre_accesible(self.resultado_creditos_texto, "Resultado de la importación del reporte de créditos")
         box.Add(self.resultado_creditos_texto, 1, wx.EXPAND)
 
-        sizer.Add(box, 1, wx.EXPAND)
-        panel.SetSizer(sizer)
+        return box
 
     def _on_seleccionar_archivo_creditos(self, event):
         # (*.xls) incluido en el filtro a pedido explícito del usuario, aunque

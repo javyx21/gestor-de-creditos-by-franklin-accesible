@@ -7,7 +7,11 @@ from gestor_credito.ui.atajos import ATAJOS
 from gestor_credito.ui.ayuda_panel import AyudaPanel
 from gestor_credito.ui.calculadora_panel import CalculadoraPanel
 from gestor_credito.ui.casos_panel import CasosPanel
-from gestor_credito.ui.configuracion_panel import ConfiguracionPanel
+from gestor_credito.ui.configuracion_panel import (
+    ConfiguracionCalculadoraPanel,
+    ConfiguracionCasosPanel,
+    ConfiguracionCreditosPanel,
+)
 from gestor_credito.ui.creditos_panel import CreditosPanel
 from gestor_credito.ui.notificaciones_panel import NotificacionesPanel
 
@@ -33,7 +37,7 @@ class _PanelDialog(wx.Dialog):
         )
 
         # El status bar se crea ANTES que el panel a propósito: el panel
-        # (NotificacionesPanel, ConfiguracionPanel) llama a
+        # (NotificacionesPanel, ConfiguracionCasosPanel, etc.) llama a
         # self.GetTopLevelParent().SetStatusText(...) desde su propio
         # __init__, y ese __init__ corre durante panel_cls(self) más abajo —
         # si _status_bar no existe todavía en ese momento, SetStatusText()
@@ -191,9 +195,23 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_abrir_notificaciones, item_notificaciones)
         menu_bar.Append(menu_herramientas, "&Herramientas")
 
+        # Menú de cascada (pedido explícito del usuario, 2026-08-22, mismo
+        # patrón que Ayuda > Actualizaciones más abajo): antes había un solo
+        # ítem "Configuración..." que abría un diálogo único con un árbol
+        # interno de 3 categorías — ahora cada categoría es su propio ítem
+        # de este menú y abre directo su propio diálogo enfocado, sin el
+        # paso intermedio de navegar el árbol (ver configuracion_panel.py).
         menu_configuracion = wx.Menu()
-        item_configuracion = menu_configuracion.Append(wx.ID_ANY, "&Configuración...")
-        self.Bind(wx.EVT_MENU, self._on_abrir_configuracion, item_configuracion)
+        item_config_casos = menu_configuracion.Append(wx.ID_ANY, "Configuración de &Casos...")
+        self.Bind(wx.EVT_MENU, self._on_abrir_configuracion_casos, item_config_casos)
+        item_config_calculadora = menu_configuracion.Append(
+            wx.ID_ANY, "Configuración de la Ca&lculadora..."
+        )
+        self.Bind(wx.EVT_MENU, self._on_abrir_configuracion_calculadora, item_config_calculadora)
+        item_config_creditos = menu_configuracion.Append(
+            wx.ID_ANY, "Configuración de &Reporte de Créditos..."
+        )
+        self.Bind(wx.EVT_MENU, self._on_abrir_configuracion_creditos, item_config_creditos)
         menu_bar.Append(menu_configuracion, "&Configuración")
 
         menu_ayuda = wx.Menu()
@@ -356,13 +374,25 @@ class MainFrame(wx.Frame):
     def _on_abrir_notificaciones(self, event):
         self._abrir_dialogo("Notificaciones", NotificacionesPanel)
 
-    def _on_abrir_configuracion(self, event):
-        # Más ancho que el tamaño por defecto de _abrir_dialogo: desde que
-        # este panel pasó a un wx.TreeCtrl de categorías + contenido al
-        # costado (2026-07-12), el ancho por defecto (760) dejaba la lista
-        # de empresas convenio de "Configuración de la Calculadora" muy
-        # angosta junto al árbol.
-        self._abrir_dialogo("Configuración", ConfiguracionPanel, size=(900, 620))
+    def _on_abrir_configuracion_casos(self, event):
+        # Alto por sobre el default (560): 3 secciones apiladas (agente,
+        # importar bitácora con su cuadro de resultado de 150px, y
+        # mantenimiento de datos) no entran cómodas en el alto por defecto.
+        self._abrir_dialogo("Configuración de Casos", ConfiguracionCasosPanel, size=(760, 640))
+
+    def _on_abrir_configuracion_calculadora(self, event):
+        # Ancho por sobre el default: la lista de empresas convenio necesita
+        # espacio para sus dos columnas (280px + 140px) más margen.
+        self._abrir_dialogo(
+            "Configuración de la Calculadora", ConfiguracionCalculadoraPanel, size=(700, 560)
+        )
+
+    def _on_abrir_configuracion_creditos(self, event):
+        # Contenido corto (una sola sección de importación) — no necesita el
+        # alto completo por defecto.
+        self._abrir_dialogo(
+            "Configuración de Reporte de Créditos", ConfiguracionCreditosPanel, size=(700, 420)
+        )
 
     def _on_abrir_ayuda(self, event):
         self._abrir_dialogo("Ayuda", AyudaPanel)

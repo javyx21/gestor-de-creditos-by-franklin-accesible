@@ -1,6 +1,6 @@
 """Batería de pruebas de estrés sobre CalculadoraPanel y su interacción con
-ConfiguracionPanel — reporte real del usuario (2026-07-12), calificado como
-"fallo crítico que impide el paso a producción":
+ConfiguracionCalculadoraPanel — reporte real del usuario (2026-07-12),
+calificado como "fallo crítico que impide el paso a producción":
 
 1. "Falta de actualización en caliente": tras editar una tasa en
    Configuración, la Calculadora sigue mostrando la tasa anterior.
@@ -25,7 +25,7 @@ from gestor_credito.calculo.capacidad import evaluar_capacidad
 from gestor_credito.db import database
 from gestor_credito.db.convenios import guardar_tasa
 from gestor_credito.ui.calculadora_panel import TIPO_CAMBIO_FIJO, CalculadoraPanel
-from gestor_credito.ui.configuracion_panel import ConfiguracionPanel
+from gestor_credito.ui.configuracion_panel import ConfiguracionCalculadoraPanel
 
 
 @pytest.fixture(scope="module")
@@ -278,13 +278,13 @@ def test_recargar_tras_borrar_la_empresa_elegida_limpia_el_resultado(calc, conn)
 
 
 def test_editar_tasa_en_configuracion_se_refleja_en_calculadora_tras_recargar(calc, conn):
-    """Simula el flujo real MainFrame: ConfiguracionPanel (en su propio
-    diálogo/frame) edita una tasa; al cerrar ese diálogo, MainFrame llama
-    calculadora_panel.recargar() incondicionalmente (ver
+    """Simula el flujo real MainFrame: ConfiguracionCalculadoraPanel (en su
+    propio diálogo/frame) edita una tasa; al cerrar ese diálogo, MainFrame
+    llama calculadora_panel.recargar() incondicionalmente (ver
     MainFrame._abrir_dialogo) — acá se reproduce ese mismo paso sin
     necesitar un wx.Dialog modal real (bloquearía la prueba)."""
     frame_config = _frame_con_status_bar()
-    config = ConfiguracionPanel(frame_config)
+    config = ConfiguracionCalculadoraPanel(frame_config)
 
     _llenar_formulario(calc)
     _elegir_empresa(calc, "MIDESA")

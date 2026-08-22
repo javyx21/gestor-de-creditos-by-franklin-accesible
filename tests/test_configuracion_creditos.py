@@ -1,17 +1,22 @@
-"""Pruebas de extremo a extremo de "Configuración de Reporte de Créditos"
-(categoría nueva del árbol de ConfiguracionPanel, 2026-07-12) — mismo patrón
-que test_configuracion_panel.py: panel real (no mocks) contra una base de
+"""Pruebas de extremo a extremo de "Configuración ▸ Configuración de Reporte
+de Créditos" (agregada 2026-07-12) — mismo patrón que
+test_configuracion_calculadora.py: panel real (no mocks) contra una base de
 datos temporal. El wx.FileDialog de "Seleccionar archivo Excel..." no se
 puede invocar en una prueba automatizada (es modal e interactivo), así que se
 bypasea fijando panel._file_path_creditos directamente, exactamente el mismo
-estado que _on_seleccionar_archivo_creditos() deja tras una selección real."""
+estado que _on_seleccionar_archivo_creditos() deja tras una selección real.
+
+Hasta 2026-08-22 esta era una de 3 categorías dentro de un único
+ConfiguracionPanel con árbol interno — ahora es su propia clase
+(ConfiguracionCreditosPanel), abierta directo desde el menú de cascada
+"Configuración" (ver main_frame.py)."""
 
 import openpyxl
 import wx
 import pytest
 
 from gestor_credito.db import database
-from gestor_credito.ui.configuracion_panel import ConfiguracionPanel
+from gestor_credito.ui.configuracion_panel import ConfiguracionCreditosPanel
 
 
 @pytest.fixture(scope="module")
@@ -37,7 +42,7 @@ def _frame_con_status_bar():
 @pytest.fixture
 def panel(app, conn):
     frame = _frame_con_status_bar()
-    panel = ConfiguracionPanel(frame)
+    panel = ConfiguracionCreditosPanel(frame)
     yield panel
     frame.Destroy()
 
@@ -64,28 +69,6 @@ def _seleccionar_archivo_simulado(panel, path):
     panel._file_path_creditos = str(path)
     panel.archivo_creditos_texto.SetValue(str(path))
     panel.importar_creditos_btn.Enable()
-
-
-def test_arbol_tiene_las_tres_categorias(panel):
-    raiz = panel.arbol_categorias.GetRootItem()
-    hijos = []
-    item, cookie = panel.arbol_categorias.GetFirstChild(raiz)
-    while item.IsOk():
-        hijos.append(panel.arbol_categorias.GetItemText(item))
-        item, cookie = panel.arbol_categorias.GetNextChild(raiz, cookie)
-    assert hijos == [
-        "Configuración de Casos",
-        "Configuración de la Calculadora",
-        "Configuración de Reporte de Créditos",
-    ]
-
-
-def test_seleccionar_categoria_creditos_muestra_su_panel(panel):
-    panel.arbol_categorias.SelectItem(panel.item_creditos)
-    panel._activar_categoria_seleccionada()
-    assert panel.sizer_derecha.IsShown(panel.panel_creditos)
-    assert not panel.sizer_derecha.IsShown(panel.panel_casos)
-    assert not panel.sizer_derecha.IsShown(panel.panel_calculadora)
 
 
 def test_importar_deshabilitado_hasta_elegir_archivo(panel):

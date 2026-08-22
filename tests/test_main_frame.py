@@ -233,3 +233,70 @@ def test_informacion_version_usa_el_estado_guardado(frame, monkeypatch):
     frame._on_informacion_version(None)
 
     assert llamadas == [(frame, False, None)]
+
+
+# ---- Configuración (menú de cascada, 2026-08-22) ---------------------------
+# Pedido explícito del usuario: acceder a cada categoría directo desde un
+# menú de cascada en la barra (mismo patrón ya probado y aceptado para
+# Ayuda > Actualizaciones más arriba), en vez de un único ítem que abría un
+# diálogo con un árbol interno de categorías. _abrir_dialogo() en sí abre un
+# wx.Dialog modal (ShowModal() bloquearía la prueba headless) — se
+# monkeypatchea para verificar SOLO qué título/clase de panel elige cada
+# manejador, igual criterio que el resto de esta suite.
+
+
+def _menu_por_etiqueta(menu_bar, etiqueta):
+    for indice in range(menu_bar.GetMenuCount()):
+        if menu_bar.GetMenuLabelText(indice) == etiqueta:
+            return menu_bar.GetMenu(indice)
+    return None
+
+
+def test_menu_configuracion_tiene_las_tres_categorias_en_cascada(frame):
+    menu = _menu_por_etiqueta(frame.GetMenuBar(), "Configuración")
+    assert menu is not None
+    etiquetas = [item.GetItemLabelText() for item in menu.GetMenuItems()]
+    assert etiquetas == [
+        "Configuración de Casos...",
+        "Configuración de la Calculadora...",
+        "Configuración de Reporte de Créditos...",
+    ]
+
+
+def test_abrir_configuracion_casos_usa_el_panel_correcto(frame, monkeypatch):
+    from gestor_credito.ui.configuracion_panel import ConfiguracionCasosPanel
+
+    llamadas = []
+    monkeypatch.setattr(frame, "_abrir_dialogo", lambda *a, **k: llamadas.append((a, k)))
+
+    frame._on_abrir_configuracion_casos(None)
+
+    (titulo, panel_cls), kwargs = llamadas[0]
+    assert titulo == "Configuración de Casos"
+    assert panel_cls is ConfiguracionCasosPanel
+
+
+def test_abrir_configuracion_calculadora_usa_el_panel_correcto(frame, monkeypatch):
+    from gestor_credito.ui.configuracion_panel import ConfiguracionCalculadoraPanel
+
+    llamadas = []
+    monkeypatch.setattr(frame, "_abrir_dialogo", lambda *a, **k: llamadas.append((a, k)))
+
+    frame._on_abrir_configuracion_calculadora(None)
+
+    (titulo, panel_cls), kwargs = llamadas[0]
+    assert titulo == "Configuración de la Calculadora"
+    assert panel_cls is ConfiguracionCalculadoraPanel
+
+
+def test_abrir_configuracion_creditos_usa_el_panel_correcto(frame, monkeypatch):
+    from gestor_credito.ui.configuracion_panel import ConfiguracionCreditosPanel
+
+    llamadas = []
+    monkeypatch.setattr(frame, "_abrir_dialogo", lambda *a, **k: llamadas.append((a, k)))
+
+    frame._on_abrir_configuracion_creditos(None)
+
+    (titulo, panel_cls), kwargs = llamadas[0]
+    assert titulo == "Configuración de Reporte de Créditos"
+    assert panel_cls is ConfiguracionCreditosPanel
