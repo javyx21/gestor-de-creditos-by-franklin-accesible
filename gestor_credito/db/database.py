@@ -214,13 +214,24 @@ CREATE TABLE IF NOT EXISTS reporte_credito (
     dias_en_mora INTEGER,
     es_convenio TEXT,
 
+    -- FECHA ULT. PAGO PRINCIPAL del reporte real — bug real encontrado
+    -- 2026-08-22 validando "Cancelados" con datos reales: la fila de abajo
+    -- (estado_credito_fecha_cambio) se probó primero para ordenar esa vista
+    -- por "más recientemente cancelado", pero en una base recién importada
+    -- esa fecha es la del momento del IMPORT, no la del cierre real (2,997
+    -- créditos "Cancelado" reales quedaron con solo 5 valores distintos, los
+    -- 4 segundos que tardó el import) — el orden salía prácticamente
+    -- aleatorio. fecha_ultimo_pago_principal sí es un dato real de MIDESA
+    -- (98% de cobertura en los "Cancelado" reales, 2,933 de 2,997), así que
+    -- reemplaza a estado_credito_fecha_cambio para ese orden — ver
+    -- buscar_creditos() en db/reporte_creditos.py.
+    fecha_ultimo_pago_principal TEXT,
+
     -- Desde cuándo estado_credito tiene su valor actual — mismo patrón que
-    -- caso.estado_solicitud_fecha_cambio (ver Domain model). Se usa para
-    -- ordenar la vista "Finalizados (Cancelado)" por más recientemente
-    -- pagado, no por fecha_desembolso (que es la fecha de inicio del
-    -- crédito, no la de su cierre). NOT NULL DEFAULT solo aplica a bases de
-    -- datos nuevas (CREATE TABLE); _migrar_reporte_credito() más abajo la
-    -- agrega y rellena a mano en bases ya existentes, porque SQLite no
+    -- caso.estado_solicitud_fecha_cambio (ver Domain model). NOT NULL
+    -- DEFAULT solo aplica a bases de datos nuevas (CREATE TABLE);
+    -- _migrar_reporte_credito() más abajo la agrega y rellena a mano en
+    -- bases ya existentes, porque SQLite no
     -- admite un DEFAULT no constante en ALTER TABLE ADD COLUMN.
     estado_credito_fecha_cambio TEXT NOT NULL DEFAULT (datetime('now')),
 
@@ -320,6 +331,9 @@ def _migrar_reporte_credito(conn):
 
     if "es_convenio" not in columnas:
         conn.execute("ALTER TABLE reporte_credito ADD COLUMN es_convenio TEXT")
+
+    if "fecha_ultimo_pago_principal" not in columnas:
+        conn.execute("ALTER TABLE reporte_credito ADD COLUMN fecha_ultimo_pago_principal TEXT")
 
 
 def init_db():

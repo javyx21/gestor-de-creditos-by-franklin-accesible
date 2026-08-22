@@ -6,7 +6,7 @@ import openpyxl
 
 from gestor_credito.db.database import get_connection
 
-DATE_FIELDS = {"fecha_desembolso", "fecha_vencimiento"}
+DATE_FIELDS = {"fecha_desembolso", "fecha_vencimiento", "fecha_ultimo_pago_principal"}
 INT_FIELDS = {"plazo_credito", "numero_cuotas", "cuotas_pagadas", "dias_en_mora"}
 FLOAT_FIELDS = {"monto_desembolsado", "saldo_principal", "saldo_intereses"}
 
@@ -55,6 +55,15 @@ COLUMN_ALIASES = {
     # no se le puede refinanciar por más al día que esté su crédito actual.
     "dias en mora": "dias_en_mora",
     "es convenio": "es_convenio",
+    # Agregada 2026-08-22: bug real encontrado validando "Cancelados" con
+    # datos reales — ordenar esa vista por estado_credito_fecha_cambio
+    # salía prácticamente aleatorio en una base recién importada (esa
+    # columna guarda cuándo el IMPORT detectó el estado, no cuándo se
+    # canceló de verdad — 2,997 créditos "Cancelado" reales quedaron con
+    # solo 5 valores distintos, los segundos que tardó el import). Esta sí
+    # es una fecha real de MIDESA (98% de cobertura en los "Cancelado"
+    # reales) — ver buscar_creditos() en db/reporte_creditos.py.
+    "fecha ult. pago principal": "fecha_ultimo_pago_principal",
 }
 
 CREDITO_COLUMNS = [
@@ -63,6 +72,7 @@ CREDITO_COLUMNS = [
     "plazo_credito", "numero_cuotas", "cuotas_pagadas",
     "saldo_principal", "saldo_intereses",
     "dias_en_mora", "es_convenio",
+    "fecha_ultimo_pago_principal",
 ]
 
 

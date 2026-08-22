@@ -26,3 +26,8 @@ MachoteBaseDeDatos.xlsx
 recursos/calculadora.xlsx
 recursos/reporte.xlsx
 base de clientes activos .xlsx
+
+# Capturas de pantalla con datos reales de clientes (nombres/cédulas visibles),
+# dejadas por el usuario para diagnóstico manual — nunca deben ir al repositorio.
+captura orden de cancelados .jpg
+captura fallo en cancelados .jpg

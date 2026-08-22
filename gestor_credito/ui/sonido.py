@@ -46,6 +46,17 @@ SONIDO_FILA_CREDITO_VENCIDO_SANEADO = "documentoPendiente.wav"
 # rompe nada mientras tanto.
 SONIDO_FILA_REVISAR_MANUALMENTE = "revisarManualmente.wav"
 
+# Tercer sonido distinto de Historial de Créditos (pedido explícito del
+# usuario, 2026-08-22): créditos "caso especial" — estado_credito todavía
+# dice Corriente (activo) pero cuotas_pagadas ya alcanzó o superó
+# numero_cuotas. El usuario fue explícito en que estos NO deben tratarse
+# como Cancelados ("si el sistema dice que está activo, eso está
+# prohibido") — siguen apareciendo como elegibles para refinanciar si
+# corresponde, pero con este aviso aparte para que el oficial decida con
+# criterio antes de ofrecer algo. El usuario todavía tiene que conseguir el
+# archivo real; reproducir_sonido() no hace nada si el archivo no existe.
+SONIDO_FILA_CASO_ESPECIAL_CUOTAS_COMPLETAS = "casoEspecialCuotasCompletas.wav"
+
 
 def reproducir_sonido(nombre_archivo):
     """Reproduce un .wav de gestor_credito/assets/sonidos/ en forma asíncrona.

@@ -72,6 +72,7 @@ reporte_credito(id, no_credito TEXT NOT NULL UNIQUE, cedula TEXT NOT NULL,
                  cuotas_pagadas INTEGER,
                  saldo_principal REAL, saldo_intereses REAL,  -- feed-only, see below, no own list column
                  dias_en_mora INTEGER, es_convenio TEXT,      -- feed-only too, see below
+                 fecha_ultimo_pago_principal TEXT,   -- real MIDESA date, drives Cancelados order
                  estado_credito_fecha_cambio TEXT NOT NULL, fecha_actualizacion_registro)
 ```
 
@@ -379,26 +380,46 @@ are not imported.
 
 Filters (all AND together, all live-reload on `EVT_CHOICE`, count announced via `anunciar_voz_nvda`
 on Enter — same `FindFocus()` pattern as Casos):
-- **Cuotas pendientes (máximo)** — free-text int, `<=` comparison against `numero_cuotas -
-  cuotas_pagadas` (rows missing either value never match). This is the "Próximos a finalizar"
-  control — no separate dedicated widget for that concept.
 - **Empresa** — from `obtener_empresas_convenio()`, the distinct values actually present in
   `reporte_credito` (not the 29-company global `convenio_tasa` catalog, which can list companies
   with zero credits here or under a different name).
-- **Estado** — "Activos (Corriente)", "Finalizados (para reenganche)", "Todos los estados"
-  (**default** since 2026-08-21, was "Activos" before — explicit user request: "cuando borremos
-  filtro queden... en general... todos", so searching a client with no active credit doesn't
-  require switching the filter by hand first; `_INDICE_ESTADO_POR_DEFECTO` in `creditos_panel.py`,
-  used both by initial load and by `limpiar_busqueda()`/Ctrl+D — no magic index repeated in two
-  places), and "Elegibles para refinanciar" (see below). `ESTADO_CREDITO_FINALIZADO` is a compound
-  condition: `estado_credito IN ('Cancelado', 'Finalizado') OR (numero_cuotas - cuotas_pagadas) <=
-  0` — the cuotas-based branch catches real cases where MIDESA hadn't flipped `estado_credito` to
-  Cancelado yet despite being functionally paid off. Ordered by `estado_credito_fecha_cambio DESC`
-  (not fecha_desembolso, which is when the credit *started*) so newest payoffs lead the
-  reengagement list.
+- **Estado** — reduced to exactly 3 options (2026-08-22, explicit user request: "es más lógico que
+  solo tengamos tres" — replaces the earlier 4-option scheme, "Activos (Corriente)" and "Finalizados
+  (para reenganche)" no longer have their own combo entries, though `ESTADO_CREDITO_ACTIVO` is still
+  a valid value to pass `buscar_creditos()` programmatically):
+  - **"Todos los estados"** — **default** (since 2026-08-21, explicit user request: "cuando
+    borremos filtro queden... en general... todos", so searching a client with no active credit
+    doesn't require switching the filter by hand first; `_INDICE_ESTADO_POR_DEFECTO` in
+    `creditos_panel.py`, used both by initial load and by `limpiar_busqueda()`/Ctrl+D). Order:
+    `fecha_desembolso DESC` — unchanged, explicit user request to keep this one as-is.
+  - **"Elegibles para refinanciar"** (`ESTADO_ELEGIBLES_REFINANCIAMIENTO`, see below). Order:
+    **% avance de pago descendente** (2026-08-22, explicit user request: "el que le falta menos
+    por pagar primero, hasta llegar a los que están justo en el 50%") — computed and sorted in
+    Python via `_avance_pago_de_fila()`, since the underlying calculation isn't expressible as
+    simple SQL.
+  - **"Cancelados"** (`ESTADO_CREDITO_CANCELADO` = "Cancelado", replaces the old
+    "Finalizados (para reenganche)") — **simple text equality now, not a compound condition**:
+    explicit user confirmation (2026-08-22) that a credit with complete installments but
+    `estado_credito` still "Corriente" must **not** appear here ("si el sistema dice que está
+    activo, eso está prohibido" treating it otherwise) — that case is handled separately, see the
+    yellow "caso especial" alert below. Order: `fecha_ultimo_pago_principal DESC` (most recently
+    cancelled first, explicit user example: cancelled Aug 15 before cancelled Jul 30) — **not**
+    `estado_credito_fecha_cambio`, real bug found via manual testing the same day (2026-08-22):
+    on a freshly-imported database that column only reflects import time, not the real
+    cancellation date (2,997 real "Cancelado" rows had only 5 distinct timestamp values, all
+    within ~4 seconds — the import run), so the "most recent" order was effectively random. This
+    is the same general dating-rule limitation already documented under Domain model, just also
+    mattering for this filter's own sort order. `fecha_ultimo_pago_principal` (new column, from
+    MIDESA's real `FECHA ULT. PAGO PRINCIPAL`, 98% coverage on real Cancelado rows — 2,933/2,997)
+    replaces it. The remaining ~2% (64 rows, confirmed genuinely complete/saldo-zero credits with
+    a MIDESA data-entry gap, not an anomaly) sort to the end for free via SQLite's default
+    NULL-last-in-`DESC` behavior — no special-case code needed.
 - Cédula/nombre search does **not** override the Estado filter (unlike Casos' ejecutivo override)
-  — with the new default ("Todos los estados") this rarely matters day-to-day, but picking
-  "Activos" explicitly still narrows a search to Corriente only, same mechanism as always.
+  — rarely matters day-to-day since the default is already "Todos los estados".
+- **Retired 2026-08-22** (explicit user request, "ya no vale la pena tenerla"): the "Cuotas
+  pendientes (máximo)" free-text filter and `buscar_creditos()`'s `cuotas_pendientes_maximo`
+  parameter — fully removed, not just hidden. "Elegibles para refinanciar" replaced the
+  count-based "Próximos a finalizar" concept it used to power.
 
 **Vencido/Saneado/Prorrogado/mora-real row alert** (added 2026-08-21, explicit user request,
 expanded same day after validating against a real file): same visual+audio equivalent Casos
@@ -410,21 +431,41 @@ already has for "Documentos pendientes" (see below). Fires for `estado_credito` 
 especial y no deberíamos de darle crédito"), **or** `dias_en_mora > 0` regardless of what
 `estado_credito` says (`CreditosPanel._es_credito_en_alerta`) — confirmed against the real file:
 **98 of 1,777 "Corriente" credits already had real arrears** the source system hadn't flipped the
-status for yet, same class of lag already seen with `ESTADO_CREDITO_FINALIZADO` above. Rows
+status for yet, same class of lag already seen with the old compound "Finalizados" filter. Rows
 highlight in the same red (`wx.Colour(255,214,214)` bg / `wx.Colour(139,0,0)` text, same contrast
 already verified for Casos) and `SONIDO_FILA_CREDITO_VENCIDO_SANEADO` (`documentoPendiente.wav` —
 same file as Casos' alert, own named constant per this app's one-constant-per-alert-concept
 convention) plays on `EVT_LIST_ITEM_SELECTED`. Purely decorative on top of whatever
-`buscar_creditos()` already returns — never touches a filter on its own.
+`buscar_creditos()` already returns — never touches a filter on its own. **Highest priority** of
+the three row conditions below when more than one applies to the same row (only one color/sound
+per row, the most urgent one wins).
 
-**"Revisar manualmente" row alert** (added 2026-08-21, explicit user request): fires when
+**"Caso especial" row alert — yellow** (added 2026-08-22, explicit user request): `estado_credito
+== "Corriente"` (`ESTADO_CREDITO_ACTIVO`) **but** `cuotas_pagadas >= numero_cuotas`
+(`CreditosPanel._es_caso_especial_activo_con_cuotas_completas`) — a credit that looks finished by
+the numbers but the source system hasn't (yet, or ever) marked it Cancelado. Explicit user
+reasoning, unpacked: this must **never** be silently treated as Cancelado ("si el sistema dice que
+está activo, eso está prohibido"), but it's a legitimate hit for "Elegibles para refinanciar" (still
+Corriente, near-100% avance) — so instead of hiding it or miscategorizing it, it gets its **own**
+color, **distinct from the red alert above** — `wx.Colour(255,241,118)` bg / black text, ~19:1
+contrast, explicit user request: "le tienes que poner un color en amarillo para que el vidente
+también lo pueda identificar" — and its own sound, `SONIDO_FILA_CASO_ESPECIAL_CUOTAS_COMPLETAS`
+(`casoEspecialCuotasCompletas.wav`, still waiting on the user to source the file, same
+graceful-no-op as the other pending sound below). **Second priority**: wins over "revisar
+manualmente" below when both would apply — which happens often, since cuotas-complete-but-still-
+open credits are exactly the kind of row where the money-based and installments-based avance tend
+to disagree (see `calcular_avance_pago` below); without this priority order, this well-understood,
+specific pattern would get swallowed by the generic "inconsistente" bucket instead of its own
+signal. Validated against the real file (2026-08-22): 0 rows currently match — a real but
+currently-empty case, the logic stays ready for when one appears.
+
+**"Revisar manualmente" row alert — red** (added 2026-08-21, explicit user request): fires when
 `calcular_avance_pago()` (see below) returns `"inconsistente"` for a row that ISN'T already
-covered by the alert above (`elif` in `_refrescar_lista`/`_on_seleccionar_credito` — the
-Vencido/Saneado/Prorrogado/mora alert wins if both would apply, explicit user request: only one
-sound per row, the more urgent one). Same red highlight, but a **separate sound**,
-`SONIDO_FILA_REVISAR_MANUALMENTE` (`revisarManualmente.wav`) — explicit user request, still
-waiting on the user to source the actual file; `reproducir_sonido()` already no-ops silently on a
-missing file (see Sounds below), so this doesn't break anything meanwhile.
+covered by either alert above (**lowest priority** of the three — `elif` chain in
+`_refrescar_lista`/`_on_seleccionar_credito`). Same red highlight as the Vencido/Saneado alert, but
+a **separate sound**, `SONIDO_FILA_REVISAR_MANUALMENTE` (`revisarManualmente.wav`) — explicit user
+request, still waiting on the user to source the actual file; `reproducir_sonido()` already no-ops
+silently on a missing file (see Sounds below), so this doesn't break anything meanwhile.
 
 **`gestor_credito/calculo/avance_credito.py`** (pure, no DB/UI, same convention as the rest of
 `calculo/` — the state strings it needs are duplicated locally rather than imported from `db/`, to
@@ -452,12 +493,11 @@ keep the module dependency-free):
   refinanced/restructured before is **not** excluded — explicit user confirmation: it can qualify
   again under the same rule.
 
-**"Elegibles para refinanciar"** — new `ESTADO_ELEGIBLES_REFINANCIAMIENTO` sentinel for the
-"Estado" combo. Unlike the other `estado` values, this isn't a SQL `WHERE` clause — the
+`ESTADO_ELEGIBLES_REFINANCIAMIENTO` isn't a SQL `WHERE` clause like the other `estado` values — the
 eligibility cross-check can't be expressed as simple SQL, so `buscar_creditos()` fetches
-unfiltered-by-estado rows and filters them in Python via `_fila_es_elegible_refinanciamiento()`
-(same file) before the cédula/nombre search narrows further. Validated against the real file
-(2026-08-21): 432 of 5,098 credits qualify.
+unfiltered-by-estado rows, filters them in Python via `_fila_es_elegible_refinanciamiento()`, then
+sorts by `_avance_pago_de_fila()` (both in `db/reporte_creditos.py`), before the cédula/nombre
+search narrows further. Validated against the real file (2026-08-21): 432 of 5,098 credits qualify.
 
 **Schema additions feeding all of the above** (`saldo_principal`/`saldo_intereses`'s sibling
 columns, same "feed calculations, no column of their own" rule): `dias_en_mora` (real arrears days

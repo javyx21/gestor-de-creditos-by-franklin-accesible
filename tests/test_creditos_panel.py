@@ -98,11 +98,10 @@ def test_nombre_accesible_de_la_lista():
 
 def test_vista_por_defecto_muestra_todos_los_estados(panel, conn):
     # Pedido explícito del usuario (2026-08-21): "cuando borremos filtro
-    # queden... en general... todos" — el filtro por defecto pasó de
-    # "Activos" a "Todos los estados", para que buscar un cliente sin
-    # crédito activo no dependa de cambiar el filtro a mano primero. Ver
-    # test_estado_activo_explicito_solo_muestra_corriente para confirmar que
-    # el filtro "Activos" en sí sigue funcionando igual que siempre.
+    # queden... en general... todos" — el filtro por defecto es "Todos los
+    # estados" (único selector que se comporta así hoy — "Activos" ya no
+    # tiene su propia entrada en el combo, ver ESTADO_OPCIONES en
+    # creditos_panel.py, pedido explícito del usuario 2026-08-22).
     _crear_credito(conn, "C-1", cedula="001", estado="Corriente")
     _crear_credito(conn, "C-2", cedula="002", estado="Cancelado")
     panel.recargar()
@@ -110,54 +109,15 @@ def test_vista_por_defecto_muestra_todos_los_estados(panel, conn):
     assert panel.lista.GetItemCount() == 2
 
 
-def test_estado_activo_explicito_solo_muestra_corriente(panel, conn):
-    _crear_credito(conn, "C-1", cedula="001", estado="Corriente")
-    _crear_credito(conn, "C-2", cedula="002", estado="Cancelado")
-    panel.estado_choice.SetSelection(0)  # "Activos (Corriente)"
-    panel._cargar_creditos(avisar_sin_resultados=False)
-
-    assert panel.lista.GetItemCount() == 1
-    assert _filas_lista(panel, 2) == ["C-1"]  # columna "No. Crédito"
-
-
-def test_buscar_por_cedula_encuentra_credito_sin_estar_activo_por_defecto(panel, conn):
-    # Antes (hasta 2026-08-16) esto era automático; entre 2026-08-16 y
-    # 2026-08-21 requería elegir "Todos los estados" a mano; ahora vuelve a
-    # ser automático porque el filtro por defecto YA es "Todos los estados"
-    # (pedido explícito del usuario, 2026-08-21) — sin tener que tocar el
-    # combo. Ver test_buscar_por_cedula_con_estado_activo_excluye_otros_estados
-    # para confirmar que el filtro "Activos" explícito sigue excluyendo.
+def test_buscar_por_cedula_encuentra_credito_sin_cambiar_filtro(panel, conn):
+    # El filtro por defecto YA es "Todos los estados" (pedido explícito del
+    # usuario, 2026-08-21) — buscar un cliente sin crédito activo no
+    # depende de tocar el combo primero.
     _crear_credito(conn, "C-1", cedula="0012510940057N", estado="Corriente",
                     fecha_desembolso="2025-06-30")
     _crear_credito(conn, "C-2", cedula="0012510940057N", estado="Cancelado",
                     fecha_desembolso="2026-06-30")
 
-    panel.busqueda_texto.SetValue("0012510940057N")
-    panel._buscar()
-
-    assert _filas_lista(panel, 2) == ["C-2", "C-1"]  # más reciente primero
-
-
-def test_buscar_por_cedula_con_estado_activo_excluye_otros_estados(panel, conn):
-    _crear_credito(conn, "C-1", cedula="0012510940057N", estado="Corriente",
-                    fecha_desembolso="2025-06-30")
-    _crear_credito(conn, "C-2", cedula="0012510940057N", estado="Cancelado",
-                    fecha_desembolso="2026-06-30")
-
-    panel.estado_choice.SetSelection(0)  # "Activos (Corriente)"
-    panel.busqueda_texto.SetValue("0012510940057N")
-    panel._buscar()
-
-    assert _filas_lista(panel, 2) == ["C-1"]
-
-
-def test_buscar_por_cedula_con_estado_todos_muestra_historial_completo_ordenado_desc(panel, conn):
-    _crear_credito(conn, "C-1", cedula="0012510940057N", estado="Corriente",
-                    fecha_desembolso="2025-06-30")
-    _crear_credito(conn, "C-2", cedula="0012510940057N", estado="Cancelado",
-                    fecha_desembolso="2026-06-30")
-
-    panel.estado_choice.SetSelection(2)  # "Todos los estados"
     panel.busqueda_texto.SetValue("0012510940057N")
     panel._buscar()
 
@@ -168,26 +128,18 @@ def test_vaciar_busqueda_vuelve_a_la_vista_por_defecto(panel, conn):
     _crear_credito(conn, "C-1", cedula="001", estado="Corriente")
     _crear_credito(conn, "C-2", cedula="002", estado="Cancelado")
 
-    # Además de la búsqueda, cambia los tres filtros nuevos — limpiar_busqueda()
-    # debe resetear todo, no solo el cuadro de texto (2026-08-16). Se elige
-    # "Activos" a propósito (distinto del nuevo valor por defecto, "Todos los
-    # estados" — pedido explícito del usuario, 2026-08-21) para confirmar que
-    # limpiar_busqueda() lo vuelve a dejar en el default real, no en "Activos".
-    # _cargar_creditos(avisar_sin_resultados=False) en vez de _buscar(): un
-    # resultado en cero con avisar_sin_resultados=True (el default de
-    # _buscar()) abre un wx.MessageBox real — no hay quién lo cierre en una
-    # prueba headless, mismo criterio que el resto de este archivo (ver
-    # test_busqueda_invalida_no_revienta_y_deja_la_lista_vacia).
-    panel.estado_choice.SetSelection(0)  # "Activos (Corriente)"
-    panel.busqueda_texto.SetValue("002")
+    # Se elige "Cancelados" a propósito (distinto del valor por defecto,
+    # "Todos los estados" — pedido explícito del usuario, 2026-08-21) para
+    # confirmar que limpiar_busqueda() lo vuelve a dejar en el default real.
+    panel.estado_choice.SetSelection(2)  # "Cancelados"
+    panel.busqueda_texto.SetValue("001")
     panel._cargar_creditos(avisar_sin_resultados=False)
-    assert panel.lista.GetItemCount() == 0  # "002" es Cancelado, Activos lo excluye
+    assert panel.lista.GetItemCount() == 0  # "001" es Corriente, Cancelados lo excluye
 
     panel.limpiar_busqueda()
     assert panel.busqueda_texto.GetValue() == ""
     assert panel.estado_choice.GetSelection() == _INDICE_ESTADO_POR_DEFECTO
     assert panel.empresa_choice.GetSelection() == 0
-    assert panel.cuotas_pendientes_texto.GetValue() == ""
     assert sorted(_filas_lista(panel, 2)) == ["C-1", "C-2"]
 
 
@@ -308,63 +260,31 @@ def test_filtro_por_empresa_restringe_la_lista(panel, conn):
     assert _filas_lista(panel, 2) == ["C-2"]
 
 
-def test_filtro_por_estado_finalizados(panel, conn):
+def test_filtro_por_estado_cancelados(panel, conn):
+    # "Cancelados" reemplaza a la vieja "Finalizados (para reenganche)"
+    # (pedido explícito del usuario, 2026-08-22) — igualdad simple, ya NO
+    # incluye cuotas completas con otro estado (ver
+    # test_filtro_cancelados_no_incluye_corriente_con_cuotas_completas).
     _crear_credito(conn, "C-1", estado="Corriente", numero_cuotas=24, cuotas_pagadas=3)
     _crear_credito(conn, "C-2", cedula="002", estado="Cancelado",
                     numero_cuotas=24, cuotas_pagadas=24)
-    # Cuotas ya completas pero estado_credito todavía sin actualizar a
-    # Cancelado en el sistema de origen — también cuenta como finalizado
-    # (ver ESTADO_CREDITO_FINALIZADO en db/reporte_creditos.py).
-    _crear_credito(conn, "C-3", cedula="003", estado="Trámite",
-                    numero_cuotas=24, cuotas_pagadas=24)
 
-    panel.estado_choice.SetSelection(1)  # "Finalizados (para reenganche)"
+    panel.estado_choice.SetSelection(2)  # "Cancelados"
     panel._cargar_creditos(avisar_sin_resultados=False)
 
-    assert sorted(_filas_lista(panel, 2)) == ["C-2", "C-3"]
+    assert _filas_lista(panel, 2) == ["C-2"]
 
 
-def test_filtro_por_cuotas_pendientes_maximo_es_menor_o_igual(panel, conn):
-    # "Próximos a finalizar" (pedido explícito del usuario, 2026-08-16
-    # segunda ronda): <=, no coincidencia exacta.
-    _crear_credito(conn, "C-1", numero_cuotas=24, cuotas_pagadas=24)  # 0 pendientes
-    _crear_credito(conn, "C-2", cedula="002", numero_cuotas=24, cuotas_pagadas=22)  # 2 pendientes
-    _crear_credito(conn, "C-3", cedula="003", numero_cuotas=24, cuotas_pagadas=18)  # 6 pendientes
+def test_filtro_cancelados_no_incluye_corriente_con_cuotas_completas(panel, conn):
+    # Confirmado explícitamente por el usuario (2026-08-22): "si el sistema
+    # dice que está activo, eso está prohibido" tratarlo como cancelado —
+    # ese caso especial vive en la alerta amarilla, no en este filtro.
+    _crear_credito(conn, "C-1", estado="Corriente", numero_cuotas=24, cuotas_pagadas=24)
 
-    panel.estado_choice.SetSelection(2)  # "Todos los estados"
-    panel.cuotas_pendientes_texto.SetValue("2")
-    panel._buscar()
-
-    assert sorted(_filas_lista(panel, 2)) == ["C-1", "C-2"]
-
-
-def test_proximos_a_finalizar_es_activos_mas_cuotas_pendientes_maximo(panel, conn):
-    # El filtro de negocio "Próximos a finalizar" no es un control aparte:
-    # es Estado="Activos" combinado con el campo "Cuotas pendientes
-    # (máximo)" — ver CLAUDE.md. Ya no es la combinación por defecto del
-    # panel (el default pasó a "Todos los estados", pedido explícito del
-    # usuario 2026-08-21), así que "Activos" se elige a propósito acá.
-    _crear_credito(conn, "C-1", estado="Corriente", numero_cuotas=24, cuotas_pagadas=22)  # activo, 2 pend.
-    _crear_credito(conn, "C-2", cedula="002", estado="Cancelado",
-                    numero_cuotas=24, cuotas_pagadas=24)  # finalizado, no debe aparecer
-
-    panel.estado_choice.SetSelection(0)  # "Activos (Corriente)"
-    panel.cuotas_pendientes_texto.SetValue("2")
-    panel._buscar()
-
-    assert _filas_lista(panel, 2) == ["C-1"]
-
-
-def test_cuotas_pendientes_invalidas_muestra_mensaje_y_no_revienta(panel, conn, monkeypatch):
-    llamadas = []
-    monkeypatch.setattr(wx, "MessageBox", lambda *a, **k: llamadas.append(a) or wx.OK)
-
-    _crear_credito(conn, "C-1")
-    panel.cuotas_pendientes_texto.SetValue("no es un número")
+    panel.estado_choice.SetSelection(2)  # "Cancelados"
     panel._cargar_creditos(avisar_sin_resultados=False)
 
     assert panel.lista.GetItemCount() == 0
-    assert len(llamadas) == 1
 
 
 def test_limpiar_busqueda_reproduce_el_sonido_de_borrado(panel, conn, monkeypatch):
@@ -386,8 +306,7 @@ def test_limpiar_busqueda_reproduce_el_sonido_de_borrado(panel, conn, monkeypatc
 
 def test_fila_vencido_se_resalta_en_rojo(panel, conn):
     _crear_credito(conn, "C-1", estado="Vencido")
-    panel.estado_choice.SetSelection(2)  # "Todos los estados"
-    panel._cargar_creditos(avisar_sin_resultados=False)
+    panel.recargar()  # "Todos los estados" ya es el default
 
     assert panel.lista.GetItemBackgroundColour(0) == CreditosPanel._COLOR_FONDO_CREDITO_ALERTA
     assert panel.lista.GetItemTextColour(0) == CreditosPanel._COLOR_TEXTO_CREDITO_ALERTA
@@ -395,8 +314,7 @@ def test_fila_vencido_se_resalta_en_rojo(panel, conn):
 
 def test_fila_saneado_se_resalta_en_rojo(panel, conn):
     _crear_credito(conn, "C-1", estado="Saneado")
-    panel.estado_choice.SetSelection(2)  # "Todos los estados"
-    panel._cargar_creditos(avisar_sin_resultados=False)
+    panel.recargar()  # "Todos los estados" ya es el default
 
     assert panel.lista.GetItemBackgroundColour(0) == CreditosPanel._COLOR_FONDO_CREDITO_ALERTA
     assert panel.lista.GetItemTextColour(0) == CreditosPanel._COLOR_TEXTO_CREDITO_ALERTA
@@ -419,8 +337,7 @@ def test_seleccionar_credito_vencido_reproduce_el_sonido(panel, conn, monkeypatc
     from gestor_credito.ui.sonido import SONIDO_FILA_CREDITO_VENCIDO_SANEADO
 
     _crear_credito(conn, "C-1", estado="Vencido")
-    panel.estado_choice.SetSelection(2)  # "Todos los estados"
-    panel._cargar_creditos(avisar_sin_resultados=False)
+    panel.recargar()  # "Todos los estados" ya es el default
 
     evento = wx.ListEvent(wx.wxEVT_LIST_ITEM_SELECTED, panel.lista.GetId())
     evento.SetIndex(0)
@@ -438,8 +355,7 @@ def test_seleccionar_credito_saneado_reproduce_el_sonido(panel, conn, monkeypatc
     from gestor_credito.ui.sonido import SONIDO_FILA_CREDITO_VENCIDO_SANEADO
 
     _crear_credito(conn, "C-1", estado="Saneado")
-    panel.estado_choice.SetSelection(2)  # "Todos los estados"
-    panel._cargar_creditos(avisar_sin_resultados=False)
+    panel.recargar()  # "Todos los estados" ya es el default
 
     evento = wx.ListEvent(wx.wxEVT_LIST_ITEM_SELECTED, panel.lista.GetId())
     evento.SetIndex(0)
@@ -462,23 +378,6 @@ def test_seleccionar_credito_corriente_no_reproduce_sonido(panel, conn, monkeypa
     panel._on_seleccionar_credito(evento)
 
     assert llamadas == []
-
-
-def test_filtro_activos_explicito_sigue_excluyendo_vencido_y_saneado(panel, conn):
-    # Pedido explícito del usuario (2026-08-21): la alerta es puramente
-    # decorativa sobre lo que ya se muestra — el filtro "Activos" en sí
-    # sigue excluyendo Vencido/Saneado exactamente igual que antes de este
-    # cambio, ningún filtro se tocó por la alerta en sí (el cambio de
-    # default a "Todos los estados" es un pedido aparte, ver
-    # test_vista_por_defecto_muestra_todos_los_estados).
-    _crear_credito(conn, "C-1", cedula="001", estado="Corriente")
-    _crear_credito(conn, "C-2", cedula="002", estado="Vencido")
-    _crear_credito(conn, "C-3", cedula="003", estado="Saneado")
-    panel.estado_choice.SetSelection(0)  # "Activos (Corriente)"
-    panel._cargar_creditos(avisar_sin_resultados=False)
-
-    assert panel.lista.GetItemCount() == 1
-    assert _filas_lista(panel, 2) == ["C-1"]
 
 
 # ---- Ampliación de la alerta: Prorrogado y mora real (pedido explícito ---
@@ -620,10 +519,136 @@ def test_credito_sin_datos_de_avance_no_dispara_revision_manual(panel, conn):
     assert panel.lista.GetItemBackgroundColour(0) != CreditosPanel._COLOR_FONDO_CREDITO_ALERTA
 
 
-# ---- "Elegibles para refinanciar" en el selector Estado -------------------
+# ---- "Elegibles para refinanciar" / "Cancelados" en el selector Estado ---
 
-def test_estado_opciones_incluye_elegibles_para_refinanciar():
+def test_estado_opciones_son_exactamente_estas_tres():
+    # Pedido explícito del usuario (2026-08-22): "es más lógico que solo
+    # tengamos tres" — reemplaza al esquema anterior de 4 opciones.
     from gestor_credito.ui.creditos_panel import ESTADO_OPCIONES
 
     textos = [texto for texto, _valor in ESTADO_OPCIONES]
-    assert "Elegibles para refinanciar" in textos
+    assert textos == ["Todos los estados", "Elegibles para refinanciar", "Cancelados"]
+
+
+def test_elegibles_para_refinanciar_se_ordena_por_avance_descendente(panel, conn):
+    # Pedido explícito del usuario (2026-08-22): el que le falta menos por
+    # pagar (mayor % de avance) va primero.
+    _credito_elegible = dict(
+        estado="Corriente", dias_en_mora=0, monto_desembolsado=1000.0, plazo_credito=24,
+        numero_cuotas=24, es_convenio="S",
+    )
+    _crear_credito(conn, "C-1", cedula="001", saldo_principal=450.0, saldo_intereses=50.0,
+                    cuotas_pagadas=12, **_credito_elegible)  # 50%
+    _crear_credito(conn, "C-2", cedula="002", saldo_principal=50.0, saldo_intereses=0.0,
+                    cuotas_pagadas=23, **_credito_elegible)  # 95%
+    _crear_credito(conn, "C-3", cedula="003", saldo_principal=250.0, saldo_intereses=50.0,
+                    cuotas_pagadas=18, **_credito_elegible)  # 70%
+
+    panel.estado_choice.SetSelection(1)  # "Elegibles para refinanciar"
+    panel._cargar_creditos(avisar_sin_resultados=False)
+
+    assert _filas_lista(panel, 2) == ["C-2", "C-3", "C-1"]
+
+
+def test_cancelados_se_ordena_por_fecha_de_cancelacion_mas_reciente_primero(panel, conn):
+    # Pedido explícito del usuario (2026-08-22): "si estamos a 21 de agosto
+    # y el cliente canceló el 15 de agosto, ese es el que me tiene que salir
+    # de primero". Usa fecha_ultimo_pago_principal, no
+    # estado_credito_fecha_cambio — bug real encontrado el mismo día (ver
+    # tests/test_reporte_creditos.py).
+    _crear_credito(conn, "C-1", cedula="001", estado="Cancelado",
+                    fecha_ultimo_pago_principal="2026-07-30")
+    _crear_credito(conn, "C-2", cedula="002", estado="Cancelado",
+                    fecha_ultimo_pago_principal="2026-08-15")
+    _crear_credito(conn, "C-3", cedula="003", estado="Cancelado",
+                    fecha_ultimo_pago_principal="2026-08-01")
+
+    panel.estado_choice.SetSelection(2)  # "Cancelados"
+    panel._cargar_creditos(avisar_sin_resultados=False)
+
+    assert _filas_lista(panel, 2) == ["C-2", "C-3", "C-1"]
+
+
+def test_todos_los_estados_mantiene_orden_por_fecha_de_desembolso(panel, conn):
+    # Pedido explícito del usuario (2026-08-22): "donde me muestra todos los
+    # créditos tiene que mantener el orden original" — sin cambios acá.
+    _crear_credito(conn, "C-1", cedula="001", fecha_desembolso="2024-01-01")
+    _crear_credito(conn, "C-2", cedula="002", fecha_desembolso="2026-06-30")
+    _crear_credito(conn, "C-3", cedula="003", fecha_desembolso="2025-03-15")
+    panel.recargar()
+
+    assert _filas_lista(panel, 2) == ["C-2", "C-3", "C-1"]
+
+
+# ---- "Caso especial": Corriente con cuotas ya completas (pedido -----------
+# ---- explícito del usuario, 2026-08-22) ------------------------------------
+
+def test_caso_especial_se_resalta_en_amarillo(panel, conn):
+    _crear_credito(conn, "C-1", estado="Corriente", numero_cuotas=24, cuotas_pagadas=24)
+    panel.recargar()
+
+    assert panel.lista.GetItemBackgroundColour(0) == CreditosPanel._COLOR_FONDO_CASO_ESPECIAL
+    assert panel.lista.GetItemTextColour(0) == CreditosPanel._COLOR_TEXTO_CASO_ESPECIAL
+
+
+def test_caso_especial_no_se_confunde_con_la_alerta_roja(panel, conn):
+    _crear_credito(conn, "C-1", estado="Corriente", numero_cuotas=24, cuotas_pagadas=24)
+    panel.recargar()
+
+    assert panel.lista.GetItemBackgroundColour(0) != CreditosPanel._COLOR_FONDO_CREDITO_ALERTA
+
+
+def test_caso_especial_cuotas_pagadas_mayor_que_numero_tambien_cuenta(panel, conn):
+    _crear_credito(conn, "C-1", estado="Corriente", numero_cuotas=24, cuotas_pagadas=25)
+    panel.recargar()
+
+    assert panel.lista.GetItemBackgroundColour(0) == CreditosPanel._COLOR_FONDO_CASO_ESPECIAL
+
+
+def test_credito_cancelado_no_es_caso_especial(panel, conn):
+    # El caso especial exige estado_credito == Corriente — un Cancelado con
+    # cuotas completas es simplemente un Cancelado normal (ver filtro
+    # "Cancelados"), no pasa por acá.
+    _crear_credito(conn, "C-1", estado="Cancelado", numero_cuotas=24, cuotas_pagadas=24)
+    panel.recargar()
+
+    assert panel.lista.GetItemBackgroundColour(0) != CreditosPanel._COLOR_FONDO_CASO_ESPECIAL
+
+
+def test_seleccionar_caso_especial_reproduce_su_propio_sonido(panel, conn, monkeypatch):
+    llamadas = []
+    monkeypatch.setattr(
+        "gestor_credito.ui.creditos_panel.reproducir_sonido",
+        lambda nombre: llamadas.append(nombre),
+    )
+    from gestor_credito.ui.sonido import SONIDO_FILA_CASO_ESPECIAL_CUOTAS_COMPLETAS
+
+    _crear_credito(conn, "C-1", estado="Corriente", numero_cuotas=24, cuotas_pagadas=24)
+    panel.recargar()
+
+    evento = wx.ListEvent(wx.wxEVT_LIST_ITEM_SELECTED, panel.lista.GetId())
+    evento.SetIndex(0)
+    panel._on_seleccionar_credito(evento)
+
+    assert llamadas == [SONIDO_FILA_CASO_ESPECIAL_CUOTAS_COMPLETAS]
+
+
+def test_credito_vencido_con_cuotas_completas_solo_suena_la_alerta_principal(panel, conn, monkeypatch):
+    # La alerta de estado/mora real es más urgente y gana sobre el caso
+    # especial — mismo criterio que ya existe frente a "revisar manualmente"
+    # (ver test_credito_vencido_con_avance_inconsistente_solo_suena_la_alerta_principal).
+    llamadas = []
+    monkeypatch.setattr(
+        "gestor_credito.ui.creditos_panel.reproducir_sonido",
+        lambda nombre: llamadas.append(nombre),
+    )
+    from gestor_credito.ui.sonido import SONIDO_FILA_CREDITO_VENCIDO_SANEADO
+
+    _crear_credito(conn, "C-1", estado="Vencido", numero_cuotas=24, cuotas_pagadas=24)
+    panel.recargar()
+
+    evento = wx.ListEvent(wx.wxEVT_LIST_ITEM_SELECTED, panel.lista.GetId())
+    evento.SetIndex(0)
+    panel._on_seleccionar_credito(evento)
+
+    assert llamadas == [SONIDO_FILA_CREDITO_VENCIDO_SANEADO]
