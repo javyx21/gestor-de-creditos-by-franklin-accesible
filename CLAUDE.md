@@ -414,6 +414,20 @@ on Enter — same `FindFocus()` pattern as Casos):
     replaces it. The remaining ~2% (64 rows, confirmed genuinely complete/saldo-zero credits with
     a MIDESA data-entry gap, not an anomaly) sort to the end for free via SQLite's default
     NULL-last-in-`DESC` behavior — no special-case code needed.
+    **Also excludes** (added 2026-08-22, real bug the user hit manually testing the app: called a
+    client to offer a new credit who turned out to already have one active) any "Cancelado" row
+    whose `cedula` has **another** row in `reporte_credito` with `estado_credito != "Cancelado"`
+    — that person still has an obligation somewhere (Corriente, Vencido, Saneado, Prorrogado, or
+    any future state not yet seen — deliberately `!= "Cancelado"`, not a closed list of "active"
+    states, so a new state added later doesn't need a matching code change here). Implemented as a
+    `NOT EXISTS` correlated subquery in `buscar_creditos()` (`db/reporte_creditos.py`), same branch
+    as the ORDER BY above. The row **disappears from this view entirely**, not just flagged —
+    explicit user confirmation: the whole point of "Cancelados" is deciding who to call to offer a
+    new credit, and that client isn't a valid option there. Their full history stays reachable by
+    searching cédula/nombre under "Todos los estados" — only this specific view excludes them.
+    Validated against the real file (2026-08-22): of 2,997 real "Cancelado" rows (2,216 distinct
+    cédulas), 1,096 of those cédulas also had another non-cancelled credit — 1,575 rows excluded,
+    confirming this was a high-impact gap, not an edge case.
 - Cédula/nombre search does **not** override the Estado filter (unlike Casos' ejecutivo override)
   — rarely matters day-to-day since the default is already "Todos los estados".
 - **Retired 2026-08-22** (explicit user request, "ya no vale la pena tenerla"): the "Cuotas

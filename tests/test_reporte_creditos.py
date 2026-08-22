@@ -157,6 +157,50 @@ def test_cancelados_sin_fecha_ultimo_pago_queda_al_final(conn):
     assert [f[1] for f in filas] == ["C-2", "C-1"]
 
 
+def test_cancelados_excluye_cedula_con_otro_credito_no_cancelado(conn):
+    # Bug real reportado por el usuario (2026-08-22) probando la app: un
+    # cliente aparecía en "Cancelados" pero ya tenía OTRO crédito activo —
+    # llamarlo para ofrecerle un crédito nuevo hubiera sido tiempo perdido.
+    _crear_credito(conn, "C-1", cedula="001", estado="Cancelado")
+    _crear_credito(conn, "C-2", cedula="001", estado="Corriente")
+    # Cédula distinta, sin ningún otro crédito — debe seguir apareciendo.
+    _crear_credito(conn, "C-3", cedula="002", estado="Cancelado")
+
+    filas = buscar_creditos(conn, estado=ESTADO_CREDITO_CANCELADO)
+
+    assert [f[1] for f in filas] == ["C-3"]
+
+
+def test_cancelados_excluye_cedula_con_credito_vencido_saneado_o_prorrogado(conn):
+    # La condición es "!= Cancelado", no una lista cerrada de estados
+    # "activos" — a propósito, para quedar robusta ante cualquier estado que
+    # no sea Cancelado, sin necesidad de enumerarlos todos.
+    _crear_credito(conn, "C-1", cedula="001", estado="Cancelado")
+    _crear_credito(conn, "C-2", cedula="001", estado="Vencido")
+    _crear_credito(conn, "C-3", cedula="002", estado="Cancelado")
+    _crear_credito(conn, "C-4", cedula="002", estado="Saneado")
+    _crear_credito(conn, "C-5", cedula="003", estado="Cancelado")
+    _crear_credito(conn, "C-6", cedula="003", estado="Prorrogado")
+
+    filas = buscar_creditos(conn, estado=ESTADO_CREDITO_CANCELADO)
+
+    assert filas == []
+
+
+def test_cancelados_dos_creditos_cancelados_misma_cedula_no_se_excluyen_entre_si(conn):
+    # Un cliente puede tener varios créditos ya cancelados en su historial —
+    # eso no debe excluirlos entre sí, solo un OTRO crédito que no esté
+    # cancelado descalifica.
+    _crear_credito(conn, "C-1", cedula="001", estado="Cancelado",
+                    fecha_ultimo_pago_principal="2026-08-01")
+    _crear_credito(conn, "C-2", cedula="001", estado="Cancelado",
+                    fecha_ultimo_pago_principal="2026-08-10")
+
+    filas = buscar_creditos(conn, estado=ESTADO_CREDITO_CANCELADO)
+
+    assert [f[1] for f in filas] == ["C-2", "C-1"]
+
+
 def test_filtro_por_empresa(conn):
     _crear_credito(conn, "C-1", empresa_convenio="AGROSACO")
     _crear_credito(conn, "C-2", cedula="002", empresa_convenio="IMMSA")

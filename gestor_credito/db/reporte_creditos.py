@@ -20,6 +20,20 @@ ESTADO_CREDITO_ACTIVO = "Corriente"
 # cancelado]". Ese caso especial vive en CreditosPanel (ver
 # _es_caso_especial_activo_con_cuotas_completas), con su propio color/sonido,
 # separado de este filtro.
+#
+# Además excluye (2026-08-22, bug real reportado por el usuario probando la
+# app: llamó a un cliente para ofrecerle crédito nuevo y resultó que ya tenía
+# uno activo) cualquier crédito "Cancelado" cuya misma cédula tenga OTRA fila
+# en reporte_credito con estado_credito distinto de "Cancelado" — esa
+# cédula todavía tiene una obligación en algún lado (Corriente, Vencido,
+# Saneado, Prorrogado, o cualquier estado futuro no previsto todavía: la
+# condición es "!= Cancelado", no una lista cerrada de estados "activos", a
+# propósito para quedar robusta ante un estado nuevo). La fila desaparece de
+# esta vista por completo (no solo se marca) — pedido explícito del usuario:
+# el propósito de "Cancelados" es decidir a quién llamar para ofrecer un
+# crédito nuevo, y ese cliente no es una opción válida ahí. Su historial
+# completo sigue disponible buscándolo por cédula/nombre en "Todos los
+# estados" — ver el NOT EXISTS en buscar_creditos().
 ESTADO_CREDITO_CANCELADO = "Cancelado"
 
 # Alerta visual/sonora en la lista de Historial de Créditos (pedido explícito
@@ -87,9 +101,11 @@ def buscar_creditos(conn, termino=None, estado=ESTADO_CREDITO_ACTIVO, empresa=No
       por su cuenta (ver ESTADO_OPCIONES en creditos_panel.py). Pasar
       ESTADO_TODOS para no filtrar por estado en absoluto (el valor por
       defecto real del selector del panel),
-      ESTADO_CREDITO_CANCELADO ("Cancelado", igualdad simple) para la vista
-      "Cancelados", o ESTADO_ELEGIBLES_REFINANCIAMIENTO para la vista de
-      candidatos a refinanciamiento (condición Python, no SQL — ver arriba).
+      ESTADO_CREDITO_CANCELADO ("Cancelado", igualdad simple + exclusión de
+      cédulas con otro crédito no cancelado en algún lado, ver arriba) para
+      la vista "Cancelados", o ESTADO_ELEGIBLES_REFINANCIAMIENTO para la
+      vista de candidatos a refinanciamiento (condición Python, no SQL —
+      ver arriba).
     - `empresa`: nombre exacto de empresa_convenio — reduce los resultados a
       una sola empresa en vez de listar todas globalmente (pedido explícito
       del usuario 2026-08-16); ver obtener_empresas_convenio() para la lista
@@ -134,6 +150,16 @@ def buscar_creditos(conn, termino=None, estado=ESTADO_CREDITO_ACTIVO, empresa=No
     elif estado is not None:
         condiciones.append("estado_credito = ?")
         parametros.append(estado)
+
+    if estado == ESTADO_CREDITO_CANCELADO:
+        condiciones.append(
+            "NOT EXISTS ("
+            "SELECT 1 FROM reporte_credito r2"
+            " WHERE r2.cedula = reporte_credito.cedula"
+            " AND r2.estado_credito != ?"
+            ")"
+        )
+        parametros.append(ESTADO_CREDITO_CANCELADO)
 
     if empresa is not None:
         condiciones.append("empresa_convenio = ?")
