@@ -35,6 +35,17 @@ SONIDO_FILA_DOCUMENTOS_PENDIENTES = "documentoPendiente.wav"
 # auditivo del resaltado en rojo que ya usa Casos.
 SONIDO_FILA_CREDITO_VENCIDO_SANEADO = "documentoPendiente.wav"
 
+# Distinto sonido a propósito (pedido explícito del usuario, 2026-08-21):
+# suena cuando el % de avance de pago de un crédito no es confiable (el
+# cálculo por dinero y por cuotas no coinciden, ver
+# gestor_credito/calculo/avance_credito.py) — un caso de "revisar
+# manualmente", no un crédito confirmado en mora/vencido/saneado, así que
+# necesita un sonido propio para no confundirse con esa otra alerta. El
+# usuario todavía tiene que conseguir el archivo real; reproducir_sonido()
+# ya no hace nada si el archivo no existe (ver más abajo), así que esto no
+# rompe nada mientras tanto.
+SONIDO_FILA_REVISAR_MANUALMENTE = "revisarManualmente.wav"
+
 
 def reproducir_sonido(nombre_archivo):
     """Reproduce un .wav de gestor_credito/assets/sonidos/ en forma asíncrona.

@@ -4,6 +4,11 @@ from gestor_credito.db import database
 from gestor_credito.db.reporte_creditos import (
     ESTADO_CREDITO_ACTIVO,
     ESTADO_CREDITO_FINALIZADO,
+    ESTADO_CREDITO_PRORROGADO,
+    ESTADO_CREDITO_SANEADO,
+    ESTADO_CREDITO_VENCIDO,
+    ESTADO_ELEGIBLES_REFINANCIAMIENTO,
+    ESTADOS_CREDITO_ALERTA,
     ESTADO_TODOS,
     buscar_creditos,
     obtener_empresas_convenio,
@@ -266,3 +271,92 @@ def test_no_credito_es_unico_reimportar_actualiza_no_duplica(conn):
         # UNIQUE(no_credito): un INSERT directo duplicado debe fallar a nivel
         # de esquema (la lógica real de upsert vive en el importador, no acá).
         _crear_credito(conn, "C-1", estado="Cancelado")
+
+
+# ---- Prorrogado, sexto estado real descubierto (2026-08-21) --------------
+
+def test_prorrogado_esta_en_estados_credito_alerta():
+    assert ESTADO_CREDITO_PRORROGADO == "Prorrogado"
+    assert ESTADOS_CREDITO_ALERTA == (
+        ESTADO_CREDITO_VENCIDO, ESTADO_CREDITO_SANEADO, ESTADO_CREDITO_PRORROGADO,
+    )
+
+
+# ---- ESTADO_ELEGIBLES_REFINANCIAMIENTO (pedido explícito del usuario, ----
+# ---- 2026-08-21) -----------------------------------------------------------
+
+def _credito_elegible(conn, no_credito, **overrides):
+    """Crédito que por defecto pasa todas las reglas de elegibilidad: 50%
+    de avance por dinero, cuotas coherentes (12/24 = 50% también, dentro de
+    la tolerancia), sin mora, activo en la empresa convenio."""
+    valores = dict(
+        estado="Corriente", monto_desembolsado=1000.0, saldo_principal=450.0,
+        saldo_intereses=50.0, numero_cuotas=24, cuotas_pagadas=12, plazo_credito=24,
+        dias_en_mora=0, es_convenio="S",
+    )
+    valores.update(overrides)
+    _crear_credito(conn, no_credito, **valores)
+
+
+def test_elegibles_refinanciamiento_incluye_credito_que_cumple_todo(conn):
+    _credito_elegible(conn, "C-1")
+
+    filas = buscar_creditos(conn, estado=ESTADO_ELEGIBLES_REFINANCIAMIENTO)
+
+    assert [f[1] for f in filas] == ["C-1"]
+
+
+@pytest.mark.parametrize("estado_malo", ["Vencido", "Saneado", "Prorrogado", "Cancelado"])
+def test_elegibles_refinanciamiento_excluye_estados_no_elegibles(conn, estado_malo):
+    _credito_elegible(conn, "C-1", estado=estado_malo)
+
+    assert buscar_creditos(conn, estado=ESTADO_ELEGIBLES_REFINANCIAMIENTO) == []
+
+
+def test_elegibles_refinanciamiento_excluye_mora_real_aunque_diga_corriente(conn):
+    _credito_elegible(conn, "C-1", dias_en_mora=10)
+
+    assert buscar_creditos(conn, estado=ESTADO_ELEGIBLES_REFINANCIAMIENTO) == []
+
+
+def test_elegibles_refinanciamiento_excluye_no_activo_en_convenio(conn):
+    _credito_elegible(conn, "C-1", es_convenio="N")
+
+    assert buscar_creditos(conn, estado=ESTADO_ELEGIBLES_REFINANCIAMIENTO) == []
+
+
+def test_elegibles_refinanciamiento_excluye_avance_menor_a_50_por_ciento(conn):
+    # Saldo 800 de 1000 -> solo 20% de avance.
+    _credito_elegible(conn, "C-1", saldo_principal=750.0, saldo_intereses=50.0,
+                       cuotas_pagadas=5)
+
+    assert buscar_creditos(conn, estado=ESTADO_ELEGIBLES_REFINANCIAMIENTO) == []
+
+
+def test_elegibles_refinanciamiento_excluye_avance_inconsistente(conn):
+    # Dinero: 50%. Cuotas: 1/24 = ~4% -> diferencia muy por encima de la
+    # tolerancia, no se adivina cuál creerle.
+    _credito_elegible(conn, "C-1", cuotas_pagadas=1)
+
+    assert buscar_creditos(conn, estado=ESTADO_ELEGIBLES_REFINANCIAMIENTO) == []
+
+
+def test_elegibles_refinanciamiento_permite_credito_ya_refinanciado_antes(conn):
+    # Pedido explícito del usuario: un crédito ya refinanciado antes puede
+    # volver a calificar — no hay ninguna columna de "ya refinanciado" que
+    # lo excluya acá. Saldo 200 de 1000 (80% avance por dinero) y 20/24
+    # cuotas pagadas (~83.3%, dentro de la tolerancia de 15 puntos).
+    _credito_elegible(conn, "C-1", saldo_principal=150.0, saldo_intereses=50.0,
+                       cuotas_pagadas=20)
+
+    filas = buscar_creditos(conn, estado=ESTADO_ELEGIBLES_REFINANCIAMIENTO)
+    assert [f[1] for f in filas] == ["C-1"]
+
+
+def test_elegibles_refinanciamiento_se_combina_con_busqueda(conn):
+    _credito_elegible(conn, "C-1", cedula="001", nombre="Ana Lopez")
+    _credito_elegible(conn, "C-2", cedula="002", nombre="Beto Cruz")
+
+    filas = buscar_creditos(conn, estado=ESTADO_ELEGIBLES_REFINANCIAMIENTO, termino="Ana Lopez")
+
+    assert [f[1] for f in filas] == ["C-1"]

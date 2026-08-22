@@ -1,9 +1,11 @@
 import wx
 
+from gestor_credito.calculo.avance_credito import calcular_avance_pago
 from gestor_credito.db.database import get_connection
 from gestor_credito.db.reporte_creditos import (
     ESTADO_CREDITO_ACTIVO,
     ESTADO_CREDITO_FINALIZADO,
+    ESTADO_ELEGIBLES_REFINANCIAMIENTO,
     ESTADOS_CREDITO_ALERTA,
     ESTADO_TODOS,
     buscar_creditos,
@@ -20,14 +22,14 @@ from gestor_credito.ui.logo import AppLogo
 from gestor_credito.ui.sonido import (
     SONIDO_BORRAR,
     SONIDO_FILA_CREDITO_VENCIDO_SANEADO,
+    SONIDO_FILA_REVISAR_MANUALMENTE,
     reproducir_sonido,
 )
 
 # Orden de columnas de la lista — similar al diseño de CasosPanel (pedido
-# explícito del usuario), y en el mismo orden en que se mapean los campos del
-# Excel (ver sección 1 del pedido / gestor_credito/importer/reporte_creditos_importer.py).
-# Debe coincidir con el orden del SELECT de buscar_creditos() en
-# gestor_credito/db/reporte_creditos.py.
+# explícito del usuario). Independiente del orden del SELECT de
+# buscar_creditos() en gestor_credito/db/reporte_creditos.py —
+# _fila_a_columnas() hace el mapeo entre ambos.
 #
 # "Número de Cuotas"/"Cuotas Pagadas"/"Cuotas Pendientes" agregadas 2026-08-16
 # junto con el filtro de cuotas pendientes — antes esta lista solo tenía una
@@ -52,11 +54,7 @@ COLUMNAS = [
 
 # Opciones del selector "Estado" — pedido explícito del usuario (2026-08-16):
 # una vista dedicada a créditos ya finalizados (pagados en su totalidad) para
-# campañas de reenganche, además de la vista de activos ya existente. Este
-# selector explícito reemplaza el comportamiento anterior, en el que un
-# término de búsqueda ignoraba automáticamente el filtro de estado para
-# mostrar todo el historial del cliente — ahora hay que elegir "Todos los
-# estados" a propósito para eso (ver buscar_creditos() en db/reporte_creditos.py).
+# campañas de reenganche, además de la vista de activos ya existente.
 #
 # No hay una opción de menú separada para "Próximos a finalizar" (pedido
 # explícito del usuario, segunda ronda 2026-08-16): ese filtro ES la
@@ -65,22 +63,30 @@ COLUMNAS = [
 # tabulación (mismo criterio ya aplicado en Calculadora de Crédito: "evitar
 # que el flujo de tabulación se vuelva lento o invasivo con demasiados
 # campos"). El rótulo del campo lo deja explícito.
+#
+# "Elegibles para refinanciar" agregada 2026-08-21, pedido explícito del
+# usuario: créditos que pasan el cruce de avance de pago (ver
+# gestor_credito/calculo/avance_credito.py) — no está en cuotas_pendientes
+# porque la elegibilidad no es un simple conteo de cuotas, cruza dinero y
+# cuotas entre sí.
 ESTADO_OPCIONES = [
     ("Activos (Corriente)", ESTADO_CREDITO_ACTIVO),
     ("Finalizados (para reenganche)", ESTADO_CREDITO_FINALIZADO),
     ("Todos los estados", ESTADO_TODOS),
+    ("Elegibles para refinanciar", ESTADO_ELEGIBLES_REFINANCIAMIENTO),
 ]
+
+# Selección por defecto de estado_choice — pedido explícito del usuario
+# (2026-08-21): "cuando borremos filtro queden... en general... todos", así
+# que al entrar a la pestaña o al limpiar (Ctrl+D) el filtro de Estado
+# arranca en "Todos los estados", no en "Activos". Antes esto era índice 0
+# fijo; ahora es esta constante para no repetir el número mágico en los dos
+# lugares que la usan (__init__ vía _crear_filtros, y limpiar_busqueda()).
+_INDICE_ESTADO_POR_DEFECTO = 2  # "Todos los estados"
 
 # Texto de la opción "sin filtro" del selector "Empresa" — nunca es un nombre
 # real de empresa, así que _empresa_seleccionada() lo distingue por índice 0.
 _EMPRESA_TODAS = "Todas las empresas"
-
-# Posición de estado_credito dentro de las tuplas que devuelve
-# buscar_creditos() (ver _SELECT_BASE en db/reporte_creditos.py) — usada por
-# la alerta visual/sonora de créditos Vencido/Saneado (ver
-# _refrescar_lista/_on_seleccionar_credito), mismo criterio que
-# _INDICE_ESTADO_SOLICITUD_FILA en casos_panel.py.
-_INDICE_ESTADO_CREDITO_FILA = 7
 
 
 class CreditosPanel(wx.Panel):
@@ -200,7 +206,7 @@ class CreditosPanel(wx.Panel):
             contenedor, choices=[texto for texto, _valor in ESTADO_OPCIONES]
         )
         nombre_accesible(self.estado_choice, "Estado")
-        self.estado_choice.SetSelection(0)
+        self.estado_choice.SetSelection(_INDICE_ESTADO_POR_DEFECTO)
         self.estado_choice.Bind(
             wx.EVT_CHOICE, lambda event: self._cargar_creditos(avisar_sin_resultados=False)
         )
@@ -308,17 +314,20 @@ class CreditosPanel(wx.Panel):
 
     def limpiar_busqueda(self):
         """Vacía la búsqueda Y los tres filtros, y vuelve a la vista por
-        defecto (créditos en estado Corriente, todas las empresas, sin
-        filtro de cuotas pendientes). Público (no "_on_...") porque también
-        lo dispara el atajo GLOBAL Ctrl+D (antes Alt+L) cuando esta pestaña
-        está activa (pedido explícito del usuario — ver
-        MainFrame._limpiar_segun_pestana_activa). Reproduce el sonido de
-        confirmación (borrar.wav) — pedido explícito del usuario: "la acción
-        de borrar siempre tiene que hacer llamado al sonido", mismo criterio
-        que ya usan limpiar_busqueda()/eliminar_caso()/eliminar_cliente() en
-        CasosPanel."""
+        defecto — "Todos los estados" (ver _INDICE_ESTADO_POR_DEFECTO;
+        pedido explícito del usuario, 2026-08-21: "cuando borremos filtro
+        queden... en general... todos", para que buscar un cliente sin
+        crédito activo no dependa de cambiar el filtro a mano primero),
+        todas las empresas, sin filtro de cuotas pendientes. Público (no
+        "_on_...") porque también lo dispara el atajo GLOBAL Ctrl+D (antes
+        Alt+L) cuando esta pestaña está activa (pedido explícito del usuario
+        — ver MainFrame._limpiar_segun_pestana_activa). Reproduce el sonido
+        de confirmación (borrar.wav) — pedido explícito del usuario: "la
+        acción de borrar siempre tiene que hacer llamado al sonido", mismo
+        criterio que ya usan limpiar_busqueda()/eliminar_caso()/
+        eliminar_cliente() en CasosPanel."""
         self.busqueda_texto.SetValue("")
-        self.estado_choice.SetSelection(0)
+        self.estado_choice.SetSelection(_INDICE_ESTADO_POR_DEFECTO)
         self.empresa_choice.SetSelection(0)
         self.cuotas_pendientes_texto.SetValue("")
         self._cargar_creditos(avisar_sin_resultados=False)
@@ -451,8 +460,26 @@ class CreditosPanel(wx.Panel):
                 for columna, valor in enumerate(valores[1:], start=1):
                     self.lista.SetItem(indice, columna, valor)
 
-                estado_credito = fila[_INDICE_ESTADO_CREDITO_FILA]
-                if self._es_credito_en_alerta(estado_credito):
+                (
+                    _id, _no_credito, _cedula, _nombre_cliente, _fecha_desembolso, _fecha_vencimiento,
+                    monto_desembolsado, estado_credito, _empresa_convenio, plazo_credito, numero_cuotas,
+                    cuotas_pagadas, _estado_credito_fecha_cambio, saldo_principal, saldo_intereses,
+                    dias_en_mora, _es_convenio,
+                ) = fila
+
+                # Mismo color para las dos alertas a propósito (pedido
+                # implícito: el usuario solo pidió un sonido distinto para
+                # "revisar manualmente", no un color distinto — ver
+                # _on_seleccionar_credito) — mutuamente excluyentes: la
+                # alerta de estado/mora real es la más urgente, se revisa
+                # primero.
+                if self._es_credito_en_alerta(estado_credito, dias_en_mora):
+                    self.lista.SetItemBackgroundColour(indice, self._COLOR_FONDO_CREDITO_ALERTA)
+                    self.lista.SetItemTextColour(indice, self._COLOR_TEXTO_CREDITO_ALERTA)
+                elif self._requiere_revision_manual(
+                    saldo_principal, saldo_intereses, monto_desembolsado,
+                    cuotas_pagadas, numero_cuotas, plazo_credito,
+                ):
                     self.lista.SetItemBackgroundColour(indice, self._COLOR_FONDO_CREDITO_ALERTA)
                     self.lista.SetItemTextColour(indice, self._COLOR_TEXTO_CREDITO_ALERTA)
             # El ancho de columnas ya se fija una sola vez en __init__.
@@ -467,6 +494,7 @@ class CreditosPanel(wx.Panel):
             _id, no_credito, cedula, nombre_cliente, fecha_desembolso, fecha_vencimiento,
             monto_desembolsado, estado_credito, empresa_convenio, plazo_credito, numero_cuotas,
             cuotas_pagadas, _estado_credito_fecha_cambio, saldo_principal, saldo_intereses,
+            _dias_en_mora, _es_convenio,
         ) = fila
 
         monto_texto = f"{monto_desembolsado:.2f}" if monto_desembolsado is not None else ""
@@ -488,13 +516,37 @@ class CreditosPanel(wx.Panel):
         return [valor if valor else cls.CELDA_VACIA for valor in valores]
 
     @staticmethod
-    def _es_credito_en_alerta(estado_credito):
-        """Vencido/Saneado — pedido explícito del usuario (2026-08-21): mismo
-        equivalente visual/auditivo que ya tiene Casos para "Documentos
-        pendientes" (ver casos_panel.py). Usado tanto para el resaltado en
-        rojo de la fila (_refrescar_lista) como para el sonido de navegación
-        (_on_seleccionar_credito)."""
-        return estado_credito in ESTADOS_CREDITO_ALERTA
+    def _es_credito_en_alerta(estado_credito, dias_en_mora):
+        """Vencido/Saneado/Prorrogado, O en mora real (dias_en_mora > 0)
+        aunque estado_credito todavía diga Corriente — pedido explícito del
+        usuario (2026-08-21), confirmado con datos reales: 98 de 1,777
+        créditos "Corriente" ya tenían dias_en_mora > 0 (el sistema de
+        origen no había actualizado el estado todavía, mismo desfase ya
+        visto con "Finalizados", ver ESTADO_CREDITO_FINALIZADO en
+        db/reporte_creditos.py). Mismo equivalente visual/auditivo que ya
+        tiene Casos para "Documentos pendientes" (ver casos_panel.py). Usado
+        tanto para el resaltado en rojo de la fila (_refrescar_lista) como
+        para el sonido de navegación (_on_seleccionar_credito)."""
+        return estado_credito in ESTADOS_CREDITO_ALERTA or (
+            dias_en_mora is not None and dias_en_mora > 0
+        )
+
+    @staticmethod
+    def _requiere_revision_manual(saldo_principal, saldo_intereses, monto_desembolsado,
+                                   cuotas_pagadas, numero_cuotas, plazo_credito):
+        """True si el % de avance de pago no es confiable (el cálculo por
+        dinero y por cuotas no coinciden, o el chequeo estructural de plazo
+        vs. número de cuotas falla — ver
+        gestor_credito/calculo/avance_credito.py) — pedido explícito del
+        usuario (2026-08-21): en vez de adivinar cuál número creerle, se
+        marca para que alguien lo revise a mano. Un crédito sin datos
+        suficientes para calcular nada ("sin_datos") NO cuenta como esto —
+        eso es simplemente falta de dato, no una inconsistencia real."""
+        _avance, estado_avance = calcular_avance_pago(
+            saldo_principal, saldo_intereses, monto_desembolsado,
+            cuotas_pagadas, numero_cuotas, plazo_credito,
+        )
+        return estado_avance == "inconsistente"
 
     @staticmethod
     def _formatear_cuotas_pendientes(numero_cuotas, cuotas_pagadas):
@@ -519,8 +571,9 @@ class CreditosPanel(wx.Panel):
         fila = self._filas[indice]
         (
             _id, no_credito, cedula, nombre_cliente, _fecha_desembolso, _fecha_vencimiento,
-            _monto_desembolsado, estado_credito, _empresa_convenio, _plazo_credito, numero_cuotas,
-            cuotas_pagadas, _estado_credito_fecha_cambio, _saldo_principal, _saldo_intereses,
+            monto_desembolsado, estado_credito, _empresa_convenio, plazo_credito, numero_cuotas,
+            cuotas_pagadas, _estado_credito_fecha_cambio, saldo_principal, saldo_intereses,
+            dias_en_mora, _es_convenio,
         ) = fila
         pendientes_texto = self._formatear_cuotas_pendientes(numero_cuotas, cuotas_pagadas) or (
             CreditosPanel.CELDA_VACIA
@@ -533,8 +586,16 @@ class CreditosPanel(wx.Panel):
 
         # Equivalente auditivo, para el usuario ciego, del resaltado en rojo
         # que ve un vidente en esta misma fila (ver _refrescar_lista): suena
-        # cada vez que la selección llega a un crédito Vencido o Saneado, sea
-        # por flechas, Tab o clic — EVT_LIST_ITEM_SELECTED cubre los tres.
-        # Mismo patrón que CasosPanel._on_seleccionar_caso.
-        if self._es_credito_en_alerta(estado_credito):
+        # cada vez que la selección llega a un crédito Vencido/Saneado/
+        # Prorrogado o en mora real, sea por flechas, Tab o clic —
+        # EVT_LIST_ITEM_SELECTED cubre los tres. Mismo patrón que
+        # CasosPanel._on_seleccionar_caso. Sonido distinto (pedido explícito
+        # del usuario, 2026-08-21) cuando en cambio el % de avance de pago
+        # no es confiable — ver _requiere_revision_manual.
+        if self._es_credito_en_alerta(estado_credito, dias_en_mora):
             reproducir_sonido(SONIDO_FILA_CREDITO_VENCIDO_SANEADO)
+        elif self._requiere_revision_manual(
+            saldo_principal, saldo_intereses, monto_desembolsado,
+            cuotas_pagadas, numero_cuotas, plazo_credito,
+        ):
+            reproducir_sonido(SONIDO_FILA_REVISAR_MANUALMENTE)

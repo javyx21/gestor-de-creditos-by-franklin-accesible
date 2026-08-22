@@ -1,3 +1,4 @@
+from gestor_credito.calculo.avance_credito import calcular_avance_pago, es_elegible_refinanciamiento
 from gestor_credito.db.casos import clasificar_termino_busqueda
 
 # Confirmado con el usuario (2026-07-12): el Excel real no trae un estado
@@ -14,7 +15,13 @@ ESTADO_CREDITO_ACTIVO = "Corriente"
 # existente: es puramente decorativo sobre las filas que ya se muestran.
 ESTADO_CREDITO_VENCIDO = "Vencido"
 ESTADO_CREDITO_SANEADO = "Saneado"
-ESTADOS_CREDITO_ALERTA = (ESTADO_CREDITO_VENCIDO, ESTADO_CREDITO_SANEADO)
+# Descubierto validando contra un reporte real (2026-08-21): existe un sexto
+# valor real de ESTADO_CREDITO no documentado hasta ahora, "Prorrogado" — el
+# usuario confirmó que debe tratarse igual que Vencido/Saneado para esta
+# alerta ("ese cliente es un cliente especial y no deberíamos de darle
+# crédito").
+ESTADO_CREDITO_PRORROGADO = "Prorrogado"
+ESTADOS_CREDITO_ALERTA = (ESTADO_CREDITO_VENCIDO, ESTADO_CREDITO_SANEADO, ESTADO_CREDITO_PRORROGADO)
 
 # Estados textuales que el usuario considera "finalizado" (pedido explícito,
 # 2026-08-16, segunda ronda: "estado sea 'Cancelado' / 'Finalizado'"). Ninguna
@@ -45,6 +52,14 @@ ESTADO_CREDITO_FINALIZADO = "__finalizado__"
 # llamado existente que no pase `estado`).
 ESTADO_TODOS = "__todos__"
 
+# Sentinel para el selector "Estado" de Historial de Créditos: vista de
+# créditos elegibles para refinanciamiento (pedido explícito del usuario,
+# 2026-08-21). NO es una condición SQL simple — depende del cruce de avance
+# de pago (ver gestor_credito/calculo/avance_credito.py), así que se filtra
+# en Python después de traer las filas, no con un WHERE — ver
+# _filas_elegibles_refinanciamiento() más abajo.
+ESTADO_ELEGIBLES_REFINANCIAMIENTO = "__elegibles_refinanciamiento__"
+
 # Índices de columna dentro de las tuplas que devuelve buscar_creditos() (ver
 # _SELECT_BASE más abajo).
 _INDICE_CEDULA = 2
@@ -53,7 +68,8 @@ _INDICE_NOMBRE = 3
 _SELECT_BASE = """
     SELECT id, no_credito, cedula, nombre_cliente, fecha_desembolso, fecha_vencimiento,
            monto_desembolsado, estado_credito, empresa_convenio, plazo_credito, numero_cuotas,
-           cuotas_pagadas, estado_credito_fecha_cambio, saldo_principal, saldo_intereses
+           cuotas_pagadas, estado_credito_fecha_cambio, saldo_principal, saldo_intereses,
+           dias_en_mora, es_convenio
     FROM reporte_credito
 """
 
@@ -118,7 +134,10 @@ def buscar_creditos(conn, termino=None, estado=ESTADO_CREDITO_ACTIVO, empresa=No
     condiciones = []
     parametros = []
 
-    if estado == ESTADO_TODOS:
+    if estado == ESTADO_TODOS or estado == ESTADO_ELEGIBLES_REFINANCIAMIENTO:
+        # Elegibles para refinanciamiento no tiene una condición SQL simple
+        # (depende del cruce de avance de pago) — se trae todo y se filtra
+        # en Python más abajo, ver _filas_elegibles_refinanciamiento().
         pass
     elif estado == ESTADO_CREDITO_FINALIZADO:
         placeholders = ", ".join("?" for _ in _ESTADOS_CREDITO_CERRADOS)
@@ -147,12 +166,35 @@ def buscar_creditos(conn, termino=None, estado=ESTADO_CREDITO_ACTIVO, empresa=No
     )
     filas = conn.execute(f"{_SELECT_BASE} {where} ORDER BY {orden}", parametros).fetchall()
 
+    if estado == ESTADO_ELEGIBLES_REFINANCIAMIENTO:
+        filas = [f for f in filas if _fila_es_elegible_refinanciamiento(f)]
+
     if not termino:
         return filas
 
     termino_mayus = termino.upper()
     indice = _INDICE_CEDULA if tipo == "cedula" else _INDICE_NOMBRE
     return [f for f in filas if termino_mayus in (f[indice] or "").upper()]
+
+
+def _fila_es_elegible_refinanciamiento(fila):
+    """Desempaqueta una fila de _SELECT_BASE y aplica el cruce de avance de
+    pago (ver gestor_credito/calculo/avance_credito.py) para decidir si
+    califica para refinanciamiento — pedido explícito del usuario
+    (2026-08-21)."""
+    (
+        _id, _no_credito, _cedula, _nombre_cliente, _fecha_desembolso, _fecha_vencimiento,
+        monto_desembolsado, estado_credito, _empresa_convenio, plazo_credito, numero_cuotas,
+        cuotas_pagadas, _estado_credito_fecha_cambio, saldo_principal, saldo_intereses,
+        dias_en_mora, es_convenio,
+    ) = fila
+    avance_pago, estado_avance = calcular_avance_pago(
+        saldo_principal, saldo_intereses, monto_desembolsado,
+        cuotas_pagadas, numero_cuotas, plazo_credito,
+    )
+    return es_elegible_refinanciamiento(
+        estado_credito, dias_en_mora, es_convenio, avance_pago, estado_avance,
+    )
 
 
 def obtener_empresas_convenio(conn):

@@ -195,6 +195,25 @@ CREATE TABLE IF NOT EXISTS reporte_credito (
     saldo_principal REAL,
     saldo_intereses REAL,
 
+    -- Agregadas 2026-08-21, mismo criterio que saldo_principal/saldo_intereses
+    -- arriba: alimentan cálculos (alerta de fila "en mora real" aunque
+    -- estado_credito no lo diga, y elegibilidad para refinanciamiento — ver
+    -- gestor_credito/calculo/avance_credito.py), no tienen columna propia
+    -- visible en Historial de Créditos.
+    -- dias_en_mora: DIAS_EN_MORA del reporte real. Confirmado con datos
+    -- reales (2026-08-21): 98 de 1,777 créditos "Corriente" ya tenían
+    -- dias_en_mora > 0 — el sistema de origen no les había actualizado el
+    -- estado todavía, mismo tipo de desfase ya visto con "Finalizados"
+    -- (ver ESTADO_CREDITO_FINALIZADO en db/reporte_creditos.py). No confiar
+    -- solo en el texto de estado_credito para saber si un crédito está en
+    -- mora.
+    -- es_convenio: ES_CONVENIO del reporte real ('S'/'N') — si el cliente
+    -- ya no está activo en la empresa convenio (no hay cómo descontarle por
+    -- planilla), no es elegible para refinanciamiento aunque el crédito
+    -- esté al día.
+    dias_en_mora INTEGER,
+    es_convenio TEXT,
+
     -- Desde cuándo estado_credito tiene su valor actual — mismo patrón que
     -- caso.estado_solicitud_fecha_cambio (ver Domain model). Se usa para
     -- ordenar la vista "Finalizados (Cancelado)" por más recientemente
@@ -295,6 +314,12 @@ def _migrar_reporte_credito(conn):
 
     if "saldo_intereses" not in columnas:
         conn.execute("ALTER TABLE reporte_credito ADD COLUMN saldo_intereses REAL")
+
+    if "dias_en_mora" not in columnas:
+        conn.execute("ALTER TABLE reporte_credito ADD COLUMN dias_en_mora INTEGER")
+
+    if "es_convenio" not in columnas:
+        conn.execute("ALTER TABLE reporte_credito ADD COLUMN es_convenio TEXT")
 
 
 def init_db():

@@ -16,6 +16,7 @@ HEADERS = [
     "NOMBRE_CLIENTE", "ESTADO_CREDITO", "PRODUCTO_CREDITO", "SALDO_PRINCIPAL",
     "SALDO_INTERESES", "MONTO_DESEMBOLSADO", "EMPRESA_DE_CONVENIO", "NO_IDENTIFICACION",
     "MONTO_GARANTIA", "PLAZO_CREDITO", "NUMERO_CUOTAS", "CUOTAS_PAGADAS",
+    "DIAS_EN_MORA", "ES_CONVENIO",
 ]
 
 
@@ -37,6 +38,8 @@ def _fila(**overrides):
         "PLAZO_CREDITO": 23,
         "NUMERO_CUOTAS": 46,
         "CUOTAS_PAGADAS": 24,
+        "DIAS_EN_MORA": 0,
+        "ES_CONVENIO": "S",
     }
     base.update(overrides)
     return [base[h] for h in HEADERS]
@@ -277,6 +280,40 @@ def test_saldo_intereses_se_importa(db, tmp_path):
     assert saldo_intereses == pytest.approx(32.10)
 
 
+def test_dias_en_mora_se_importa(db, tmp_path):
+    """Agregada 2026-08-21, pedido explícito del usuario: sin esta columna
+    no hay forma de detectar un crédito "Corriente" que en realidad ya está
+    en mora (ver CreditosPanel._es_credito_en_alerta) — confirmado con datos
+    reales: 98 de 1,777 créditos "Corriente" ya tenían dias_en_mora > 0."""
+    excel_path = tmp_path / "reporte.xlsx"
+    _escribir_excel(excel_path, [_fila(DIAS_EN_MORA=45)])
+
+    import_reporte_creditos(excel_path)
+
+    conn = db.get_connection()
+    try:
+        dias_en_mora = conn.execute("SELECT dias_en_mora FROM reporte_credito").fetchone()[0]
+    finally:
+        conn.close()
+
+    assert dias_en_mora == 45
+
+
+def test_es_convenio_se_importa(db, tmp_path):
+    excel_path = tmp_path / "reporte.xlsx"
+    _escribir_excel(excel_path, [_fila(ES_CONVENIO="N")])
+
+    import_reporte_creditos(excel_path)
+
+    conn = db.get_connection()
+    try:
+        es_convenio = conn.execute("SELECT es_convenio FROM reporte_credito").fetchone()[0]
+    finally:
+        conn.close()
+
+    assert es_convenio == "N"
+
+
 def test_estado_credito_fecha_cambio_se_estampa_al_insertar(db, tmp_path):
     excel_path = tmp_path / "reporte.xlsx"
     _escribir_excel(excel_path, [_fila()])
@@ -386,6 +423,7 @@ def test_encabezados_con_espacio_en_vez_de_guion_bajo_tambien_matchean(db, tmp_p
         "NOMBRE del CLIENTE", "ESTADO_CREDITO", "PRODUCTO_CREDITO", "SALDO_PRINCIPAL",
         "SALDO_INTERESES", "MONTO_DESEMBOLSADO", "EMPRESA_DE_CONVENIO", "NO_IDENTIFICACION",
         "MONTO_GARANTIA", "PLAZO del CREDITO", "NUMERO_CUOTAS", "CUOTAS_PAGADAS",
+        "DIAS_EN_MORA", "ES_CONVENIO",
     ]
     excel_path = tmp_path / "reporte.xlsx"
     _escribir_excel(excel_path, [_fila()], headers=headers_alternativos)

@@ -71,6 +71,7 @@ reporte_credito(id, no_credito TEXT NOT NULL UNIQUE, cedula TEXT NOT NULL,
                  numero_cuotas INTEGER,       -- total installments (nullable pre-2026-08-16 rows)
                  cuotas_pagadas INTEGER,
                  saldo_principal REAL, saldo_intereses REAL,  -- feed-only, see below, no own list column
+                 dias_en_mora INTEGER, es_convenio TEXT,      -- feed-only too, see below
                  estado_credito_fecha_cambio TEXT NOT NULL, fecha_actualizacion_registro)
 ```
 
@@ -384,27 +385,87 @@ on Enter — same `FindFocus()` pattern as Casos):
 - **Empresa** — from `obtener_empresas_convenio()`, the distinct values actually present in
   `reporte_credito` (not the 29-company global `convenio_tasa` catalog, which can list companies
   with zero credits here or under a different name).
-- **Estado** — "Activos (Corriente)" (default), "Finalizados (para reenganche)", "Todos los
-  estados". `ESTADO_CREDITO_FINALIZADO` is a compound condition: `estado_credito IN ('Cancelado',
-  'Finalizado') OR (numero_cuotas - cuotas_pagadas) <= 0` — the cuotas-based branch catches real
-  cases where MIDESA hadn't flipped `estado_credito` to Cancelado yet despite being functionally
-  paid off. Ordered by `estado_credito_fecha_cambio DESC` (not fecha_desembolso, which is when the
-  credit *started*) so newest payoffs lead the reengagement list.
+- **Estado** — "Activos (Corriente)", "Finalizados (para reenganche)", "Todos los estados"
+  (**default** since 2026-08-21, was "Activos" before — explicit user request: "cuando borremos
+  filtro queden... en general... todos", so searching a client with no active credit doesn't
+  require switching the filter by hand first; `_INDICE_ESTADO_POR_DEFECTO` in `creditos_panel.py`,
+  used both by initial load and by `limpiar_busqueda()`/Ctrl+D — no magic index repeated in two
+  places), and "Elegibles para refinanciar" (see below). `ESTADO_CREDITO_FINALIZADO` is a compound
+  condition: `estado_credito IN ('Cancelado', 'Finalizado') OR (numero_cuotas - cuotas_pagadas) <=
+  0` — the cuotas-based branch catches real cases where MIDESA hadn't flipped `estado_credito` to
+  Cancelado yet despite being functionally paid off. Ordered by `estado_credito_fecha_cambio DESC`
+  (not fecha_desembolso, which is when the credit *started*) so newest payoffs lead the
+  reengagement list.
 - Cédula/nombre search does **not** override the Estado filter (unlike Casos' ejecutivo override)
-  — to search a specific client across all statuses, explicitly pick "Todos los estados".
+  — with the new default ("Todos los estados") this rarely matters day-to-day, but picking
+  "Activos" explicitly still narrows a search to Corriente only, same mechanism as always.
 
-**Vencido/Saneado row alert** (added 2026-08-21, explicit user request): same visual+audio
-equivalent Casos already has for "Documentos pendientes" (see below), here for
-`estado_credito` in `ESTADOS_CREDITO_ALERTA` (`db/reporte_creditos.py`: `ESTADO_CREDITO_VENCIDO`
-= "Vencido", `ESTADO_CREDITO_SANEADO` = "Saneado"). Rows highlight in the same red
-(`wx.Colour(255,214,214)` bg / `wx.Colour(139,0,0)` text, same contrast already verified for
-Casos) and `SONIDO_FILA_CREDITO_VENCIDO_SANEADO` (`documentoPendiente.wav` — same file as Casos'
-alert, own named constant per this app's one-constant-per-alert-concept convention) plays on
-`EVT_LIST_ITEM_SELECTED`. Purely decorative on top of whatever `buscar_creditos()` already
-returns — **does not touch any filter**: the default "Activos (Corriente)" view still excludes
-Vencido/Saneado rows exactly as before this change (explicit user confirmation: seeing them in
-the default view isn't wanted, but when a client is searched and "Todos los estados" is picked,
-the row must be identifiable at a glance/by ear without re-reading the Estado column by hand).
+**Vencido/Saneado/Prorrogado/mora-real row alert** (added 2026-08-21, explicit user request,
+expanded same day after validating against a real file): same visual+audio equivalent Casos
+already has for "Documentos pendientes" (see below). Fires for `estado_credito` in
+`ESTADOS_CREDITO_ALERTA` (`db/reporte_creditos.py`: `ESTADO_CREDITO_VENCIDO` = "Vencido",
+`ESTADO_CREDITO_SANEADO` = "Saneado", `ESTADO_CREDITO_PRORROGADO` = "Prorrogado" — a **sixth real
+`ESTADO_CREDITO` value** discovered validating against a real file, previously undocumented; only
+1 row in that file but treated identically, explicit user request: "ese cliente es un cliente
+especial y no deberíamos de darle crédito"), **or** `dias_en_mora > 0` regardless of what
+`estado_credito` says (`CreditosPanel._es_credito_en_alerta`) — confirmed against the real file:
+**98 of 1,777 "Corriente" credits already had real arrears** the source system hadn't flipped the
+status for yet, same class of lag already seen with `ESTADO_CREDITO_FINALIZADO` above. Rows
+highlight in the same red (`wx.Colour(255,214,214)` bg / `wx.Colour(139,0,0)` text, same contrast
+already verified for Casos) and `SONIDO_FILA_CREDITO_VENCIDO_SANEADO` (`documentoPendiente.wav` —
+same file as Casos' alert, own named constant per this app's one-constant-per-alert-concept
+convention) plays on `EVT_LIST_ITEM_SELECTED`. Purely decorative on top of whatever
+`buscar_creditos()` already returns — never touches a filter on its own.
+
+**"Revisar manualmente" row alert** (added 2026-08-21, explicit user request): fires when
+`calcular_avance_pago()` (see below) returns `"inconsistente"` for a row that ISN'T already
+covered by the alert above (`elif` in `_refrescar_lista`/`_on_seleccionar_credito` — the
+Vencido/Saneado/Prorrogado/mora alert wins if both would apply, explicit user request: only one
+sound per row, the more urgent one). Same red highlight, but a **separate sound**,
+`SONIDO_FILA_REVISAR_MANUALMENTE` (`revisarManualmente.wav`) — explicit user request, still
+waiting on the user to source the actual file; `reproducir_sonido()` already no-ops silently on a
+missing file (see Sounds below), so this doesn't break anything meanwhile.
+
+**`gestor_credito/calculo/avance_credito.py`** (pure, no DB/UI, same convention as the rest of
+`calculo/` — the state strings it needs are duplicated locally rather than imported from `db/`, to
+keep the module dependency-free):
+- `calcular_avance_pago(saldo_principal, saldo_intereses, monto_desembolsado, cuotas_pagadas,
+  numero_cuotas, plazo_credito)` → `(porcentaje_avance, estado)`. `porcentaje_avance` is **always**
+  `1 − (saldo a la fecha ÷ monto desembolsado)` — the money-based measure, because that's literally
+  what the user asked to measure ("porcentaje... de un monto"); the installments-based measure
+  (`cuotas_pagadas ÷ numero_cuotas`) is used **only** to cross-validate, never returned or averaged
+  in. `estado` is `"sin_datos"` (missing `monto_desembolsado`/saldo — nothing to compute, not an
+  alert), `"ok"` (money-based % computed and, if installment data existed to cross-check, both
+  agree within `TOLERANCIA_PUNTOS_PORCENTUALES` = 15 points — user-confirmed tolerance), or
+  `"inconsistente"` (both exist but disagree beyond the tolerance, or `numero_cuotas <
+  plazo_credito` — no periodicity gives fewer installments than months of term, so that combination
+  flags the row's own data as suspect). Explicit user design: never guess which of two disagreeing
+  numbers to trust — flag for a human instead.
+- `es_elegible_refinanciamiento(estado_credito, dias_en_mora, es_convenio, avance_pago,
+  estado_avance)` — hard-disqualifies `estado_credito` in (Vencido, Saneado, Prorrogado, Cancelado),
+  real arrears (`dias_en_mora > 0`), or `es_convenio == "N"` (client no longer active at the
+  convenio company — payroll deduction isn't possible, so refinancing isn't offerable regardless of
+  how current the credit looks). Otherwise requires `estado_avance == "ok"` and `avance_pago >=
+  UMBRAL_ELEGIBLE_REFINANCIAMIENTO` (0.50 — user-confirmed threshold, **no minimum time since
+  disbursement**: explicit user request, rejected after pointing out a real 3-month-term loan can
+  legitimately be near payoff well before any fixed time floor would allow). A credit already
+  refinanced/restructured before is **not** excluded — explicit user confirmation: it can qualify
+  again under the same rule.
+
+**"Elegibles para refinanciar"** — new `ESTADO_ELEGIBLES_REFINANCIAMIENTO` sentinel for the
+"Estado" combo. Unlike the other `estado` values, this isn't a SQL `WHERE` clause — the
+eligibility cross-check can't be expressed as simple SQL, so `buscar_creditos()` fetches
+unfiltered-by-estado rows and filters them in Python via `_fila_es_elegible_refinanciamiento()`
+(same file) before the cédula/nombre search narrows further. Validated against the real file
+(2026-08-21): 432 of 5,098 credits qualify.
+
+**Schema additions feeding all of the above** (`saldo_principal`/`saldo_intereses`'s sibling
+columns, same "feed calculations, no column of their own" rule): `dias_en_mora` (real arrears days
+from the report's own `DIAS_EN_MORA` — far more precise than inferring only from
+`fecha_vencimiento`) and `es_convenio` (`'S'`/`'N'` from `ES_CONVENIO` — whether the client is
+still actively employed at the convenio company; **initially excluded by mistake** during the
+first Saldo-a-la-fecha round ("se me pasó", user's words) and reinstated once its real purpose
+came up).
 
 `_cargar_creditos()`/`_cargar_empresas()` run their SQLite queries via `ejecutar_en_segundo_plano()`
 (`accesibilidad.py`) — a background thread + `wx.CallAfter` back to the UI thread — because running
@@ -543,12 +604,13 @@ gestor_credito/
     logo.png                     # real logo, 2048x2048px — AppLogo scales it down for display
     sonidos/                      # .wav alert sounds, supplied by the user (not generated)
     nvda/                          # nvdaControllerClient(32|64).dll — see anunciar_voz_nvda
-  calculo/                       # pure calc engine for Calculadora de Crédito, no DB/UI
-    dias360.py                     # Excel DAYS360 (US/NASD) replica
-    pasivo_laboral.py               # Nicaraguan labor-liability approximation
-    deducciones.py                  # INSS/IR
-    amortizacion.py                 # cuota nivelada + payment schedule/dates
-    capacidad.py                    # orchestrates the above into evaluar_capacidad()
+  calculo/                       # pure calc engines, no DB/UI
+    dias360.py                     # Excel DAYS360 (US/NASD) replica — Calculadora de Crédito
+    pasivo_laboral.py               # Nicaraguan labor-liability approximation — Calculadora
+    deducciones.py                  # INSS/IR — Calculadora
+    amortizacion.py                 # cuota nivelada + payment schedule/dates — Calculadora
+    capacidad.py                    # orchestrates the above into evaluar_capacidad() — Calculadora
+    avance_credito.py               # payment-progress % + refinancing eligibility — Historial de Créditos
   ui/
     main_frame.py                # wx.Frame; hosts the 3-page wx.Notebook + menu bar dialogs
     logo.py                       # AppLogo — the accessible logo shown on every tab/dialog

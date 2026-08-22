@@ -7,7 +7,7 @@ import openpyxl
 from gestor_credito.db.database import get_connection
 
 DATE_FIELDS = {"fecha_desembolso", "fecha_vencimiento"}
-INT_FIELDS = {"plazo_credito", "numero_cuotas", "cuotas_pagadas"}
+INT_FIELDS = {"plazo_credito", "numero_cuotas", "cuotas_pagadas", "dias_en_mora"}
 FLOAT_FIELDS = {"monto_desembolsado", "saldo_principal", "saldo_intereses"}
 
 _ESPACIOS_MULTIPLES = re.compile(r"\s+")
@@ -42,11 +42,19 @@ COLUMN_ALIASES = {
     # que resaltó en el reporte real, estas dos son las únicas dos genuinamente
     # nuevas que sí hace falta importar — alimentan la columna calculada
     # "Saldo a la fecha" en Historial de Créditos (ver creditos_panel.py), no
-    # tienen columna propia visible. ES_CONVENIO y FECHA_REPORTE, también
-    # resaltadas, se descartaron a propósito (pedido explícito del usuario:
-    # "ignórala ya que no la vamos a usar").
+    # tienen columna propia visible. FECHA_REPORTE, también resaltada, se
+    # descartó a propósito (pedido explícito del usuario: "ignórala ya que
+    # no la vamos a usar").
     "saldo principal": "saldo_principal",
     "saldo intereses": "saldo_intereses",
+    # Agregadas 2026-08-21, segunda ronda (filtro robusto de "Próximos a
+    # finalizar" / elegibilidad para refinanciamiento — ver
+    # gestor_credito/calculo/avance_credito.py). ES_CONVENIO se había
+    # descartado antes por error ("se me pasó", palabras del usuario) — hoy
+    # sí se necesita: si el cliente ya no está activo en la empresa convenio
+    # no se le puede refinanciar por más al día que esté su crédito actual.
+    "dias en mora": "dias_en_mora",
+    "es convenio": "es_convenio",
 }
 
 CREDITO_COLUMNS = [
@@ -54,6 +62,7 @@ CREDITO_COLUMNS = [
     "monto_desembolsado", "estado_credito", "empresa_convenio",
     "plazo_credito", "numero_cuotas", "cuotas_pagadas",
     "saldo_principal", "saldo_intereses",
+    "dias_en_mora", "es_convenio",
 ]
 
 
