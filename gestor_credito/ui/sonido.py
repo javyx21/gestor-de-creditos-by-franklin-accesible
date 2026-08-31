@@ -57,6 +57,15 @@ SONIDO_FILA_REVISAR_MANUALMENTE = "revisarManualmente.wav"
 # archivo real; reproducir_sonido() no hace nada si el archivo no existe.
 SONIDO_FILA_CASO_ESPECIAL_CUOTAS_COMPLETAS = "casoEspecialCuotasCompletas.wav"
 
+# Reporte Mensual de Casos (ver db/reporte_mensual.py, ui/reporte_mensual_panel.py):
+# suena cuando se recalcula el reporte (cambio de filtro, o reabrir el
+# diálogo) y los conteos resultantes son distintos de los que ya estaban en
+# pantalla — pedido explícito del usuario, para enterarse de que algo se
+# movió (p. ej. un caso que estaba pendiente ya se desembolsó) sin tener que
+# comparar los números a simple vista. No suena en la primera carga (no hay
+# nada previo con qué comparar todavía).
+SONIDO_ACTUALIZACION_REPORTE = "actualizacion.wav"
+
 
 def reproducir_sonido(nombre_archivo):
     """Reproduce un .wav de gestor_credito/assets/sonidos/ en forma asíncrona.

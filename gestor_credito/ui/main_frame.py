@@ -14,6 +14,7 @@ from gestor_credito.ui.configuracion_panel import (
 )
 from gestor_credito.ui.creditos_panel import CreditosPanel
 from gestor_credito.ui.notificaciones_panel import NotificacionesPanel
+from gestor_credito.ui.reporte_mensual_panel import ReporteMensualPanel
 
 
 class _PanelDialog(wx.Dialog):
@@ -87,10 +88,13 @@ class MainFrame(wx.Frame):
         self.CreateStatusBar()
         self.SetStatusText("Listo")
 
-        # Notificaciones/Configuración/Ayuda siguen como diálogos modales
-        # desde el menú (pedido explícito del usuario por cómo navega con
-        # NVDA, ver CLAUDE.md) — son herramientas de configuración/consulta
-        # puntual, no algo que se use en el flujo de trabajo día a día.
+        # Notificaciones/Configuración/Ayuda/Reporte Mensual de Casos siguen
+        # como diálogos modales desde el menú (pedido explícito del usuario
+        # por cómo navega con NVDA, ver CLAUDE.md) — son herramientas de
+        # configuración/consulta puntual, no algo que se use en el flujo de
+        # trabajo día a día. El Reporte Mensual en particular es de solo
+        # consulta/exportación (nada editable ahí, ver reporte_mensual_panel.py),
+        # el mismo criterio que ya aplicaba a Notificaciones.
         #
         # La Calculadora es distinta: pedido explícito del usuario
         # (2026-07-11), después de probar la primera versión como diálogo de
@@ -193,6 +197,13 @@ class MainFrame(wx.Frame):
         menu_herramientas = wx.Menu()
         item_notificaciones = menu_herramientas.Append(wx.ID_ANY, "&Notificaciones...")
         self.Bind(wx.EVT_MENU, self._on_abrir_notificaciones, item_notificaciones)
+        # Reporte de consulta/exportación puntual (pedido explícito del
+        # usuario, ver CLAUDE.md) — mismo criterio que Notificaciones: no es
+        # algo que se edite, así que va como diálogo de menú, no como
+        # pestaña del notebook (ver el criterio documentado en
+        # __init__ más abajo).
+        item_reporte_mensual = menu_herramientas.Append(wx.ID_ANY, "Reporte Mensual de &Casos...")
+        self.Bind(wx.EVT_MENU, self._on_abrir_reporte_mensual, item_reporte_mensual)
         menu_bar.Append(menu_herramientas, "&Herramientas")
 
         # Menú de cascada (pedido explícito del usuario, 2026-08-22, mismo
@@ -373,6 +384,12 @@ class MainFrame(wx.Frame):
 
     def _on_abrir_notificaciones(self, event):
         self._abrir_dialogo("Notificaciones", NotificacionesPanel)
+
+    def _on_abrir_reporte_mensual(self, event):
+        # Ancho/alto por sobre el default: filtros + resumen + árbol de
+        # detalle (cuando se activa) necesitan más espacio que un diálogo
+        # de configuración simple.
+        self._abrir_dialogo("Reporte Mensual de Casos", ReporteMensualPanel, size=(820, 620))
 
     def _on_abrir_configuracion_casos(self, event):
         # Alto por sobre el default (560): 3 secciones apiladas (agente,

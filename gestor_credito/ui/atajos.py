@@ -329,8 +329,31 @@ ATAJOS = [
         None,
     ),
     (
+        None, None, "Alt+H, C", "Reporte Mensual de Casos",
+        "Abrir el diálogo de Reporte Mensual de Casos (menú Herramientas) — "
+        "Desembolsados (con/sin microseguro), No aplica, Cliente desistió y "
+        "Pendientes, para seguimiento de comisiones",
+        None,
+    ),
+    (
+        None, None, "Alt+D (en Reporte Mensual de Casos)", "Reporte Mensual de Casos",
+        "Mostrar u ocultar la lista detallada de casos de cada categoría "
+        "(casilla \"Ver casos detallados\") — sin ella, la pantalla solo "
+        "muestra los 4 números del resumen",
+        None,
+    ),
+    (
+        None, None, "Alt+G (en Reporte Mensual de Casos)", "Reporte Mensual de Casos",
+        "Guardar el reporte del mes/agente elegido como un archivo Excel "
+        "(botón Guardar reporte) — pedido explícito del usuario: queda como "
+        "referencia fija para comparar un mes contra otro, sin depender de "
+        "que los datos de la app cambien después",
+        None,
+    ),
+    (
         None, None, "Esc", "General",
-        "Cerrar el diálogo abierto (Notificaciones/Configuración/Ayuda) y volver a Casos",
+        "Cerrar el diálogo abierto (Notificaciones/Configuración/Ayuda/"
+        "Reporte Mensual de Casos) y volver a Casos",
         None,
     ),
 ]
