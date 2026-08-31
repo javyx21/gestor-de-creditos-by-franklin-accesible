@@ -79,6 +79,8 @@ def test_buscar_actualizaciones_ya_actualizado_no_abre_dialogo(parent, monkeypat
     monkeypatch.setattr(modulo, "ActualizacionDisponibleDialog", _DialogoFalso)
     mensajes = []
     monkeypatch.setattr(wx, "MessageBox", lambda *a, **k: mensajes.append(a))
+    sonidos = []
+    monkeypatch.setattr(modulo, "reproducir_sonido", lambda nombre: sonidos.append(nombre))
 
     llamadas = []
     buscar_actualizaciones(parent, lambda valor: llamadas.append(valor))
@@ -87,6 +89,8 @@ def test_buscar_actualizaciones_ya_actualizado_no_abre_dialogo(parent, monkeypat
     assert _DialogoFalso.instancias == []
     assert len(mensajes) == 1
     assert "más reciente" in mensajes[0][0]
+    # Ya está actualizado: no hay nada nuevo que anunciar con sonido.
+    assert sonidos == []
 
 
 def test_buscar_actualizaciones_error_no_llama_al_completar(parent, monkeypatch):
@@ -110,6 +114,8 @@ def test_buscar_actualizaciones_version_nueva_abre_el_dialogo(parent, monkeypatc
     disponible = ActualizacionDisponible(version="9.9.9", url_descarga="https://x", sha256="abc")
     monkeypatch.setattr(modulo, "verificar_actualizacion", lambda: disponible)
     monkeypatch.setattr(modulo, "ActualizacionDisponibleDialog", _DialogoFalso)
+    sonidos = []
+    monkeypatch.setattr(modulo, "reproducir_sonido", lambda nombre: sonidos.append(nombre))
 
     llamadas = []
     buscar_actualizaciones(parent, lambda valor: llamadas.append(valor))
@@ -119,6 +125,25 @@ def test_buscar_actualizaciones_version_nueva_abre_el_dialogo(parent, monkeypatc
     assert _DialogoFalso.instancias[0].actualizacion is disponible
     assert _DialogoFalso.instancias[0].mostrado
     assert _DialogoFalso.instancias[0].destruido
+    # Pedido explícito del usuario (2026-08-31): el sonido de actualización
+    # disponible suena EXACTAMENTE acá, cuando de verdad se encontró una
+    # versión más nueva — no en el Reporte Mensual de Casos.
+    assert sonidos == [modulo.SONIDO_ACTUALIZACION_DISPONIBLE]
+
+
+def test_buscar_actualizaciones_error_no_suena(parent, monkeypatch):
+    def _falla():
+        raise RuntimeError("sin conexión")
+
+    monkeypatch.setattr(modulo, "verificar_actualizacion", _falla)
+    monkeypatch.setattr(modulo, "ActualizacionDisponibleDialog", _DialogoFalso)
+    monkeypatch.setattr(wx, "MessageBox", lambda *a, **k: None)
+    sonidos = []
+    monkeypatch.setattr(modulo, "reproducir_sonido", lambda nombre: sonidos.append(nombre))
+
+    buscar_actualizaciones(parent, lambda valor: None)
+
+    assert sonidos == []
 
 
 # ---- mostrar_informacion_version --------------------------------------------

@@ -57,14 +57,14 @@ SONIDO_FILA_REVISAR_MANUALMENTE = "revisarManualmente.wav"
 # archivo real; reproducir_sonido() no hace nada si el archivo no existe.
 SONIDO_FILA_CASO_ESPECIAL_CUOTAS_COMPLETAS = "casoEspecialCuotasCompletas.wav"
 
-# Reporte Mensual de Casos (ver db/reporte_mensual.py, ui/reporte_mensual_panel.py):
-# suena cuando se recalcula el reporte (cambio de filtro, o reabrir el
-# diálogo) y los conteos resultantes son distintos de los que ya estaban en
-# pantalla — pedido explícito del usuario, para enterarse de que algo se
-# movió (p. ej. un caso que estaba pendiente ya se desembolsó) sin tener que
-# comparar los números a simple vista. No suena en la primera carga (no hay
-# nada previo con qué comparar todavía).
-SONIDO_ACTUALIZACION_REPORTE = "actualizacion.wav"
+# "Ayuda > Actualizaciones > Buscar actualizaciones" (ver actualizacion_dialog.py):
+# suena cuando la búsqueda SÍ encuentra una versión más nueva disponible —
+# pedido explícito del usuario. No suena si ya está en la versión más
+# reciente, ni ante un error de red (nada nuevo que anunciar en esos casos).
+# Corregido 2026-08-31: la primera versión de este sonido se había puesto por
+# error en el Reporte Mensual de Casos (ver reporte_mensual_panel.py) — el
+# usuario aclaró que siempre fue para esta pantalla, no para ese reporte.
+SONIDO_ACTUALIZACION_DISPONIBLE = "actualizacion.wav"
 
 
 def reproducir_sonido(nombre_archivo):

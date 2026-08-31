@@ -10,7 +10,6 @@ from gestor_credito.export.excel_export import exportar_reporte_mensual
 from gestor_credito.ui.accesibilidad import activar_con_enter, anunciar_voz_nvda, nombre_accesible
 from gestor_credito.ui.fechas import formatear_fecha
 from gestor_credito.ui.logo import AppLogo
-from gestor_credito.ui.sonido import SONIDO_ACTUALIZACION_REPORTE, reproducir_sonido
 
 MESES = [
     "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -21,20 +20,29 @@ MESES = [
 # distinto de dejar el filtro vacío por accidente (ver _agente_seleccionado()).
 OPCION_TODOS_LOS_AGENTES = "Todos los agentes"
 
+# Celda vacía en vez de texto en blanco — mismo criterio que CasosPanel.CELDA_VACIA
+# y CreditosPanel: una celda vacía en un wx.ListCtrl hace que NVDA lea solo el
+# nombre de columna sin ningún valor, repetido fila tras fila; con este texto
+# queda claro que el dato no aplica a esa fila.
+CELDA_VACIA = "Celda vacía"
 
-def _texto_entrada(entrada):
-    """Línea legible por NVDA para una fila del árbol de detalle — mismo
-    criterio que _texto_alerta() en notificaciones_panel.py."""
-    partes = [
-        entrada["nombre"] or "(sin nombre)",
-        f"Cédula {entrada['cedula'] or '(sin cédula)'}",
-        f"Empresa {entrada['empresa_convenio'] or '(sin empresa)'}",
-    ]
-    if entrada["fecha"]:
-        partes.append(f"Fecha {formatear_fecha(entrada['fecha'])}")
-    if entrada["motivo_no_aplica"]:
-        partes.append(f"Motivo: {entrada['motivo_no_aplica']}")
-    return " — ".join(partes)
+COLUMNAS_RESUMEN = ["Categoría", "Cantidad"]
+COLUMNAS_DETALLE = [
+    "Categoría", "Nombre", "Identificación", "Empresa Convenio",
+    "Microseguro", "Motivo No Aplica", "Fecha",
+]
+
+# Selector "Microseguro" (pedido explícito del usuario): quién llevó
+# microseguro y quién no, para poder verlos por nombre en la tabla detallada
+# — no solo el conteo del resumen. None = sin filtrar.
+MICROSEGURO_OPCIONES = [
+    ("Todos", None),
+    ("Con microseguro", "Sí"),
+    ("Sin microseguro", "No"),
+]
+
+# Orden en que se combinan las 4 categorías en la tabla de detalle.
+_CATEGORIAS_DETALLE = ("Desembolsados", "No aplica", "Cliente desistió", "Pendientes")
 
 
 class ReporteMensualPanel(wx.Panel):
@@ -43,6 +51,13 @@ class ReporteMensualPanel(wx.Panel):
     seguimiento de comisiones (ver CLAUDE.md). Puramente de consulta y
     exportación: nada acá es editable, ver db/reporte_mensual.py para la
     lógica de cruce con Historial de Créditos que decide cada categoría.
+
+    Dos tablas SIEMPRE VISIBLES (wx.ListCtrl), mismo patrón que Casos e
+    Historial de Créditos — no un wx.TreeCtrl escondido detrás de una
+    casilla como la primera versión: eso dejaba el detalle sin foco y sin
+    ninguna forma de que NVDA lo encontrara al mostrarse (reporte real del
+    usuario). Al estar siempre presentes y en el orden normal de tabulación,
+    no hace falta ningún manejo especial de foco para llegar a ellas.
 
     Pendientes NO se filtra por el mes elegido a propósito (pedido
     explícito del usuario): es la lista viva de todo lo que sigue abierto
@@ -53,7 +68,6 @@ class ReporteMensualPanel(wx.Panel):
         super().__init__(parent)
 
         self._resultado_actual = None
-        self._conteos_anteriores = None
 
         sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(AppLogo(self), 0, wx.ALIGN_LEFT | wx.ALL, 4)
@@ -63,19 +77,26 @@ class ReporteMensualPanel(wx.Panel):
         sizer.Add(titulo, 0, wx.ALL, 8)
 
         sizer.Add(self._crear_seccion_filtros(self), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-        sizer.Add(self._crear_seccion_resumen(self), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
-        self.detalle_check = wx.CheckBox(self, label="Ver casos &detallados")
-        self.detalle_check.Bind(wx.EVT_CHECKBOX, self._on_toggle_detalle)
-        sizer.Add(self.detalle_check, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        resumen_label = wx.StaticText(self, label="Resumen general:")
+        sizer.Add(resumen_label, 0, wx.LEFT | wx.RIGHT, 8)
 
-        # Mismo control (wx.TreeCtrl) y mismo criterio de agrupación por
-        # categoría que el árbol de alertas de Notificaciones — ver
-        # notificaciones_panel.py.
-        self.arbol = wx.TreeCtrl(self, style=wx.TR_DEFAULT_STYLE | wx.TR_HIDE_ROOT)
-        nombre_accesible(self.arbol, "Árbol de casos del reporte")
-        self.arbol.Hide()
-        sizer.Add(self.arbol, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        self.resumen_lista = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL, size=(-1, 150))
+        nombre_accesible(self.resumen_lista, "Tabla resumen del reporte mensual")
+        for indice, columna in enumerate(COLUMNAS_RESUMEN):
+            self.resumen_lista.InsertColumn(indice, columna)
+            self.resumen_lista.SetColumnWidth(indice, wx.LIST_AUTOSIZE_USEHEADER)
+        sizer.Add(self.resumen_lista, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+
+        detalle_label = wx.StaticText(self, label="Casos detallados:")
+        sizer.Add(detalle_label, 0, wx.LEFT | wx.RIGHT, 8)
+
+        self.detalle_lista = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
+        nombre_accesible(self.detalle_lista, "Tabla detallada de casos del reporte mensual")
+        for indice, columna in enumerate(COLUMNAS_DETALLE):
+            self.detalle_lista.InsertColumn(indice, columna)
+            self.detalle_lista.SetColumnWidth(indice, wx.LIST_AUTOSIZE_USEHEADER)
+        sizer.Add(self.detalle_lista, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
         self.guardar_btn = wx.Button(self, label="&Guardar reporte...")
         self.guardar_btn.Bind(wx.EVT_BUTTON, self._on_guardar_reporte)
@@ -89,7 +110,7 @@ class ReporteMensualPanel(wx.Panel):
     # ---- Filtros -----------------------------------------------------
 
     def _crear_seccion_filtros(self, panel):
-        box = wx.StaticBoxSizer(wx.HORIZONTAL, panel, "Mes a consultar")
+        box = wx.StaticBoxSizer(wx.HORIZONTAL, panel, "Filtros")
         contenedor = box.GetStaticBox()
 
         ahora = datetime.now()
@@ -114,28 +135,21 @@ class ReporteMensualPanel(wx.Panel):
         nombre_accesible(self.agente_choice, "Agente del reporte")
         self.agente_choice.Bind(wx.EVT_CHOICE, self._on_cambiar_filtro)
 
+        microseguro_label = wx.StaticText(contenedor, label="Microseguro:")
+        self.microseguro_choice = wx.Choice(
+            contenedor, choices=[texto for texto, _valor in MICROSEGURO_OPCIONES]
+        )
+        self.microseguro_choice.SetSelection(0)
+        nombre_accesible(self.microseguro_choice, "Filtrar tabla detallada por microseguro")
+        # Filtro puramente de VISTA sobre el mismo resultado ya calculado —
+        # no vuelve a consultar la base de datos (ver _on_cambiar_filtro_microseguro).
+        self.microseguro_choice.Bind(wx.EVT_CHOICE, self._on_cambiar_filtro_microseguro)
+
         for control in (
             mes_label, self.mes_choice, anio_label, self.anio_spin,
-            agente_label, self.agente_choice,
+            agente_label, self.agente_choice, microseguro_label, self.microseguro_choice,
         ):
             box.Add(control, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-
-        return box
-
-    def _crear_seccion_resumen(self, panel):
-        box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Resumen")
-        contenedor = box.GetStaticBox()
-
-        self.desembolsados_label = wx.StaticText(contenedor, label="")
-        self.no_aplica_label = wx.StaticText(contenedor, label="")
-        self.cliente_desistio_label = wx.StaticText(contenedor, label="")
-        self.pendientes_label = wx.StaticText(contenedor, label="")
-
-        for control in (
-            self.desembolsados_label, self.no_aplica_label,
-            self.cliente_desistio_label, self.pendientes_label,
-        ):
-            box.Add(control, 0, wx.BOTTOM, 4)
 
         return box
 
@@ -163,8 +177,16 @@ class ReporteMensualPanel(wx.Panel):
             return None
         return valor
 
+    def _microseguro_seleccionado(self):
+        _texto, valor = MICROSEGURO_OPCIONES[self.microseguro_choice.GetSelection()]
+        return valor
+
     def _on_cambiar_filtro(self, event):
         self.recargar()
+
+    def _on_cambiar_filtro_microseguro(self, event):
+        if self._resultado_actual is not None:
+            self._refrescar_detalle(self._resultado_actual)
 
     # ---- Cálculo y presentación ---------------------------------------
 
@@ -179,19 +201,9 @@ class ReporteMensualPanel(wx.Panel):
         finally:
             conn.close()
 
-        conteos = (
-            len(resultado["desembolsados"]), resultado["con_microseguro"],
-            resultado["sin_microseguro"], len(resultado["no_aplica"]),
-            len(resultado["cliente_desistio"]), len(resultado["pendientes"]),
-        )
-        if self._conteos_anteriores is not None and conteos != self._conteos_anteriores:
-            reproducir_sonido(SONIDO_ACTUALIZACION_REPORTE)
-        self._conteos_anteriores = conteos
-
         self._resultado_actual = resultado
-        self._mostrar_resumen(resultado)
-        if self.detalle_check.GetValue():
-            self._mostrar_detalle(resultado)
+        self._refrescar_resumen(resultado)
+        self._refrescar_detalle(resultado)
 
         mensaje = (
             f"{MESES[mes - 1]} {anio}: {len(resultado['desembolsados'])} desembolsados, "
@@ -201,43 +213,63 @@ class ReporteMensualPanel(wx.Panel):
         )
         self.GetTopLevelParent().SetStatusText(mensaje)
 
-    def _mostrar_resumen(self, resultado):
-        self.desembolsados_label.SetLabel(
-            f"Desembolsados: {len(resultado['desembolsados'])} "
-            f"(con microseguro: {resultado['con_microseguro']} / "
-            f"sin microseguro: {resultado['sin_microseguro']})"
-        )
-        self.no_aplica_label.SetLabel(f"No aplica: {len(resultado['no_aplica'])}")
-        self.cliente_desistio_label.SetLabel(
-            f"Cliente desistió: {len(resultado['cliente_desistio'])}"
-        )
-        self.pendientes_label.SetLabel(
-            f"Pendientes (no depende del mes elegido): {len(resultado['pendientes'])}"
-        )
+    def _refrescar_resumen(self, resultado):
+        filas = [
+            ("Desembolsados", len(resultado["desembolsados"])),
+            ("  Con microseguro", resultado["con_microseguro"]),
+            ("  Sin microseguro", resultado["sin_microseguro"]),
+            ("No aplica", len(resultado["no_aplica"])),
+            ("Cliente desistió", len(resultado["cliente_desistio"])),
+            ("Pendientes (no depende del mes elegido)", len(resultado["pendientes"])),
+        ]
+        self.resumen_lista.Freeze()
+        try:
+            self.resumen_lista.DeleteAllItems()
+            for fila, (categoria, cantidad) in enumerate(filas):
+                indice = self.resumen_lista.InsertItem(fila, categoria)
+                self.resumen_lista.SetItem(indice, 1, str(cantidad))
+        finally:
+            self.resumen_lista.Thaw()
 
-    def _on_toggle_detalle(self, event):
-        mostrar = self.detalle_check.GetValue()
-        self.arbol.Show(mostrar)
-        if mostrar and self._resultado_actual is not None:
-            self._mostrar_detalle(self._resultado_actual)
-        self.Layout()
+    def _entradas_combinadas(self, resultado):
+        claves = {
+            "Desembolsados": "desembolsados",
+            "No aplica": "no_aplica",
+            "Cliente desistió": "cliente_desistio",
+            "Pendientes": "pendientes",
+        }
+        for categoria in _CATEGORIAS_DETALLE:
+            for entrada in resultado[claves[categoria]]:
+                yield categoria, entrada
 
-    def _mostrar_detalle(self, resultado):
-        self.arbol.DeleteAllItems()
-        raiz = self.arbol.AddRoot("Reporte")
+    def _refrescar_detalle(self, resultado):
+        microseguro_filtro = self._microseguro_seleccionado()
 
-        grupos = (
-            ("Desembolsados", resultado["desembolsados"]),
-            ("No aplica", resultado["no_aplica"]),
-            ("Cliente desistió", resultado["cliente_desistio"]),
-            ("Pendientes", resultado["pendientes"]),
-        )
-        for nombre_categoria, entradas in grupos:
-            nodo = self.arbol.AppendItem(raiz, f"{nombre_categoria} ({len(entradas)})")
-            for entrada in entradas:
-                self.arbol.AppendItem(nodo, _texto_entrada(entrada))
+        self.detalle_lista.Freeze()
+        try:
+            self.detalle_lista.DeleteAllItems()
+            fila = 0
+            for categoria, entrada in self._entradas_combinadas(resultado):
+                if microseguro_filtro is not None and entrada["microseguro"] != microseguro_filtro:
+                    continue
 
-        self.arbol.ExpandAll()
+                valores = [
+                    categoria,
+                    entrada["nombre"] or "",
+                    entrada["cedula"] or "",
+                    entrada["empresa_convenio"] or "",
+                    entrada["microseguro"] or "",
+                    entrada["motivo_no_aplica"] or "",
+                    formatear_fecha(entrada["fecha"]) if entrada["fecha"] else "",
+                ]
+                valores = [valor if valor else CELDA_VACIA for valor in valores]
+
+                indice = self.detalle_lista.InsertItem(fila, valores[0])
+                for columna, valor in enumerate(valores[1:], start=1):
+                    self.detalle_lista.SetItem(indice, columna, valor)
+                fila += 1
+        finally:
+            self.detalle_lista.Thaw()
 
     # ---- Exportar -------------------------------------------------------
 

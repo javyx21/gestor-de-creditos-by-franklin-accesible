@@ -11,6 +11,7 @@ from gestor_credito.actualizador.actualizador import (
     verificar_actualizacion,
 )
 from gestor_credito.ui.accesibilidad import activar_con_enter, anunciar_voz_nvda, ejecutar_en_segundo_plano, nombre_accesible
+from gestor_credito.ui.sonido import SONIDO_ACTUALIZACION_DISPONIBLE, reproducir_sonido
 from gestor_credito.version import VERSION
 
 # Todo lo de actualizaciones vivía como una sección/árbol dentro de la
@@ -173,6 +174,10 @@ def buscar_actualizaciones(parent, al_completar):
             return
 
         al_completar(valor)
+        # Pedido explícito del usuario (2026-08-31): este sonido va JUSTO
+        # acá — cuando "Buscar actualizaciones" de verdad encuentra una
+        # versión más nueva — no en ningún otro lugar de la app.
+        reproducir_sonido(SONIDO_ACTUALIZACION_DISPONIBLE)
         # "esa pantalla" — pedido explícito del usuario: el botón que
         # instala solo aparece acá, cuando de verdad hay algo para instalar.
         dialogo = ActualizacionDisponibleDialog(parent, valor)

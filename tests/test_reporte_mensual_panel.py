@@ -1,6 +1,8 @@
 """Pruebas de extremo a extremo de ReporteMensualPanel — construyen el panel
 real (no mocks) contra una base de datos temporal, mismo patrón que
-test_creditos_panel.py."""
+test_creditos_panel.py. Dos tablas SIEMPRE VISIBLES (resumen_lista/
+detalle_lista), no un árbol escondido detrás de una casilla — ver
+reporte_mensual_panel.py."""
 
 import wx
 import pytest
@@ -59,9 +61,21 @@ def panel(app, conn):
     frame.Destroy()
 
 
+def _filas_lista(lista, columna):
+    return [lista.GetItemText(i, columna) for i in range(lista.GetItemCount())]
+
+
 def test_construye_sin_datos_sin_reventar(panel):
-    assert "Desembolsados: 0" in panel.desembolsados_label.GetLabel()
-    assert "Pendientes" in panel.pendientes_label.GetLabel()
+    assert panel.resumen_lista.GetItemCount() == 6
+    assert panel.detalle_lista.GetItemCount() == 0
+
+
+def test_ambas_tablas_estan_siempre_visibles(panel):
+    # Pedido explícito del usuario: nada de controles escondidos detrás de
+    # una casilla — ambas tablas deben estar presentes desde que se abre el
+    # panel, sin ninguna acción extra para "revelarlas".
+    assert panel.resumen_lista.IsShown()
+    assert panel.detalle_lista.IsShown()
 
 
 def test_recargar_refleja_datos_reales_del_mes_elegido(panel, conn):
@@ -75,22 +89,47 @@ def test_recargar_refleja_datos_reales_del_mes_elegido(panel, conn):
     panel.anio_spin.SetValue(2026)
     panel.recargar()
 
-    assert "Desembolsados: 1" in panel.desembolsados_label.GetLabel()
-    assert "con microseguro: 1" in panel.desembolsados_label.GetLabel()
-    assert "Pendientes (no depende del mes elegido): 1" in panel.pendientes_label.GetLabel()
+    resumen_categorias = _filas_lista(panel.resumen_lista, 0)
+    resumen_cantidades = _filas_lista(panel.resumen_lista, 1)
+    valores = dict(zip((c.strip() for c in resumen_categorias), resumen_cantidades))
+    assert valores["Desembolsados"] == "1"
+    assert valores["Con microseguro"] == "1"
+    assert valores["Sin microseguro"] == "0"
+    assert valores["Pendientes (no depende del mes elegido)"] == "1"
+
+    detalle_categorias = _filas_lista(panel.detalle_lista, 0)
+    detalle_nombres = _filas_lista(panel.detalle_lista, 1)
+    assert panel.detalle_lista.GetItemCount() == 2
+    assert ("Desembolsados", "Juan Perez") in zip(detalle_categorias, detalle_nombres)
+    assert ("Pendientes", "Ana Lopez") in zip(detalle_categorias, detalle_nombres)
 
 
-def test_toggle_detalle_llena_el_arbol(panel, conn):
-    _crear_cliente_y_caso(conn, "001", "Juan Perez", estado="En proceso")
+def test_filtro_de_microseguro_reduce_la_tabla_detallada_sin_tocar_el_resumen(panel, conn):
+    _crear_cliente_y_caso(
+        conn, "001", "Con Seguro", estado="Desembolsada", microseguro="S",
+        estado_solicitud_fecha_cambio="2026-08-10 09:00:00",
+    )
+    _crear_cliente_y_caso(
+        conn, "002", "Sin Seguro", estado="Desembolsada", microseguro="N",
+        estado_solicitud_fecha_cambio="2026-08-11 09:00:00",
+    )
+    panel.mes_choice.SetSelection(7)
+    panel.anio_spin.SetValue(2026)
     panel.recargar()
+    assert panel.detalle_lista.GetItemCount() == 2
 
-    assert not panel.arbol.IsShown()
-    panel.detalle_check.SetValue(True)
-    panel._on_toggle_detalle(None)
+    idx_con_seguro = panel.microseguro_choice.FindString("Con microseguro")
+    panel.microseguro_choice.SetSelection(idx_con_seguro)
+    panel._on_cambiar_filtro_microseguro(None)
 
-    assert panel.arbol.IsShown()
-    raiz = panel.arbol.GetRootItem()
-    assert panel.arbol.GetChildrenCount(raiz, recursively=False) == 4  # 4 categorías
+    assert panel.detalle_lista.GetItemCount() == 1
+    assert panel.detalle_lista.GetItemText(0, 1) == "Con Seguro"
+    # El resumen no depende del filtro de vista — sigue mostrando el total real.
+    resumen_cantidades = dict(zip(
+        (c.strip() for c in _filas_lista(panel.resumen_lista, 0)),
+        _filas_lista(panel.resumen_lista, 1),
+    ))
+    assert resumen_cantidades["Desembolsados"] == "2"
 
 
 def test_filtro_de_agente_todos_incluye_todos(app, conn):
@@ -109,13 +148,13 @@ def test_filtro_de_agente_todos_incluye_todos(app, conn):
     panel.agente_choice.SetSelection(idx)
     panel.recargar()
 
-    assert "Pendientes (no depende del mes elegido): 2" in panel.pendientes_label.GetLabel()
+    assert panel.detalle_lista.GetItemCount() == 2
 
     idx_maria = panel.agente_choice.FindString("Maria Gomez")
     panel.agente_choice.SetSelection(idx_maria)
     panel.recargar()
 
-    assert "Pendientes (no depende del mes elegido): 1" in panel.pendientes_label.GetLabel()
+    assert panel.detalle_lista.GetItemCount() == 1
     frame.Destroy()
 
 
