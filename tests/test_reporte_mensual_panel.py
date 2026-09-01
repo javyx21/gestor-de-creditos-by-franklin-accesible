@@ -66,7 +66,7 @@ def _filas_lista(lista, columna):
 
 
 def test_construye_sin_datos_sin_reventar(panel):
-    assert panel.resumen_lista.GetItemCount() == 6
+    assert panel.resumen_lista.GetItemCount() == 7
     assert panel.detalle_lista.GetItemCount() == 0
 
 
@@ -92,13 +92,14 @@ def test_recargar_refleja_datos_reales_del_mes_elegido(panel, conn):
     resumen_categorias = _filas_lista(panel.resumen_lista, 0)
     resumen_cantidades = _filas_lista(panel.resumen_lista, 1)
     valores = dict(zip((c.strip() for c in resumen_categorias), resumen_cantidades))
+    assert valores["Total de casos registrados en el mes"] == "2"
     assert valores["Desembolsados"] == "1"
     assert valores["Con microseguro"] == "1"
     assert valores["Sin microseguro"] == "0"
     assert valores["Pendientes (no depende del mes elegido)"] == "1"
 
     detalle_categorias = _filas_lista(panel.detalle_lista, 0)
-    detalle_nombres = _filas_lista(panel.detalle_lista, 1)
+    detalle_nombres = _filas_lista(panel.detalle_lista, 2)  # 0=Categoría, 1=Caso, 2=Nombre
     assert panel.detalle_lista.GetItemCount() == 2
     assert ("Desembolsados", "Juan Perez") in zip(detalle_categorias, detalle_nombres)
     assert ("Pendientes", "Ana Lopez") in zip(detalle_categorias, detalle_nombres)
@@ -123,7 +124,7 @@ def test_filtro_de_microseguro_reduce_la_tabla_detallada_sin_tocar_el_resumen(pa
     panel._on_cambiar_filtro_microseguro(None)
 
     assert panel.detalle_lista.GetItemCount() == 1
-    assert panel.detalle_lista.GetItemText(0, 1) == "Con Seguro"
+    assert panel.detalle_lista.GetItemText(0, 2) == "Con Seguro"  # 0=Categoría, 1=Caso, 2=Nombre
     # El resumen no depende del filtro de vista — sigue mostrando el total real.
     resumen_cantidades = dict(zip(
         (c.strip() for c in _filas_lista(panel.resumen_lista, 0)),

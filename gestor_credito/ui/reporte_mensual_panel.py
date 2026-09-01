@@ -27,8 +27,13 @@ OPCION_TODOS_LOS_AGENTES = "Todos los agentes"
 CELDA_VACIA = "Celda vacía"
 
 COLUMNAS_RESUMEN = ["Categoría", "Cantidad"]
+# "Caso" (No. Presolicitud/ID) agregada tras un reporte real del usuario
+# (2026-08-31): sin esta columna, dos casos DISTINTOS de la misma persona
+# (uno cerrado, otro nuevo) se ven indistinguibles uno del otro en la tabla
+# — parecía un mismo registro "duplicado" cuando en realidad eran dos casos
+# reales diferentes.
 COLUMNAS_DETALLE = [
-    "Categoría", "Nombre", "Identificación", "Empresa Convenio",
+    "Categoría", "Caso", "Nombre", "Identificación", "Empresa Convenio",
     "Microseguro", "Motivo No Aplica", "Fecha",
 ]
 
@@ -215,6 +220,7 @@ class ReporteMensualPanel(wx.Panel):
 
     def _refrescar_resumen(self, resultado):
         filas = [
+            ("Total de casos registrados en el mes", resultado["total_registrados"]),
             ("Desembolsados", len(resultado["desembolsados"])),
             ("  Con microseguro", resultado["con_microseguro"]),
             ("  Sin microseguro", resultado["sin_microseguro"]),
@@ -255,6 +261,7 @@ class ReporteMensualPanel(wx.Panel):
 
                 valores = [
                     categoria,
+                    entrada["clave_caso"] or "",
                     entrada["nombre"] or "",
                     entrada["cedula"] or "",
                     entrada["empresa_convenio"] or "",

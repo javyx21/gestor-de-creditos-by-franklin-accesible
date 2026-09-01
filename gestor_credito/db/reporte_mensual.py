@@ -39,6 +39,21 @@ from gestor_credito.catalogos import (
     formatear_microseguro,
 )
 
+# Bug real encontrado por el usuario (2026-08-31, cliente Harry Tinoco Benly):
+# un caso que un compañero YA marcó explícitamente como "Cliente desistió"
+# (con su motivo, "no quería el monto que le ofrecían") le estaba robando el
+# crédito de Historial a otro caso más nuevo del MISMO cliente que sí seguía
+# genuinamente pendiente — terminaba mostrado como "Desembolsado" con el
+# motivo de desistimiento pegado, y el caso realmente pendiente se quedaba
+# sin su crédito real. La regla "Historial manda" (ver el docstring del
+# módulo) tiene sentido para un caso cuyo estado_solicitud todavía no se
+# actualizó (sigue en un estado ABIERTO aunque ya se haya desembolsado de
+# verdad) — pero NO tiene sentido para un caso que un humano ya cerró de
+# forma explícita y negativa: ahí no hay ninguna duda que resolver, así que
+# nunca debe competir por un crédito de Historial que casi seguro pertenece
+# a otro caso distinto de la misma persona.
+_ESTADOS_CERRADOS_SIN_EMPAREJAR = frozenset({ESTADO_NO_APLICA, ESTADO_CLIENTE_DESISTIO})
+
 _COLUMNAS_CASO = (
     "id", "clave_caso", "fecha_registro", "estado_solicitud",
     "estado_solicitud_fecha_cambio", "microseguro", "motivo_no_aplica",
@@ -80,14 +95,43 @@ def generar_reporte_mensual(conn, anio, mes, ejecutivo=None):
         creditos_cliente = sorted(
             creditos_por_cedula.get(cedula, []), key=lambda c: c["fecha_desembolso"] or ""
         )
-        emparejados = _emparejar_creditos(casos_cliente, creditos_cliente)
 
-        for caso in casos_cliente:
+        # Un caso ya cerrado de forma negativa y explícita (No aplica /
+        # Cliente desistió) nunca entra a competir por un crédito de
+        # Historial — ver _ESTADOS_CERRADOS_SIN_EMPAREJAR arriba. Solo los
+        # casos "candidatos" (abiertos, o ya Desembolsada) participan del
+        # emparejamiento; así un crédito real nunca se lo termina llevando
+        # el caso equivocado de la misma persona.
+        candidatos = [
+            caso for caso in casos_cliente
+            if caso["estado_solicitud"] not in _ESTADOS_CERRADOS_SIN_EMPAREJAR
+        ]
+        cerrados_sin_emparejar = [
+            caso for caso in casos_cliente
+            if caso["estado_solicitud"] in _ESTADOS_CERRADOS_SIN_EMPAREJAR
+        ]
+
+        emparejados = _emparejar_creditos(candidatos, creditos_cliente)
+
+        for caso in candidatos:
             credito = emparejados.get(caso["id"])
             if credito is not None:
                 _clasificar_con_credito(resultado, caso, credito, anio, mes)
             else:
                 _clasificar_sin_credito(resultado, caso, anio, mes)
+
+        for caso in cerrados_sin_emparejar:
+            _clasificar_sin_credito(resultado, caso, anio, mes)
+
+    # Total de casos REGISTRADOS ese mes (por fecha_registro) — pedido
+    # explícito del usuario: "cuántos casos hice en el mes", sin importar si
+    # ya se resolvieron o siguen pendientes. Independiente de las categorías
+    # de arriba (que clasifican por cuándo se RESOLVIÓ el caso, no por
+    # cuándo se registró) — un caso puede contarse acá y, si todavía no se
+    # resuelve, no aparecer en ninguna de las otras categorías este mes.
+    resultado["total_registrados"] = sum(
+        1 for caso in casos if _mes_de_fecha(caso["fecha_registro"]) == (anio, mes)
+    )
 
     return resultado
 

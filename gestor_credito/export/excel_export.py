@@ -11,7 +11,7 @@ def export_to_excel(rows, headers, output_path):
 
 
 _ENCABEZADOS_DETALLE = (
-    "Nombre", "Cédula", "Empresa Convenio", "Microseguro", "Motivo No Aplica", "Fecha",
+    "Caso", "Nombre", "Cédula", "Empresa Convenio", "Microseguro", "Motivo No Aplica", "Fecha",
 )
 
 
@@ -30,6 +30,7 @@ def exportar_reporte_mensual(resultado, nombre_mes, anio, agente, output_path):
     resumen.append([f"{nombre_mes} {anio}", f"Agente: {agente}"])
     resumen.append([])
     resumen.append(["Categoría", "Cantidad"])
+    resumen.append(["Total de casos registrados en el mes", resultado["total_registrados"]])
     resumen.append(["Desembolsados", len(resultado["desembolsados"])])
     resumen.append(["  Con microseguro", resultado["con_microseguro"]])
     resumen.append(["  Sin microseguro", resultado["sin_microseguro"]])
@@ -50,6 +51,7 @@ def _agregar_hoja_detalle(wb, titulo, entradas):
     hoja.append(list(_ENCABEZADOS_DETALLE))
     for entrada in entradas:
         hoja.append([
-            entrada["nombre"], entrada["cedula"], entrada["empresa_convenio"],
-            entrada["microseguro"], entrada["motivo_no_aplica"] or "", entrada["fecha"] or "",
+            entrada["clave_caso"] or "", entrada["nombre"], entrada["cedula"],
+            entrada["empresa_convenio"], entrada["microseguro"],
+            entrada["motivo_no_aplica"] or "", entrada["fecha"] or "",
         ])

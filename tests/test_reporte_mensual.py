@@ -197,6 +197,76 @@ def test_desglose_de_microseguro_en_desembolsados(conn):
     assert resultado["sin_microseguro"] == 1
 
 
+# --- Un caso cerrado negativo (No aplica/Cliente desistió) nunca le roba el
+# --- crédito de Historial a otro caso del mismo cliente ---------------------
+
+def test_cliente_desistio_no_le_roba_el_credito_a_otro_caso_del_mismo_cliente(conn):
+    # Bug real reportado por el usuario (2026-08-31, cliente real "Harry
+    # Tinoco Benly"): un caso viejo marcado "Cliente desistió" (con motivo)
+    # y fecha_registro más temprana que un caso nuevo "En proceso" del MISMO
+    # cliente — antes del fix, el caso desistido se quedaba con el único
+    # crédito disponible de Historial (por ser el más antiguo) y aparecía
+    # como "Desembolsado" con el motivo de desistimiento pegado, mientras el
+    # caso realmente pendiente se quedaba sin su crédito real.
+    _crear_cliente_y_caso(
+        conn, cedula="001", no_presolicitud="P-VIEJO", fecha_registro="2026-06-01",
+        estado="Cliente desistió", motivo_no_aplica="No le gustó el monto ofrecido",
+        estado_solicitud_fecha_cambio="2026-08-05 09:00:00",
+    )
+    _crear_cliente_y_caso(
+        conn, cedula="001", no_presolicitud="P-NUEVO", fecha_registro="2026-07-01",
+        estado="En proceso",
+    )
+    _crear_credito(conn, "C-1", "001", "2026-08-28")
+
+    resultado = generar_reporte_mensual(conn, 2026, 8)
+
+    # El caso desistido sigue clasificado como Cliente desistió — nunca
+    # entra a competir por créditos.
+    assert len(resultado["cliente_desistio"]) == 1
+    assert resultado["cliente_desistio"][0]["clave_caso"] == "P-VIEJO"
+
+    # El caso realmente pendiente es el que se queda con el crédito real.
+    assert len(resultado["desembolsados"]) == 1
+    entrada = resultado["desembolsados"][0]
+    assert entrada["clave_caso"] == "P-NUEVO"
+    assert entrada["fecha"] == "2026-08-28"
+    assert entrada["motivo_no_aplica"] is None
+
+
+def test_no_aplica_tampoco_le_roba_el_credito(conn):
+    _crear_cliente_y_caso(
+        conn, cedula="001", no_presolicitud="P-VIEJO", fecha_registro="2026-06-01",
+        estado="No aplica", motivo_no_aplica="Ingresos insuficientes",
+        estado_solicitud_fecha_cambio="2026-08-05 09:00:00",
+    )
+    _crear_cliente_y_caso(
+        conn, cedula="001", no_presolicitud="P-NUEVO", fecha_registro="2026-07-01",
+        estado="En proceso",
+    )
+    _crear_credito(conn, "C-1", "001", "2026-08-28")
+
+    resultado = generar_reporte_mensual(conn, 2026, 8)
+
+    assert len(resultado["no_aplica"]) == 1
+    assert len(resultado["desembolsados"]) == 1
+    assert resultado["desembolsados"][0]["clave_caso"] == "P-NUEVO"
+
+
+# --- Total de casos registrados en el mes -----------------------------------
+
+def test_total_registrados_cuenta_por_fecha_de_registro_sin_importar_estado(conn):
+    _crear_cliente_y_caso(conn, cedula="001", fecha_registro="2026-08-01", estado="En proceso")
+    _crear_cliente_y_caso(
+        conn, cedula="002", fecha_registro="2026-08-15", estado="Desembolsada",
+        estado_solicitud_fecha_cambio="2026-08-20 09:00:00",
+    )
+    _crear_cliente_y_caso(conn, cedula="003", fecha_registro="2026-07-31", estado="En proceso")
+
+    resultado = generar_reporte_mensual(conn, 2026, 8)
+    assert resultado["total_registrados"] == 2
+
+
 # --- Filtro por ejecutivo ------------------------------------------------
 
 def test_filtra_por_ejecutivo(conn):
