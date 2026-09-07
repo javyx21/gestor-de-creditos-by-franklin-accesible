@@ -13,7 +13,7 @@ from gestor_credito.db.recordatorios import (
     listar_recordatorios,
     marcar_atendido,
 )
-from gestor_credito.ui.accesibilidad import activar_con_enter, nombre_accesible
+from gestor_credito.ui.accesibilidad import activar_con_enter, anunciar_voz_nvda, nombre_accesible
 from gestor_credito.ui.fechas import formatear_fecha, parsear_fecha_ui
 from gestor_credito.ui.logo import AppLogo
 from gestor_credito.ui.sonido import SONIDO_BORRAR, SONIDO_FILA_RECORDATORIO_VENCIDO, reproducir_sonido
@@ -58,6 +58,15 @@ class RecordatoriosPanel(wx.Panel):
 
         self._filas = []
         self._recordatorio_seleccionado_id = None
+        # Cédula "dueña" de lo que hay actualmente en Nombre/Celular/Empresa/
+        # Fecha/Hora — de una fila seleccionada de la lista, o de la última
+        # búsqueda por cédula que sí encontró/dejó algo cargado. Ver
+        # _autocompletar_por_cedula: si la Cédula cambia respecto a esto, se
+        # asume que el oficial ahora quiere otra persona y se desengancha
+        # (bug real reportado por el usuario: guardar terminaba pisando el
+        # registro de OTRO cliente porque el formulario seguía "abierto" con
+        # los datos de la fila que había quedado seleccionada).
+        self._cedula_cargada = None
 
         sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(AppLogo(self), 0, wx.ALIGN_LEFT | wx.ALL, 4)
@@ -167,12 +176,35 @@ class RecordatoriosPanel(wx.Panel):
     def _autocompletar_por_cedula(self):
         """Pedido explícito del usuario: "si coloco añadir cédula el mismo
         jale nombre del cliente empresa... si no existe pues lo añado yo".
-        Rellena Nombre/Celular/Empresa SOLO en los campos que estén vacíos
-        (nunca pisa algo que el oficial ya haya escrito a mano), y no hace
-        nada si la cédula no coincide con ningún cliente existente."""
+
+        Dos bugs reales corregidos acá (reporte del usuario, 2026-09-07):
+        1. Rellenar Nombre/Celular/Empresa con SetValue() no avisaba NADA por
+           voz — el foco se queda en Cédula, así que NVDA nunca anunciaba el
+           cambio en esos otros campos (SetValue() no dispara ningún anuncio
+           de accesibilidad por sí solo). Ahora SIEMPRE se anuncia por voz el
+           resultado, se haya encontrado o no.
+        2. Si había una fila seleccionada (o una búsqueda anterior) y el
+           oficial cambia la Cédula a otra persona sin darse cuenta de que el
+           formulario seguía "enganchado" a esa fila, "Guardar cambios"
+           terminaba PISANDO el registro viejo con los datos de la persona
+           nueva en vez de crear un registro aparte. Ver _cedula_cargada:
+           un cambio de Cédula respecto a lo ya cargado desengancha la fila
+           seleccionada y limpia los campos que pertenecían a esa persona
+           anterior, antes de buscar la nueva.
+        """
         cedula = self.cedula_texto.GetValue().strip()
         if not cedula:
             return
+
+        # Si NADA se había cargado todavía (_cedula_cargada es None: primera
+        # vez que se busca en este formulario), no hay nada de qué
+        # desengancharse — así, escribir el Nombre a mano ANTES de terminar
+        # de tipear la Cédula sigue funcionando (no se pisa). Solo se limpia
+        # cuando la Cédula cambia respecto a una identidad que YA estaba
+        # cargada (fila seleccionada, o una búsqueda anterior en esta misma
+        # sesión del formulario).
+        if self._cedula_cargada is not None and cedula != self._cedula_cargada:
+            self._desvincular_fila_seleccionada()
 
         conn = get_connection()
         try:
@@ -180,7 +212,13 @@ class RecordatoriosPanel(wx.Panel):
         finally:
             conn.close()
 
+        self._cedula_cargada = cedula
+
         if datos is None:
+            mensaje = f"No se encontró ningún cliente con la cédula {cedula}. Completá los datos a mano."
+            self.mensaje_texto.SetLabel(mensaje)
+            self.GetTopLevelParent().SetStatusText(mensaje)
+            anunciar_voz_nvda(mensaje)
             return
 
         if not self.nombre_texto.GetValue().strip() and datos["nombre"]:
@@ -189,6 +227,11 @@ class RecordatoriosPanel(wx.Panel):
             self.celular_texto.SetValue(datos["telefono"])
         if not self.empresa_texto.GetValue().strip() and datos["empresa_convenio"]:
             self.empresa_texto.SetValue(datos["empresa_convenio"])
+
+        mensaje = f"Cliente encontrado: {datos['nombre']}."
+        self.mensaje_texto.SetLabel(mensaje)
+        self.GetTopLevelParent().SetStatusText(mensaje)
+        anunciar_voz_nvda(mensaje)
 
     # ---- Alta / edición -----------------------------------------------------
 
@@ -283,14 +326,19 @@ class RecordatoriosPanel(wx.Panel):
         self._limpiar_formulario_interno()
         reproducir_sonido(SONIDO_BORRAR)
 
-    def _limpiar_formulario_interno(self):
+    def _desvincular_fila_seleccionada(self):
+        """Deja de editar la fila seleccionada (si había una) y borra
+        Nombre/Celular/Empresa/Fecha/Hora — esos datos pertenecían a la
+        persona anterior, ya no corresponden. Cédula NO se toca acá a
+        propósito: quien llama a esto (_autocompletar_por_cedula) lo hace
+        justo después de leer lo que el oficial ya tecleó ahí, para buscar
+        con ese valor."""
         indice = self.lista.GetFirstSelected()
         if indice != wx.NOT_FOUND:
             estado = wx.LIST_STATE_SELECTED | wx.LIST_STATE_FOCUSED
             self.lista.SetItemState(indice, 0, estado)
 
         self._recordatorio_seleccionado_id = None
-        self.cedula_texto.SetValue("")
         self.nombre_texto.SetValue("")
         self.celular_texto.SetValue("")
         self.empresa_texto.SetValue("")
@@ -299,6 +347,11 @@ class RecordatoriosPanel(wx.Panel):
         self.guardar_btn.SetLabel("A&gregar recordatorio")
         self.marcar_atendido_btn.Disable()
         self.eliminar_btn.Disable()
+
+    def _limpiar_formulario_interno(self):
+        self._desvincular_fila_seleccionada()
+        self._cedula_cargada = None
+        self.cedula_texto.SetValue("")
         self.mensaje_texto.SetLabel("")
 
     # ---- Lista ---------------------------------------------------------------
@@ -341,6 +394,7 @@ class RecordatoriosPanel(wx.Panel):
         fila = self._filas[indice]
 
         self._recordatorio_seleccionado_id = fila["id"]
+        self._cedula_cargada = fila["cedula"] or ""
         self.cedula_texto.SetValue(fila["cedula"] or "")
         self.nombre_texto.SetValue(fila["nombre"] or "")
         self.celular_texto.SetValue(fila["celular"] or "")

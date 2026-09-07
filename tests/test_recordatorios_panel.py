@@ -27,7 +27,12 @@ def conn(tmp_path, monkeypatch):
 
 @pytest.fixture
 def panel(app, conn):
+    # CreateStatusBar(): _autocompletar_por_cedula usa
+    # self.GetTopLevelParent().SetStatusText(...) para avisar el resultado de
+    # la búsqueda por cédula (ver ese método) — sin barra de estado, wx lanza
+    # un wxAssertionError real (confirmado corriendo esta prueba sin esto).
     frame = wx.Frame(None)
+    frame.CreateStatusBar()
     notebook = wx.Notebook(frame)
     p = RecordatoriosPanel(notebook)
     notebook.AddPage(p, "Recordatorios de Llamada")
@@ -236,6 +241,69 @@ def test_autocompletar_por_cedula_sin_coincidencia_no_hace_nada(panel):
     panel._autocompletar_por_cedula()  # no debe lanzar
 
     assert panel.nombre_texto.GetValue() == ""
+
+
+def test_autocompletar_por_cedula_encontrado_avisa_por_voz(panel, conn, monkeypatch):
+    # Bug real reportado por el usuario: rellenar Nombre/Celular/Empresa con
+    # SetValue() no avisaba nada por voz porque el foco se queda en Cédula —
+    # ver el docstring de _autocompletar_por_cedula.
+    voces = []
+    monkeypatch.setattr(
+        "gestor_credito.ui.recordatorios_panel.anunciar_voz_nvda", lambda texto: voces.append(texto)
+    )
+    _crear_cliente_con_caso(conn, "001-9999999-9", "Cliente Existente", "8098887777", "NICAES")
+    panel.cedula_texto.SetValue("001-9999999-9")
+
+    panel._autocompletar_por_cedula()
+
+    assert len(voces) == 1
+    assert "Cliente Existente" in voces[0]
+
+
+def test_autocompletar_por_cedula_sin_coincidencia_avisa_por_voz(panel, monkeypatch):
+    # Segunda mitad del mismo bug: tampoco avisaba nada cuando NO encontraba
+    # a nadie, así que presionar Enter con una cédula que sí existe (pero
+    # con un typo, por ejemplo) se sentía exactamente igual que si no
+    # hubiera pasado nada.
+    voces = []
+    monkeypatch.setattr(
+        "gestor_credito.ui.recordatorios_panel.anunciar_voz_nvda", lambda texto: voces.append(texto)
+    )
+    panel.cedula_texto.SetValue("000-0000000-0")
+
+    panel._autocompletar_por_cedula()
+
+    assert len(voces) == 1
+    assert "000-0000000-0" in voces[0]
+
+
+def test_cambiar_cedula_de_fila_seleccionada_desengancha_y_guardar_crea_otro(panel, conn):
+    # Bug real reportado por el usuario ("sobreescribí un cliente por encima
+    # de otro"): seleccionar una fila para verla dejaba el formulario
+    # "enganchado" a ese registro; si después el oficial escribía la cédula
+    # de OTRA persona sin darse cuenta, "Guardar cambios" pisaba el registro
+    # viejo en vez de crear uno nuevo.
+    _llenar_formulario(panel, nombre="Primera Persona", cedula="001-1111111-1")
+    panel._on_guardar(None)
+    evento = wx.ListEvent(wx.wxEVT_LIST_ITEM_SELECTED, panel.lista.GetId())
+    evento.SetIndex(0)
+    panel._on_seleccionar(evento)
+    assert panel.guardar_btn.GetLabel() == "&Guardar cambios"
+
+    # El oficial escribe la cédula de una persona DISTINTA sin limpiar antes.
+    panel.cedula_texto.SetValue("002-2222222-2")
+    panel._autocompletar_por_cedula()
+
+    assert panel.guardar_btn.GetLabel() == "A&gregar recordatorio"
+    assert panel.nombre_texto.GetValue() == ""  # ya no arrastra "Primera Persona"
+
+    panel.nombre_texto.SetValue("Segunda Persona")
+    panel.fecha_texto.SetValue("10/01/2026")
+    panel.hora_texto.SetValue("09:00")
+    panel._on_guardar(None)
+
+    nombres = _filas_lista(panel, 2)
+    assert nombres == ["Primera Persona", "Segunda Persona"]  # las dos existen, ninguna se pisó
 
 
 # --- Resaltado de filas vencidas -------------------------------------------------
