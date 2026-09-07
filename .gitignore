@@ -31,3 +31,9 @@ base de clientes activos .xlsx
 # dejadas por el usuario para diagnóstico manual — nunca deben ir al repositorio.
 captura orden de cancelados .jpg
 captura fallo en cancelados .jpg
+
+# Reportes reales de Central de Riesgo (2026-08-22): PDFs con historial
+# crediticio real de clientes (deudas, instituciones, moras) — máxima
+# sensibilidad, nunca deben ir al repositorio ni salir de esta PC.
+centrales/
+*.pdf

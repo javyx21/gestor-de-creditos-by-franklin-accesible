@@ -1,0 +1,261 @@
+RECURSOS DE ACCESIBILIDAD PARA APPS DE ESCRITORIO CON NVDA (wxPython / Windows)
+================================================================================
+Compendio de patrones y soluciones técnicas validadas en la práctica para lograr
+que una aplicación de escritorio sea usable al 100% con NVDA y cumpla WCAG 2.2.
+No es teoría genérica: cada punto viene de un problema real encontrado y resuelto.
+
+
+1. NOMBRES ACCESIBLES (ACCESSIBLE NAME)
+----------------------------------------
+- `wx.Window.SetName()` NO propaga al nombre accesible real para ningún tipo de
+  control. Se verificó con MSAA crudo (librerías `comtypes`/`oleacc`): Windows
+  cae de vuelta a una heurística de "buscar el STATIC label precedente más
+  cercano", que muchas veces es incorrecta o queda vacía.
+- Solución: crear una función que envuelva `control.SetAccessible()` con una
+  subclase de `wx.Accessible` que sobrescriba SOLO `GetName()`, dejando intacto
+  el rol/estado nativo del control. Esa es la única forma confiable de fijar
+  un nombre accesible correcto.
+- Nunca usar `SetToolTip()` para dar nombre accesible a algo (imagen, ícono,
+  control decorativo) — eso dibuja un globo visible (tooltip), no establece el
+  nombre que lee el lector de pantalla. El nombre accesible y el tooltip son
+  mecanismos completamente distintos.
+- Todo control de entrada necesita una etiqueta asociada real (no placeholder,
+  no "cercanía visual") — NVDA anuncia por el label/nombre accesible, no por lo
+  que se ve en pantalla.
+
+
+2. HACER ALCANZABLES ELEMENTOS DECORATIVOS (p. ej. un logo)
+-------------------------------------------------------------
+Un `wx.StaticBitmap` o `wx.StaticText` normal:
+  - No acepta foco de teclado por defecto (Tab lo salta por completo).
+  - Su rol/estado MSAA nativo puede estar roto o vacío.
+
+Para que una imagen (como un logo institucional) sea:
+  a) visible en pantalla, Y
+  b) alcanzable y anunciada correctamente por el lector de pantalla,
+
+se necesita una subclase custom del control que:
+  1. Sobrescriba `AcceptsFocus()` y `AcceptsFocusFromKeyboard()` devolviendo
+     `True`, para que Tab lo incluya en el orden de navegación.
+  2. Tenga asociado un objeto `wx.Accessible` propio (no el genérico) que
+     implemente explícitamente `GetRole()` (p. ej. `ROLE_SYSTEM_GRAPHIC` para
+     una imagen) y `GetState()` (marcando focusable/focused según corresponda).
+  3. Reciba su nombre accesible mediante la técnica del punto 1 (nunca
+     `SetName()` ni `SetToolTip()`), con una descripción textual completa de lo
+     que representa la imagen (útil cuando el logo tiene simbolismo — describir
+     colores, formas y composición en el nombre accesible, no solo decir "logo").
+
+Este patrón general (foco custom + `wx.Accessible` custom + nombre accesible
+correcto) es la única combinación que hace que un control puramente decorativo
+sea "visto" por NVDA como un elemento real de la interfaz.
+
+
+3. POPUPS Y ANUNCIOS AL LECTOR DE PANTALLA
+---------------------------------------------
+- Regla general de buena práctica: evitar popups modales tanto como sea
+  posible. Son disruptivos y rompen el flujo de navegación con teclado.
+- Excepción razonable: usar un diálogo modal de mensaje SOLO para resultados
+  puntuales que necesitan atención inmediata del lector de pantalla y que no
+  tienen otra forma confiable de anunciarse (errores de validación, resultado
+  de una operación destructiva, confirmación de una acción que nombra
+  explícitamente el registro afectado). No usarlo para feedback rutinario de
+  éxito que no sea la única señal de que algo pasó.
+- Hallazgo importante confirmado en uso real: los cambios de `SetStatusText()`
+  o `SetLabel()` en una barra de estado NO son anunciados proactivamente por
+  NVDA — el usuario tiene que revisar manualmente. Tampoco son confiables los
+  intentos de usar "live regions" vía `EVENT_OBJECT_LIVEREGIONCHANGED`
+  (`user32.NotifyWinEvent`): se confirmó al menos un caso real donde el usuario
+  con NVDA real NUNCA escuchó ese anuncio pese a estar correctamente disparado.
+- Solución robusta: hablar directamente a la API pública de NVDA,
+  `nvdaController_speakText`, a través de las DLLs oficiales del proyecto
+  `accessible_output2` (`nvdaControllerClient32.dll` / `nvdaControllerClient64.dll`,
+  cargadas según arquitectura de proceso). Esto no depende de foco, roles ni
+  heurísticas de live-region — simplemente empuja el texto a la síntesis de voz
+  de NVDA. Es el mecanismo preferido para cualquier anuncio que deba escucharse
+  con certeza.
+- Mantener la técnica de live-region/status-bar solo en lugares donde nunca se
+  ha reportado como fallida; no migrar todo preventivamente, migrar solo donde
+  se confirme el problema (para no gastar esfuerzo en algo no roto).
+- Nunca comunicar estado exclusivamente por color o ícono — siempre acompañar
+  con texto/sonido (WCAG 1.4.1, "uso del color").
+
+
+4. wx.Choice Y LA TECLA ENTER
+--------------------------------
+- Un `wx.Choice` nativo en Windows es en realidad un combobox Win32 que
+  "se come" la tecla Enter antes de que un `EVT_KEY_DOWN` normal puesto sobre
+  el propio control llegue a dispararse. Resultado: cualquier acción que se
+  quiera disparar con Enter sobre un `wx.Choice` simplemente no ocurre.
+- Solución/patrón reutilizable: bindear `wx.EVT_CHAR_HOOK` a nivel del PANEL
+  contenedor (no del control), y dentro del handler comprobar
+  `wx.Window.FindFocus() is <el choice en cuestión>` antes de actuar. Este
+  patrón se repite cada vez que se necesita "Enter hace algo" sobre un
+  `wx.Choice`.
+- Si en cualquier otro control una tecla Enter "no hace nada" de forma
+  silenciosa, sospechar primero de este mismo problema.
+
+
+5. BOTONES Y ACTIVACIÓN CON TECLADO
+--------------------------------------
+- Fuera de un `wx.Dialog`, la tecla Space activa un botón enfocado por
+  defecto, pero Enter NO (ese binding es exclusivo de `wx.Dialog` en wx).
+  En un layout de notebook-dentro-de-frame (sin diálogo), Enter no llega
+  gratis a los botones.
+- Solución: envolver todo `wx.Button` en una función auxiliar que bindee
+  explícitamente Enter (además de Space) para disparar el mismo evento de
+  clic. Aplicar esto sistemáticamente a TODOS los botones de la app, sin
+  excepción, para que el comportamiento sea predecible.
+
+
+6. CONTROLES DESHABILITADOS Y NAVEGACIÓN CON TAB
+----------------------------------------------------
+- Un `wx.Window` con `Enable(False)` es saltado por completo por la
+  navegación con Tab. Para un usuario de lector de pantalla esto es
+  indistinguible de que el control no existiera — no hay forma de descubrir
+  que "ahí había algo" bloqueado.
+- Regla dura: nunca deshabilitar un bloque/sección completa de controles de
+  entrada para forzar un flujo ("primero selecciona X, luego se habilitan
+  estos campos"). Todos los campos de entrada deben permanecer siempre
+  alcanzables por teclado.
+- Lo único que es aceptable gatear con `Enable(False)` es un botón de acción
+  terminal (tipo "Guardar"/"Calcular") cuando de verdad depende de un estado
+  previo — nunca una sección entera de inputs.
+
+
+7. MÚLTIPLES HANDLERS EN EL MISMO EVENTO
+--------------------------------------------
+- Cuando se bindean dos o más handlers distintos al mismo evento sobre el
+  mismo control (por ejemplo, dos `EVT_TEXT` distintos reaccionando al mismo
+  campo para calcular dos cosas independientes), wx solo ejecuta el handler
+  vinculado MÁS RECIENTEMENTE si el anterior no llama a `event.Skip()`. El
+  otro handler deja de dispararse silenciosamente, sin ningún error visible.
+- Regla dura: todo handler que comparta evento+control con otro debe llamar
+  `event.Skip()` al final, siempre, sin excepción.
+
+
+8. BLOQUEO DEL HILO DE UI Y VOZ DE NVDA
+--------------------------------------------
+- NVDA se sincroniza con la aplicación a través del bombeo de mensajes de
+  Windows (message pump) del hilo de UI. Cualquier operación lenta (consulta
+  a base de datos, llamada de red, procesamiento pesado) ejecutada de forma
+  síncrona en el hilo de UI congela ese bombeo — y como efecto colateral,
+  literalmente detiene la síntesis de voz de NVDA mientras dura la operación.
+- Solución: patrón de hilo de fondo + `wx.CallAfter()` para regresar el
+  resultado al hilo de UI. Encapsular esto en una función reutilizable
+  ("ejecutar en segundo plano con callback") y usarla para cualquier operación
+  que no sea instantánea.
+- Si la misma carga puede dispararse más rápido de lo que tarda en completarse
+  (el usuario re-dispara la búsqueda mientras la anterior sigue en vuelo), usar
+  un contador de versión para descartar resultados obsoletos y evitar que una
+  respuesta vieja pise a una más nueva.
+- No es necesario aplicar este patrón a TODO por igual — solo donde ya se
+  demostró o se sospecha razonablemente un problema de congelamiento; aplicarlo
+  ciegamente en todos lados añade complejidad sin beneficio medible.
+
+
+9. WIDGETS ESTÁNDAR VS. CUSTOM-DRAWN
+-----------------------------------------
+- Preferir siempre widgets estándar de wx (`wx.Choice`, `wx.ListCtrl`,
+  `wx.TextCtrl`, `wx.Button`, etc.) sobre controles dibujados a mano. Los
+  widgets estándar obtienen soporte MSAA/UIA "gratis" del sistema operativo;
+  un control custom-drawn requiere implementar accesibilidad desde cero (ver
+  punto 2) y es mucho más fácil que queden huecos.
+
+
+10. SCROLL EN PANELES CON CONTENIDO ALTO
+---------------------------------------------
+- Si el contenido de un panel puede ser más alto que el área visible, usar
+  `wx.lib.scrolledpanel.ScrolledPanel` (con `SetupScrolling(scroll_y=True)`)
+  en vez de un `wx.Panel` plano. Contenido que se recorta sin poder hacer
+  scroll es una violación directa de WCAG 2.1.1 (todo debe ser operable por
+  teclado, incluyendo poder desplazarse hasta verlo/alcanzarlo).
+
+
+11. CONTRASTE DE COLOR Y REDUNDANCIA DE SEÑAL
+---------------------------------------------------
+- Para resaltar filas/estados por color, validar el contraste real
+  (herramientas de contraste WCAG) entre texto y fondo. Como referencia de
+  umbral usado con éxito: combinaciones con contraste aproximado de 7.5:1 y de
+  ~19:1 fueron las elegidas para alertas "rojas" y "amarillas" respectivamente
+  — muy por encima del mínimo WCAG AA (4.5:1 para texto normal), priorizando
+  legibilidad real sobre el mínimo técnico.
+- Todo resaltado por color debe ir acompañado de una señal no visual
+  equivalente (en este caso, un sonido distinto reproducido al seleccionar la
+  fila) — nunca comunicar una condición importante solo mediante color.
+- Usar un sonido/color DISTINTO por cada categoría semántica de alerta, no
+  reutilizar el mismo para conceptos distintos, para que el usuario pueda
+  diferenciar auditivamente qué tipo de condición está viendo/escuchando sin
+  tener que abrir nada.
+
+
+12. CELDAS VACÍAS EN LISTAS (wx.ListCtrl)
+-----------------------------------------------
+- Una celda realmente vacía en una tabla hace que NVDA, al recorrer con
+  flechas, solo lea el encabezado de columna sin ningún valor después —
+  resultado confuso, porque no queda claro si el dato no cargó o si
+  simplemente está vacío.
+- Solución: usar un placeholder textual explícito y consistente (p. ej.
+  "Celda vacía") en lugar de cadena vacía, aplicado de forma uniforme a TODAS
+  las columnas de la tabla, no solo algunas.
+
+
+13. ATAJOS DE TECLADO GLOBALES
+------------------------------------
+- Centralizar el registro de todos los atajos de teclado documentados de la
+  app en un único módulo/lugar, en vez de dispersarlos por cada pantalla —
+  facilita mantener consistencia y evita colisiones.
+- Los atajos que solo deben "hablar" (anunciar información por voz) sin mover
+  el foco ni abrir nada deben bindearse a nivel de panel con `EVT_CHAR_HOOK`
+  SIN el chequeo de `FindFocus()` (a diferencia del patrón del punto 4) — deben
+  disparar sin importar qué control tenga el foco en ese momento.
+- Al agregar una nueva sección/pantalla principal a la app, revisar a mano
+  todas las cadenas de despacho de atajos existentes (búsqueda, limpiar,
+  saltar-a) — nada garantiza en tiempo de compilación que una nueva sección
+  quede automáticamente cubierta por los atajos globales.
+
+
+14. CUÁNDO CONVIENE UN DIÁLOGO DE MENÚ VS. UNA PESTAÑA
+------------------------------------------------------------
+- Criterio práctico validado con un usuario ciego real: una función de
+  consulta/configuración ocasional (poco frecuente, tipo "ajustar algo una vez
+  y no volver a tocarlo por un rato") encaja mejor como diálogo accedido desde
+  un menú clásico de Windows (`wx.MenuBar`), navegado con las flechas nativas
+  de menú — NO como panel dentro de un árbol/lista custom ni como botones
+  sueltos en una lista. Se probaron alternativas (lista de botones, árbol
+  `wx.TreeCtrl`) y ambas fueron rechazadas frente al menú nativo real, porque
+  el usuario ya conoce y prefiere la navegación de menú estándar de Windows.
+- Una función de uso diario y frecuente, en cambio, debe vivir como una
+  pestaña de primer nivel en un `wx.Notebook`, no enterrada en un menú.
+- Si un menú tiene más de una acción relacionada, conviene anidarlas como un
+  submenú en cascada real (`wx.Menu` dentro de `wx.Menu`) en vez de un único
+  diálogo con navegación interna propia (árbol de categorías, etc.) — la
+  cascada de menú ya resuelve la categorización sin inventar una capa extra de
+  navegación.
+
+
+15. ITERACIÓN SOBRE UN CONTROL DE SELECCIÓN "PROBLEMÁTICO"
+------------------------------------------------------------------
+- Historial de un mismo problema (selector de un valor de una lista cerrada)
+  resuelto en 3 iteraciones, útil como referencia de proceso:
+  1. Combobox editable (texto libre + sugerencias) — descartado: ambigüedad
+     entre "estoy escribiendo" y "estoy navegando con flechas" para el lector
+     de pantalla.
+  2. Textbox de solo lectura + label separado — descartado: no era realmente
+     accionable/editable, solo mostraba el valor.
+  3. `wx.Choice` cerrado (lista fija, sin texto libre) — funcionó. Elimina la
+     ambigüedad de entrada y sigue siendo navegable con flechas + anunciado
+     correctamente por NVDA.
+- Lección general: ante un control "no se puede cambiar X" o "es ambiguo para
+  el lector de pantalla", un `wx.Choice` cerrado suele ser la solución más
+  simple antes de intentar combobox editable o soluciones custom.
+
+
+NOTA FINAL
+------------
+Todos estos patrones surgieron de problemas reales verificados con NVDA en
+vivo (no solo inspección de código) — varias veces una solución "lógica" en
+el código no se traducía en un comportamiento correcto para el lector de
+pantalla real, y solo probarlo con NVDA activo reveló el problema verdadero.
+Recomendación general: cuando sea posible, validar cualquier patrón nuevo de
+accesibilidad con un lector de pantalla real encendido, no solo revisando que
+el código "se ve bien".

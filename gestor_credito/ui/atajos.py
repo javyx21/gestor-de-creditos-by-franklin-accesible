@@ -97,6 +97,13 @@ ATAJOS = [
         "ir_a_creditos",
     ),
     (
+        wx.ACCEL_CTRL, ord("4"), "Ctrl+4", "General",
+        "Ir directo a la pestaña Calculadora (calculadora aritmética "
+        "genérica, distinta de Calculadora de Crédito), sin importar cuál "
+        "esté activa — pedido explícito del usuario, 2026-09-07",
+        "ir_a_calculadora_simple",
+    ),
+    (
         None, None, "Alt+B", "Casos",
         "Ejecutar la búsqueda con el término escrito (botón Buscar)",
         None,
@@ -238,36 +245,39 @@ ATAJOS = [
         None,
     ),
     (
-        None, None, "Ctrl+Tab / Ctrl+Shift+Tab", "Calculadora",
-        "Alternar entre las pestañas Casos, Calculadora de Crédito e Historial de "
-        "Créditos, en orden (adelante/atrás) — todas son pestañas de primer nivel, "
-        "no diálogos de menú (pedido explícito del usuario, 2026-07-11: \"esto es "
-        "una función no una configuración\", mismo criterio aplicado a Historial de "
-        "Créditos el 2026-07-12). Al llegar a cada una, se anuncia por voz su "
-        "nombre. Para ir directo a una pestaña específica sin importar el orden, "
-        "ver Ctrl+1/Ctrl+2/Ctrl+3 más arriba (sección General)",
+        None, None, "Ctrl+Tab / Ctrl+Shift+Tab", "Calculadora de Crédito",
+        "Alternar entre las pestañas Casos, Calculadora de Crédito, Historial de "
+        "Créditos y Calculadora, en orden (adelante/atrás) — todas son pestañas de "
+        "primer nivel, no diálogos de menú (pedido explícito del usuario, "
+        "2026-07-11: \"esto es una función no una configuración\", mismo criterio "
+        "aplicado a Historial de Créditos el 2026-07-12 y a Calculadora el "
+        "2026-09-07). Al llegar a cada una, se anuncia por voz su nombre. Para ir "
+        "directo a una pestaña específica sin importar el orden, ver "
+        "Ctrl+1/Ctrl+2/Ctrl+3/Ctrl+4 más arriba (sección General)",
         None,
     ),
     (
-        None, None, "Ctrl+Shift+Q", "Calculadora",
+        None, None, "Ctrl+Shift+Q", "Calculadora de Crédito",
         "Anunciar por voz el pasivo laboral ya calculado (dólares y córdobas), sin mover "
-        "el foco ni tabular hasta el cuadro de Resultados",
+        "el foco ni tabular hasta el cuadro de Resultados — no confundir con el "
+        "Ctrl+Shift+Q de la pestaña \"Calculadora\" (multiplica por el dólar), son dos "
+        "pestañas distintas con su propio significado para el mismo atajo",
         None,
     ),
     (
-        None, None, "Ctrl+Shift+W", "Calculadora",
+        None, None, "Ctrl+Shift+W", "Calculadora de Crédito",
         "Anunciar por voz el salario con deducciones ya calculado (dólares y córdobas), "
         "sin mover el foco ni tabular hasta el cuadro de Resultados",
         None,
     ),
     (
-        None, None, "Ctrl+Shift+E", "Calculadora",
+        None, None, "Ctrl+Shift+E", "Calculadora de Crédito",
         "Anunciar por voz únicamente el nombre de la empresa convenio elegida (sin la "
         "tasa), sin mover el foco",
         None,
     ),
     (
-        None, None, "Ctrl+Shift+R", "Calculadora",
+        None, None, "Ctrl+Shift+R", "Calculadora de Crédito",
         "Calcular (pasivo laboral, salario neto, cuota y endeudamiento con los datos "
         "ingresados) y anunciar por voz el resultado — único atajo de teclado para "
         "calcular; el botón \"Calcular\" ya no tiene mnemónico (antes Alt+A, retirado "
@@ -276,14 +286,14 @@ ATAJOS = [
         None,
     ),
     (
-        None, None, "Enter / Espacio (en Empresa convenio)", "Calculadora",
+        None, None, "Enter / Espacio (en Empresa convenio)", "Calculadora de Crédito",
         "Confirmar la empresa resaltada y anunciar por voz \"Seleccionada {empresa}\", sin "
         "repetir la tasa — al navegar con las flechas, NVDA ya anuncia nombre y tasa de "
         "cada opción por su cuenta",
         None,
     ),
     (
-        None, None, "Ctrl+T", "Calculadora",
+        None, None, "Ctrl+T", "Calculadora de Crédito",
         "Copiar al portapapeles el resumen de la operación calculada (monto, plazo y "
         "cuota QUINCENAL aproximada) y anunciar por voz que se copió — la cuota se "
         "calcula siempre con periodicidad Quincenal para este resumen, sin importar qué "
@@ -293,12 +303,12 @@ ATAJOS = [
         None,
     ),
     (
-        None, None, "Ctrl+Shift+T", "Calculadora",
+        None, None, "Ctrl+Shift+T", "Calculadora de Crédito",
         "Igual que Ctrl+T, pero con la cuota MENSUAL aproximada en vez de la quincenal",
         None,
     ),
     (
-        None, None, "Ctrl+R (en Calculadora)", "Calculadora",
+        None, None, "Ctrl+R (en Calculadora de Crédito)", "Calculadora de Crédito",
         "Anunciar por voz la cuota ya calculada redondeada hacia arriba al entero "
         "(ej. de 19.25 a 20 dólares) y su equivalente en córdobas, sin recalcular "
         "nada — distinto de Ctrl+Shift+R, que sí dispara el cálculo. Requiere haber "
@@ -308,7 +318,7 @@ ATAJOS = [
         None,
     ),
     (
-        None, None, "Ctrl+P", "Calculadora",
+        None, None, "Ctrl+P", "Calculadora de Crédito",
         "Guardar el cálculo ya realizado como un PDF (empresa, fecha de ingreso, "
         "salario, ingresos extra, monto, plazo, periodicidad, deudas activas, y los "
         "6 resultados: salario bruto, salario neto, pasivo laboral, cuota, cobertura "
@@ -316,6 +326,44 @@ ATAJOS = [
         "adjuntarlo al expediente del cliente. Abre un wx.FileDialog nativo con un "
         "nombre sugerido por fecha y hora; requiere haber calculado antes, igual que "
         "Ctrl+R",
+        None,
+    ),
+    (
+        None, None, "Enter (en el cuadro Número)", "Calculadora",
+        "Confirmar el número tipeado como operando (primero o segundo) y limpiar el "
+        "cuadro para el siguiente — pedido explícito del usuario, 2026-09-07",
+        None,
+    ),
+    (
+        None, None, "Ctrl+Shift+S", "Calculadora",
+        "Sumar el primer y segundo operando y anunciar el resultado por voz",
+        None,
+    ),
+    (
+        None, None, "Ctrl+Shift+R (en Calculadora)", "Calculadora",
+        "Restar el segundo operando del primero y anunciar el resultado por voz — no "
+        "confundir con el Ctrl+Shift+R de Calculadora de Crédito (dispara el cálculo "
+        "completo), son dos pestañas distintas",
+        None,
+    ),
+    (
+        None, None, "Ctrl+Shift+M", "Calculadora",
+        "Multiplicar el primer y segundo operando y anunciar el resultado por voz",
+        None,
+    ),
+    (
+        None, None, "Ctrl+Shift+D", "Calculadora",
+        "Dividir el primer operando entre el segundo y anunciar el resultado por voz "
+        "(avisa con un mensaje si el segundo operando es cero, en vez de fallar)",
+        None,
+    ),
+    (
+        None, None, "Ctrl+Shift+Q (en Calculadora)", "Calculadora",
+        "Multiplicar el operando actual (UNARIO, uno solo — el del cuadro, o el "
+        "primer operando ya confirmado con Enter si el cuadro está vacío) por el "
+        "tipo de cambio fijo (36.6243) y anunciar el resultado por voz — distinto de "
+        "las otras cuatro operaciones de esta pestaña, que son binarias (necesitan "
+        "dos operandos)",
         None,
     ),
     (

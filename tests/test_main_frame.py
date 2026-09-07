@@ -75,6 +75,18 @@ def test_limpiar_en_creditos_llama_limpiar_busqueda(frame, monkeypatch):
     assert llamadas == [1]
 
 
+def test_limpiar_en_calculadora_simple_llama_limpiar_formulario(frame, monkeypatch):
+    llamadas = []
+    monkeypatch.setattr(
+        frame.calculadora_simple_panel, "limpiar_formulario", lambda: llamadas.append(1)
+    )
+    _ir_a_pestana(frame, frame.calculadora_simple_panel)
+
+    frame._limpiar_segun_pestana_activa()
+
+    assert llamadas == [1]
+
+
 def test_enfocar_busqueda_en_casos_llama_su_propio_metodo(frame, monkeypatch):
     llamadas = []
     monkeypatch.setattr(frame.casos_panel, "enfocar_busqueda", lambda: llamadas.append(1))
@@ -166,6 +178,12 @@ def test_ctrl_3_va_a_creditos_desde_cualquier_pestana(frame):
     _ir_a_pestana(frame, frame.casos_panel)
     frame._ir_a_creditos()
     assert frame.notebook.GetCurrentPage() is frame.creditos_panel
+
+
+def test_ctrl_4_va_a_calculadora_simple_desde_cualquier_pestana(frame):
+    _ir_a_pestana(frame, frame.casos_panel)
+    frame._ir_a_calculadora_simple()
+    assert frame.notebook.GetCurrentPage() is frame.calculadora_simple_panel
 
 
 def test_ir_a_pestana_recarga_datos_y_anuncia_por_voz(frame, monkeypatch):
