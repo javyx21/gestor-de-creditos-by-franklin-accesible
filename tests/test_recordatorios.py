@@ -26,8 +26,11 @@ def conn(tmp_path, monkeypatch):
 
 
 def _crear(conn, nombre="Juan Perez", cedula="001-0000001-1", celular="8091234567",
-           empresa="MIDESA", fecha_llamar="2026-01-10", hora_llamar="09:00", ejecutivo="fmartinez"):
-    return crear_recordatorio(conn, nombre, cedula, celular, empresa, fecha_llamar, hora_llamar, ejecutivo)
+           empresa="MIDESA", fecha_llamar="2026-01-10", hora_llamar="09:00", ejecutivo="fmartinez",
+           comentarios=None):
+    return crear_recordatorio(
+        conn, nombre, cedula, celular, empresa, fecha_llamar, hora_llamar, ejecutivo, comentarios
+    )
 
 
 def _hace_minutos(minutos):
@@ -66,6 +69,31 @@ def test_actualizar_recordatorio(conn):
     assert fila["empresa_convenio"] == "NICAES"
     assert fila["fecha_llamar"] == "2026-02-15"
     assert fila["hora_llamar"] == "14:30"
+
+
+def test_crear_recordatorio_guarda_comentarios(conn):
+    # Pedido explícito del usuario: contexto de por qué hay que llamar.
+    _crear(conn, comentarios="Pendiente enviar estado de cuenta actualizado")
+
+    fila = listar_recordatorios(conn)[0]
+    assert fila["comentarios"] == "Pendiente enviar estado de cuenta actualizado"
+
+
+def test_crear_recordatorio_sin_comentarios_queda_none(conn):
+    _crear(conn)
+
+    assert listar_recordatorios(conn)[0]["comentarios"] is None
+
+
+def test_actualizar_recordatorio_actualiza_comentarios(conn):
+    recordatorio_id = _crear(conn, comentarios="Motivo original")
+
+    actualizar_recordatorio(
+        conn, recordatorio_id, "Juana Perez", "001-0000001-1", "8099999999",
+        "NICAES", "2026-02-15", "14:30", "Motivo actualizado",
+    )
+
+    assert listar_recordatorios(conn)[0]["comentarios"] == "Motivo actualizado"
 
 
 def test_eliminar_recordatorio(conn):

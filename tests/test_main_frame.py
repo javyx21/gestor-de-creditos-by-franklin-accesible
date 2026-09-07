@@ -145,6 +145,19 @@ def test_enfocar_resultados_en_creditos_llama_su_propio_metodo(frame, monkeypatc
     assert llamadas == [1]
 
 
+def test_enfocar_resultados_en_recordatorios_llama_su_propio_metodo(frame, monkeypatch):
+    # Pedido explícito del usuario, 2026-09-07: "con control r vamos a caer
+    # en la lista, ese lo dejaremos como comando universal en las listas de
+    # clientes menos en las calculadoras".
+    llamadas = []
+    monkeypatch.setattr(frame.recordatorios_panel, "enfocar_resultados", lambda: llamadas.append(1))
+    _ir_a_pestana(frame, frame.recordatorios_panel)
+
+    frame._enfocar_resultados_segun_pestana_activa()
+
+    assert llamadas == [1]
+
+
 def test_enfocar_resultados_en_calculadora_no_hace_nada(frame, monkeypatch):
     llamadas_casos = []
     llamadas_creditos = []

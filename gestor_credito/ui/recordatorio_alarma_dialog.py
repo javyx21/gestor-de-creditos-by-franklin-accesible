@@ -15,7 +15,7 @@ MINUTOS_POSPONER = 5
 _REPETICIONES_SONIDO = 3
 _INTERVALO_SONIDO_MS = 800
 
-COLUMNAS = ["Fecha", "Hora", "Nombre", "Cédula", "Celular", "Empresa"]
+COLUMNAS = ["Fecha", "Hora", "Nombre", "Cédula", "Celular", "Empresa", "Comentarios"]
 
 
 class RecordatorioAlarmaDialog(wx.Dialog):
@@ -97,6 +97,12 @@ class RecordatorioAlarmaDialog(wx.Dialog):
             f"{primero['empresa_convenio'] or 'sin empresa'}, "
             f"teléfono {primero['celular'] or 'sin teléfono'}."
         )
+        # Pedido explícito del usuario: el motivo de la llamada tiene que
+        # estar disponible justo cuando suena la alarma, no solo en la lista
+        # de la pestaña — por eso se anuncia acá también, no solo mostrado en
+        # la columna Comentarios de esta misma ventana.
+        if primero.get("comentarios"):
+            base += f" Comentario: {primero['comentarios']}."
         if len(self._recordatorios) > 1:
             return f"Tenés {len(self._recordatorios)} recordatorios de llamada pendientes. {base}"
         return base
@@ -110,10 +116,12 @@ class RecordatorioAlarmaDialog(wx.Dialog):
     def _refrescar_lista(self):
         self.lista.DeleteAllItems()
         for recordatorio in self._recordatorios:
+            comentarios = (recordatorio.get("comentarios") or "").replace("\n", " ").replace("\r", " ")
             valores = [
                 formatear_fecha(recordatorio["fecha_llamar"]), recordatorio["hora_llamar"] or "",
                 recordatorio["nombre"] or "", recordatorio["cedula"] or "",
                 recordatorio["celular"] or "", recordatorio["empresa_convenio"] or "",
+                comentarios,
             ]
             indice = self.lista.InsertItem(self.lista.GetItemCount(), valores[0])
             for columna, valor in enumerate(valores[1:], start=1):

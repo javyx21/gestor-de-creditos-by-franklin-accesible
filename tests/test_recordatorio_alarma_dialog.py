@@ -35,13 +35,15 @@ class _EventoFalso:
         self.skip_llamado = True
 
 
-def _crear_fila_vencida(conn, nombre="Juan Perez", cedula="001", celular="8091234567", empresa="MIDESA"):
+def _crear_fila_vencida(conn, nombre="Juan Perez", cedula="001", celular="8091234567",
+                         empresa="MIDESA", comentarios=None):
     recordatorio_id = crear_recordatorio(
-        conn, nombre, cedula, celular, empresa, "2026-01-10", "09:00", "fmartinez"
+        conn, nombre, cedula, celular, empresa, "2026-01-10", "09:00", "fmartinez", comentarios
     )
     return {
         "id": recordatorio_id, "nombre": nombre, "cedula": cedula, "celular": celular,
         "empresa_convenio": empresa, "fecha_llamar": "2026-01-10", "hora_llamar": "09:00",
+        "comentarios": comentarios,
     }
 
 
@@ -96,6 +98,24 @@ def test_anuncia_por_voz_al_mostrarse(app, conn, monkeypatch):
         assert "002" in voces[0]
         assert "NICAES" in voces[0]
         assert "8092223333" in voces[0]
+    finally:
+        d.Destroy()
+
+
+def test_anuncia_por_voz_incluye_el_comentario(app, conn, monkeypatch):
+    # Pedido explícito del usuario: el contexto de la llamada tiene que
+    # estar disponible justo cuando suena la alarma, no solo en la lista.
+    voces = []
+    monkeypatch.setattr(
+        "gestor_credito.ui.recordatorio_alarma_dialog.anunciar_voz_nvda", lambda texto: voces.append(texto)
+    )
+    monkeypatch.setattr(
+        "gestor_credito.ui.recordatorio_alarma_dialog.reproducir_sonido", lambda nombre: None
+    )
+    filas = [_crear_fila_vencida(conn, comentarios="Pendiente enviar estado de cuenta")]
+    d = RecordatorioAlarmaDialog(None, filas)
+    try:
+        assert "Pendiente enviar estado de cuenta" in voces[0]
     finally:
         d.Destroy()
 

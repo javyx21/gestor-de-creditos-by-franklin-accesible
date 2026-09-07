@@ -246,12 +246,13 @@ CREATE INDEX IF NOT EXISTS idx_reporte_credito_empresa ON reporte_credito(empres
 -- usuario): agendar "te llamo tal día a tal hora" con una alarma real
 -- (wx.Timer + modal, ver ui/recordatorio_alarma_dialog.py), DELIBERADAMENTE
 -- aparte de Notificaciones ("nunca sirvió" para llamar la atención según el
--- usuario). Sin FK a cliente/caso a propósito, mismo criterio de
--- independencia que convenio_tasa/calculo_credito: cedula/nombre/celular/
+-- usuario). Sin FK a cliente/caso/reporte_credito a propósito, mismo criterio
+-- de independencia que convenio_tasa/calculo_credito: cedula/nombre/celular/
 -- empresa_convenio son columnas propias de este recordatorio, no un vínculo
--- obligatorio — buscar_datos_cliente_por_cedula() en db/recordatorios.py
--- autocompleta esos campos si la cédula YA existe como cliente, pero si no
--- existe el oficial los llena a mano sin fricción.
+-- obligatorio — buscar_datos_credito_por_cedula() en db/recordatorios.py
+-- autocompleta nombre/empresa desde Historial de Créditos si la cédula ya
+-- tiene un crédito reportado ahí, pero si no existe el oficial los llena a
+-- mano sin fricción.
 CREATE TABLE IF NOT EXISTS recordatorio_llamada (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nombre TEXT NOT NULL,
@@ -283,6 +284,13 @@ CREATE TABLE IF NOT EXISTS recordatorio_llamada (
     -- recordatorio no se considera vencido aunque fecha_llamar/hora_llamar ya
     -- hayan pasado.
     pospuesto_hasta TEXT,
+
+    -- Agregada 2026-09-07, pedido explícito del usuario: contexto de POR QUÉ
+    -- hay que llamar (ej. "pendiente enviar estado de cuenta"). Se muestra
+    -- también en la ventana de alarma (RecordatorioAlarmaDialog) y se anuncia
+    -- por voz junto con el resto — todo el sentido de agregarlo es tenerlo
+    -- disponible justo cuando suena la alarma, no solo en la lista.
+    comentarios TEXT,
 
     fecha_creacion TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -383,11 +391,22 @@ def _migrar_reporte_credito(conn):
         conn.execute("ALTER TABLE reporte_credito ADD COLUMN fecha_ultimo_pago_principal TEXT")
 
 
+def _migrar_recordatorio_llamada(conn):
+    """Agrega `comentarios` a bases YA EXISTENTES (2026-09-07, pedido
+    explícito del usuario: contexto de por qué hay que llamar) — varios
+    releases (v1.0.20-v1.0.24) ya publicaron `recordatorio_llamada` sin esta
+    columna, mismo motivo que _migrar_reporte_credito arriba."""
+    columnas = {fila[1] for fila in conn.execute("PRAGMA table_info(recordatorio_llamada)")}
+    if "comentarios" not in columnas:
+        conn.execute("ALTER TABLE recordatorio_llamada ADD COLUMN comentarios TEXT")
+
+
 def init_db():
     conn = get_connection()
     try:
         conn.executescript(SCHEMA)
         _migrar_reporte_credito(conn)
+        _migrar_recordatorio_llamada(conn)
         conn.executemany(
             "INSERT OR IGNORE INTO convenio_tasa (empresa_convenio, tasa_interes) VALUES (?, ?)",
             CONVENIOS_INICIALES,

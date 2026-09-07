@@ -49,15 +49,23 @@ ATAJOS = [
     (
         wx.ACCEL_CTRL, ord("R"), "Ctrl+R", "Casos",
         "Ir a la lista de resultados de Casos — atajo GLOBAL cuyo efecto depende de "
-        "la pestaña activa (pedido explícito del usuario, 2026-07-12), ver también la "
-        "fila de Historial de Créditos",
+        "la pestaña activa (pedido explícito del usuario, 2026-07-12), comando "
+        "universal en toda lista de clientes de la app (Casos, Historial de "
+        "Créditos, Recordatorios de Llamada — pedido explícito del usuario, "
+        "2026-09-07), pero NO en las Calculadoras (ver las filas de cada una más "
+        "abajo)",
         "enfocar_resultados",
     ),
     (
         None, None, "Ctrl+R", "Historial de Créditos",
         "Ir a la lista de resultados de Historial de Créditos — mismo atajo físico "
-        "que en Casos, cada pestaña define su propio efecto (en Calculadora anuncia "
-        "la cuota redondeada, ver la fila de Calculadora más abajo)",
+        "que en Casos, cada pestaña define su propio efecto",
+        None,
+    ),
+    (
+        None, None, "Ctrl+R", "Recordatorios de Llamada",
+        "Ir a la lista de recordatorios — mismo atajo físico que en Casos/"
+        "Historial de Créditos",
         None,
     ),
     (

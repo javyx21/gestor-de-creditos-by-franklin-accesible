@@ -43,13 +43,14 @@ def panel(app, conn):
 
 def _llenar_formulario(panel, nombre="Juan Perez", cedula="001-0000001-1",
                         celular="8091234567", empresa="MIDESA",
-                        fecha="10/01/2026", hora="09:00"):
+                        fecha="10/01/2026", hora="09:00", comentarios=""):
     panel.nombre_texto.SetValue(nombre)
     panel.cedula_texto.SetValue(cedula)
     panel.celular_texto.SetValue(celular)
     panel.empresa_texto.SetValue(empresa)
     panel.fecha_texto.SetValue(fecha)
     panel.hora_texto.SetValue(hora)
+    panel.comentarios_texto.SetValue(comentarios)
 
 
 def _filas_lista(panel, columna):
@@ -110,10 +111,45 @@ def test_agregar_con_hora_invalida_no_guarda(panel):
     assert "hora" in panel.mensaje_texto.GetLabel().lower()
 
 
+def test_agregar_recordatorio_guarda_comentarios(panel, conn):
+    # Pedido explícito del usuario: contexto de por qué hay que llamar.
+    _llenar_formulario(panel, comentarios="Pendiente enviar estado de cuenta")
+
+    panel._on_guardar(None)
+
+    assert listar_recordatorios(conn)[0]["comentarios"] == "Pendiente enviar estado de cuenta"
+
+
+def test_agregar_recordatorio_sin_comentarios_queda_vacio_en_la_lista(panel):
+    _llenar_formulario(panel)
+
+    panel._on_guardar(None)
+
+    assert _filas_lista(panel, 6) == [panel.CELDA_VACIA]
+
+
+# --- Ctrl+R: enfocar_resultados -------------------------------------------------
+# Pedido explícito del usuario, 2026-09-07: "con control r vamos a caer en la
+# lista, ese lo dejaremos como comando universal en las listas de clientes
+# menos en las calculadoras".
+
+def test_enfocar_resultados_selecciona_y_enfoca_la_primera_fila(panel):
+    _llenar_formulario(panel)
+    panel._on_guardar(None)
+
+    panel.enfocar_resultados()
+
+    assert panel.lista.GetFirstSelected() == 0
+
+
+def test_enfocar_resultados_sin_filas_no_lanza(panel):
+    panel.enfocar_resultados()  # no debe lanzar, lista vacía
+
+
 # --- Selección / edición -------------------------------------------------------
 
 def test_seleccionar_fila_carga_el_formulario(panel):
-    _llenar_formulario(panel)
+    _llenar_formulario(panel, comentarios="Llamar por atraso en cuota")
     panel._on_guardar(None)
 
     evento = wx.ListEvent(wx.wxEVT_LIST_ITEM_SELECTED, panel.lista.GetId())
@@ -121,6 +157,7 @@ def test_seleccionar_fila_carga_el_formulario(panel):
     panel._on_seleccionar(evento)
 
     assert panel.nombre_texto.GetValue() == "Juan Perez"
+    assert panel.comentarios_texto.GetValue() == "Llamar por atraso en cuota"
     assert panel.guardar_btn.GetLabel() == "&Guardar cambios"
     assert panel.marcar_atendido_btn.IsEnabled()
     assert panel.eliminar_btn.IsEnabled()
@@ -153,7 +190,7 @@ def test_marcar_atendido(panel, monkeypatch):
 
     panel._on_marcar_atendido(None)
 
-    assert _filas_lista(panel, 6) == ["Atendida"]
+    assert _filas_lista(panel, 7) == ["Atendida"]
 
 
 def test_eliminar_con_confirmacion(panel, monkeypatch):
@@ -343,7 +380,7 @@ def test_fila_vencida_se_resalta_y_suena_al_seleccionar(panel, conn, monkeypatch
     )
     panel._on_guardar(None)
 
-    assert _filas_lista(panel, 6) == ["Vencido"]
+    assert _filas_lista(panel, 7) == ["Vencido"]
     color_fondo = panel.lista.GetItemBackgroundColour(0)
     assert color_fondo == panel._COLOR_FONDO_VENCIDO
 

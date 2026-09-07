@@ -434,14 +434,23 @@ class MainFrame(wx.Frame):
         con el apartado del historial de créditos") — mismo criterio que
         _enfocar_busqueda_segun_pestana_activa: antes apuntaba siempre a
         CasosPanel.enfocar_resultados() sin importar la pestaña activa, sin
-        ningún efecto visible desde Historial de Créditos. En Calculadora
-        no hay una lista de resultados equivalente, así que no hace nada
-        ahí."""
+        ningún efecto visible desde Historial de Créditos.
+
+        Recordatorios de Llamada se sumó acá el 2026-09-07 (pedido explícito
+        del usuario: "con control r vamos a caer en la lista, ese lo
+        dejaremos como comando universal en las listas de clientes menos en
+        las calculadoras") — es la tercera "lista de clientes" de la app, así
+        que Ctrl+R también cae ahí. En las dos Calculadoras no hay una lista
+        de resultados equivalente (y Calculadora de Crédito ya usa su propio
+        Ctrl+R local con otro significado, ver atajos.py), así que este
+        método no hace nada en ninguna de las dos a propósito."""
         pagina = self.notebook.GetCurrentPage()
         if pagina is self.casos_panel:
             self.casos_panel.enfocar_resultados()
         elif pagina is self.creditos_panel:
             self.creditos_panel.enfocar_resultados()
+        elif pagina is self.recordatorios_panel:
+            self.recordatorios_panel.enfocar_resultados()
 
     def _limpiar_segun_pestana_activa(self):
         """Atajo GLOBAL Ctrl+D (antes Alt+L — pedido explícito del usuario,

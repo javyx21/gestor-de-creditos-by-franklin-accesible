@@ -25,7 +25,7 @@ FORMATO_FECHA_HORA_LLAMAR = "%Y-%m-%d %H:%M"
 _COLUMNAS = (
     "id", "nombre", "cedula", "celular", "empresa_convenio",
     "fecha_llamar", "hora_llamar", "ejecutivo", "atendido",
-    "fecha_atendido", "pospuesto_hasta",
+    "fecha_atendido", "pospuesto_hasta", "comentarios",
 )
 
 
@@ -33,28 +33,35 @@ def _fila_a_dict(fila):
     return dict(zip(_COLUMNAS, fila))
 
 
-def crear_recordatorio(conn, nombre, cedula, celular, empresa_convenio, fecha_llamar, hora_llamar, ejecutivo):
+def crear_recordatorio(
+    conn, nombre, cedula, celular, empresa_convenio, fecha_llamar, hora_llamar, ejecutivo,
+    comentarios=None,
+):
     cur = conn.execute(
         """
         INSERT INTO recordatorio_llamada
-            (nombre, cedula, celular, empresa_convenio, fecha_llamar, hora_llamar, ejecutivo)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (nombre, cedula, celular, empresa_convenio, fecha_llamar, hora_llamar, ejecutivo,
+             comentarios)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (nombre, cedula, celular, empresa_convenio, fecha_llamar, hora_llamar, ejecutivo),
+        (nombre, cedula, celular, empresa_convenio, fecha_llamar, hora_llamar, ejecutivo, comentarios),
     )
     conn.commit()
     return cur.lastrowid
 
 
-def actualizar_recordatorio(conn, recordatorio_id, nombre, cedula, celular, empresa_convenio, fecha_llamar, hora_llamar):
+def actualizar_recordatorio(
+    conn, recordatorio_id, nombre, cedula, celular, empresa_convenio, fecha_llamar, hora_llamar,
+    comentarios=None,
+):
     conn.execute(
         """
         UPDATE recordatorio_llamada
         SET nombre = ?, cedula = ?, celular = ?, empresa_convenio = ?,
-            fecha_llamar = ?, hora_llamar = ?
+            fecha_llamar = ?, hora_llamar = ?, comentarios = ?
         WHERE id = ?
         """,
-        (nombre, cedula, celular, empresa_convenio, fecha_llamar, hora_llamar, recordatorio_id),
+        (nombre, cedula, celular, empresa_convenio, fecha_llamar, hora_llamar, comentarios, recordatorio_id),
     )
     conn.commit()
 

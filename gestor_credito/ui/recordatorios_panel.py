@@ -18,7 +18,9 @@ from gestor_credito.ui.fechas import formatear_fecha, parsear_fecha_ui
 from gestor_credito.ui.logo import AppLogo
 from gestor_credito.ui.sonido import SONIDO_BORRAR, SONIDO_FILA_RECORDATORIO_VENCIDO, reproducir_sonido
 
-COLUMNAS = ["Fecha a llamar", "Hora", "Nombre", "Cédula", "Celular", "Empresa", "Estado"]
+COLUMNAS = [
+    "Fecha a llamar", "Hora", "Nombre", "Cédula", "Celular", "Empresa", "Comentarios", "Estado",
+]
 
 FORMATO_HORA_UI = "%H:%M"
 
@@ -139,6 +141,19 @@ class RecordatoriosPanel(wx.Panel):
         for control in (fecha_label, self.fecha_texto, hora_label, self.hora_texto):
             fila3.Add(control, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
         box.Add(fila3, 0, wx.BOTTOM, 8)
+
+        # Agregado 2026-09-07, pedido explícito del usuario: contexto de POR
+        # QUÉ hay que llamar (ej. "pendiente enviar estado de cuenta") — fila
+        # propia, no compartida con otro campo, porque necesita más ancho que
+        # los de arriba. Multilínea: un motivo de llamada no siempre entra en
+        # una sola línea.
+        fila4 = wx.BoxSizer(wx.VERTICAL)
+        comentarios_label = wx.StaticText(contenedor, label="Comentarios (contexto de la llamada):")
+        self.comentarios_texto = wx.TextCtrl(contenedor, style=wx.TE_MULTILINE, size=(-1, 60))
+        nombre_accesible(self.comentarios_texto, "Comentarios")
+        fila4.Add(comentarios_label, 0, wx.BOTTOM, 4)
+        fila4.Add(self.comentarios_texto, 0, wx.EXPAND)
+        box.Add(fila4, 0, wx.EXPAND | wx.BOTTOM, 8)
 
         fila_botones = wx.BoxSizer(wx.HORIZONTAL)
 
@@ -261,6 +276,7 @@ class RecordatoriosPanel(wx.Panel):
         cedula = self.cedula_texto.GetValue().strip().upper() or None
         celular = self.celular_texto.GetValue().strip() or None
         empresa = self.empresa_texto.GetValue().strip() or None
+        comentarios = self.comentarios_texto.GetValue().strip() or None
         fecha_iso = parsear_fecha_ui(self.fecha_texto.GetValue())
         hora = parsear_hora_ui(self.hora_texto.GetValue())
 
@@ -279,13 +295,14 @@ class RecordatoriosPanel(wx.Panel):
             if self._recordatorio_seleccionado_id is None:
                 ejecutivo_actual = obtener_valor(conn, CLAVE_EJECUTIVO_ACTUAL)
                 crear_recordatorio(
-                    conn, nombre, cedula, celular, empresa, fecha_iso, hora, ejecutivo_actual
+                    conn, nombre, cedula, celular, empresa, fecha_iso, hora, ejecutivo_actual,
+                    comentarios,
                 )
                 mensaje = "Recordatorio agregado."
             else:
                 actualizar_recordatorio(
                     conn, self._recordatorio_seleccionado_id, nombre, cedula, celular,
-                    empresa, fecha_iso, hora,
+                    empresa, fecha_iso, hora, comentarios,
                 )
                 mensaje = "Cambios guardados."
         finally:
@@ -347,13 +364,32 @@ class RecordatoriosPanel(wx.Panel):
         self._limpiar_formulario_interno()
         reproducir_sonido(SONIDO_BORRAR)
 
+    def enfocar_resultados(self):
+        """Atajo GLOBAL Ctrl+R (pedido explícito del usuario, 2026-09-07:
+        "con control r vamos a caer en la lista, ese lo dejaremos como
+        comando universal en las listas de clientes menos en las
+        calculadoras") — lleva el foco a la lista de recordatorios. Si no
+        hay ningún ítem seleccionado todavía, selecciona el primero para que
+        las flechas funcionen de inmediato al llegar con el atajo, mismo
+        criterio que CasosPanel.enfocar_resultados()/
+        CreditosPanel.enfocar_resultados()."""
+        if self.lista.GetItemCount() == 0:
+            self.lista.SetFocus()
+            return
+
+        if self.lista.GetFirstSelected() == -1:
+            estado = wx.LIST_STATE_SELECTED | wx.LIST_STATE_FOCUSED
+            self.lista.SetItemState(0, estado, estado)
+
+        self.lista.SetFocus()
+
     def _desvincular_fila_seleccionada(self):
         """Deja de editar la fila seleccionada (si había una) y borra
-        Nombre/Celular/Empresa/Fecha/Hora — esos datos pertenecían a la
-        persona anterior, ya no corresponden. Cédula NO se toca acá a
-        propósito: quien llama a esto (_autocompletar_por_cedula) lo hace
-        justo después de leer lo que el oficial ya tecleó ahí, para buscar
-        con ese valor."""
+        Nombre/Celular/Empresa/Comentarios/Fecha/Hora — esos datos
+        pertenecían a la persona anterior, ya no corresponden. Cédula NO se
+        toca acá a propósito: quien llama a esto (_autocompletar_por_cedula)
+        lo hace justo después de leer lo que el oficial ya tecleó ahí, para
+        buscar con ese valor."""
         indice = self.lista.GetFirstSelected()
         if indice != wx.NOT_FOUND:
             estado = wx.LIST_STATE_SELECTED | wx.LIST_STATE_FOCUSED
@@ -363,6 +399,7 @@ class RecordatoriosPanel(wx.Panel):
         self.nombre_texto.SetValue("")
         self.celular_texto.SetValue("")
         self.empresa_texto.SetValue("")
+        self.comentarios_texto.SetValue("")
         self.fecha_texto.SetValue("")
         self.hora_texto.SetValue("")
         self.guardar_btn.SetLabel("A&gregar recordatorio")
@@ -394,10 +431,15 @@ class RecordatoriosPanel(wx.Panel):
             for fila in self._filas:
                 vencido = not fila["atendido"] and esta_vencido(fila, ahora)
                 estado_texto = "Atendida" if fila["atendido"] else ("Vencido" if vencido else "Pendiente")
+                # Saltos de línea aplanados a espacio: una celda de
+                # wx.ListCtrl con \n adentro se lee/ve mal, el texto completo
+                # con formato sigue disponible al seleccionar la fila (ver
+                # _on_seleccionar, que carga el valor real en el cuadro).
+                comentarios_fila = (fila["comentarios"] or "").replace("\n", " ").replace("\r", " ")
                 valores = [
                     formatear_fecha(fila["fecha_llamar"]), fila["hora_llamar"] or "",
                     fila["nombre"] or "", fila["cedula"] or "", fila["celular"] or "",
-                    fila["empresa_convenio"] or "", estado_texto,
+                    fila["empresa_convenio"] or "", comentarios_fila, estado_texto,
                 ]
                 valores = [valor if valor else self.CELDA_VACIA for valor in valores]
                 indice = self.lista.InsertItem(self.lista.GetItemCount(), valores[0])
@@ -420,6 +462,7 @@ class RecordatoriosPanel(wx.Panel):
         self.nombre_texto.SetValue(fila["nombre"] or "")
         self.celular_texto.SetValue(fila["celular"] or "")
         self.empresa_texto.SetValue(fila["empresa_convenio"] or "")
+        self.comentarios_texto.SetValue(fila["comentarios"] or "")
         self.fecha_texto.SetValue(formatear_fecha(fila["fecha_llamar"]))
         self.hora_texto.SetValue(fila["hora_llamar"] or "")
         self.guardar_btn.SetLabel("&Guardar cambios")
