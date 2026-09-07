@@ -186,6 +186,113 @@ def test_ctrl_4_va_a_calculadora_simple_desde_cualquier_pestana(frame):
     assert frame.notebook.GetCurrentPage() is frame.calculadora_simple_panel
 
 
+def test_ctrl_5_va_a_recordatorios_desde_cualquier_pestana(frame):
+    _ir_a_pestana(frame, frame.casos_panel)
+    frame._ir_a_recordatorios()
+    assert frame.notebook.GetCurrentPage() is frame.recordatorios_panel
+
+
+def test_limpiar_en_recordatorios_llama_limpiar_formulario(frame, monkeypatch):
+    llamadas = []
+    monkeypatch.setattr(frame.recordatorios_panel, "limpiar_formulario", lambda: llamadas.append(1))
+    _ir_a_pestana(frame, frame.recordatorios_panel)
+
+    frame._limpiar_segun_pestana_activa()
+
+    assert llamadas == [1]
+
+
+def test_ir_a_recordatorios_recarga_datos_y_anuncia_por_voz(frame, monkeypatch):
+    llamadas_recargar = []
+    llamadas_voz = []
+    monkeypatch.setattr(frame.recordatorios_panel, "recargar", lambda: llamadas_recargar.append(1))
+    monkeypatch.setattr(
+        "gestor_credito.ui.main_frame.anunciar_voz_nvda",
+        lambda texto: llamadas_voz.append(texto),
+    )
+    _ir_a_pestana(frame, frame.casos_panel)
+
+    frame._ir_a_recordatorios()
+
+    assert llamadas_recargar == [1]
+    assert llamadas_voz == ["Recordatorios de Llamada"]
+
+
+# ---- Alarma real de Recordatorios de Llamada (wx.Timer, 2026-09-07) --------
+# _on_verificar_recordatorios abre un wx.Dialog modal real cuando hay
+# vencidos — se monkeypatchea _clase_dialogo_recordatorio (mismo criterio de
+# "punto de swap para pruebas" que ejecutar_en_segundo_plano) para no bloquear
+# la prueba headless con un ShowModal() real.
+
+
+class _DialogoRecordatorioFalso:
+    instancias = []
+
+    def __init__(self, parent, recordatorios):
+        self.parent = parent
+        self.recordatorios = recordatorios
+        self.show_modal_llamado = False
+        _DialogoRecordatorioFalso.instancias.append(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def ShowModal(self):
+        self.show_modal_llamado = True
+
+
+def test_verificar_recordatorios_sin_vencidos_no_abre_dialogo(frame, monkeypatch):
+    monkeypatch.setattr(
+        "gestor_credito.ui.main_frame.obtener_recordatorios_vencidos",
+        lambda conn, ejecutivo_actual=None: [],
+    )
+    _DialogoRecordatorioFalso.instancias.clear()
+    monkeypatch.setattr(frame, "_clase_dialogo_recordatorio", _DialogoRecordatorioFalso)
+
+    frame._on_verificar_recordatorios(None)
+
+    assert _DialogoRecordatorioFalso.instancias == []
+    assert frame._dialogo_recordatorio_activo is False
+
+
+def test_verificar_recordatorios_con_vencidos_abre_dialogo_modal(frame, monkeypatch):
+    vencidos = [{"id": 1, "nombre": "Juan"}]
+    monkeypatch.setattr(
+        "gestor_credito.ui.main_frame.obtener_recordatorios_vencidos",
+        lambda conn, ejecutivo_actual=None: vencidos,
+    )
+    _DialogoRecordatorioFalso.instancias.clear()
+    monkeypatch.setattr(frame, "_clase_dialogo_recordatorio", _DialogoRecordatorioFalso)
+    llamadas_recargar = []
+    monkeypatch.setattr(frame.recordatorios_panel, "recargar", lambda: llamadas_recargar.append(1))
+
+    frame._on_verificar_recordatorios(None)
+
+    assert len(_DialogoRecordatorioFalso.instancias) == 1
+    instancia = _DialogoRecordatorioFalso.instancias[0]
+    assert instancia.recordatorios is vencidos
+    assert instancia.show_modal_llamado is True
+    assert frame._dialogo_recordatorio_activo is False
+    assert llamadas_recargar == [1]
+
+
+def test_verificar_recordatorios_no_abre_si_ya_hay_uno_activo(frame, monkeypatch):
+    monkeypatch.setattr(
+        "gestor_credito.ui.main_frame.obtener_recordatorios_vencidos",
+        lambda conn, ejecutivo_actual=None: [{"id": 1, "nombre": "Juan"}],
+    )
+    _DialogoRecordatorioFalso.instancias.clear()
+    monkeypatch.setattr(frame, "_clase_dialogo_recordatorio", _DialogoRecordatorioFalso)
+    frame._dialogo_recordatorio_activo = True
+
+    frame._on_verificar_recordatorios(None)
+
+    assert _DialogoRecordatorioFalso.instancias == []
+
+
 def test_ir_a_pestana_recarga_datos_y_anuncia_por_voz(frame, monkeypatch):
     # self.notebook.SetSelection() dispara EVT_NOTEBOOK_PAGE_CHANGED en esta
     # app (verificado empíricamente) — _ir_a_creditos() no debe duplicar la

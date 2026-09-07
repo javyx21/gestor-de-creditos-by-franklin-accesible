@@ -104,6 +104,12 @@ ATAJOS = [
         "ir_a_calculadora_simple",
     ),
     (
+        wx.ACCEL_CTRL, ord("5"), "Ctrl+5", "General",
+        "Ir directo a la pestaña Recordatorios de Llamada, sin importar cuál "
+        "esté activa — pedido explícito del usuario, 2026-09-07",
+        "ir_a_recordatorios",
+    ),
+    (
         None, None, "Alt+B", "Casos",
         "Ejecutar la búsqueda con el término escrito (botón Buscar)",
         None,
@@ -247,13 +253,14 @@ ATAJOS = [
     (
         None, None, "Ctrl+Tab / Ctrl+Shift+Tab", "Calculadora de Crédito",
         "Alternar entre las pestañas Casos, Calculadora de Crédito, Historial de "
-        "Créditos y Calculadora, en orden (adelante/atrás) — todas son pestañas de "
-        "primer nivel, no diálogos de menú (pedido explícito del usuario, "
-        "2026-07-11: \"esto es una función no una configuración\", mismo criterio "
-        "aplicado a Historial de Créditos el 2026-07-12 y a Calculadora el "
-        "2026-09-07). Al llegar a cada una, se anuncia por voz su nombre. Para ir "
-        "directo a una pestaña específica sin importar el orden, ver "
-        "Ctrl+1/Ctrl+2/Ctrl+3/Ctrl+4 más arriba (sección General)",
+        "Créditos, Calculadora y Recordatorios de Llamada, en orden (adelante/"
+        "atrás) — todas son pestañas de primer nivel, no diálogos de menú (pedido "
+        "explícito del usuario, 2026-07-11: \"esto es una función no una "
+        "configuración\", mismo criterio aplicado a Historial de Créditos el "
+        "2026-07-12 y a Calculadora/Recordatorios de Llamada el 2026-09-07). Al "
+        "llegar a cada una, se anuncia por voz su nombre. Para ir directo a una "
+        "pestaña específica sin importar el orden, ver Ctrl+1/Ctrl+2/Ctrl+3/Ctrl+4/"
+        "Ctrl+5 más arriba (sección General)",
         None,
     ),
     (
@@ -396,6 +403,46 @@ ATAJOS = [
         "(botón Guardar reporte) — pedido explícito del usuario: queda como "
         "referencia fija para comparar un mes contra otro, sin depender de "
         "que los datos de la app cambien después",
+        None,
+    ),
+    (
+        None, None, "Alt+G (en Recordatorios de Llamada)", "Recordatorios de Llamada",
+        "Agregar un recordatorio nuevo, o guardar los cambios del ya "
+        "seleccionado (el mismo botón cambia de etiqueta según el caso)",
+        None,
+    ),
+    (
+        None, None, "Alt+M (en Recordatorios de Llamada)", "Recordatorios de Llamada",
+        "Marcar como atendida la llamada del recordatorio seleccionado",
+        None,
+    ),
+    (
+        None, None, "Alt+R (en Recordatorios de Llamada)", "Recordatorios de Llamada",
+        "Eliminar el recordatorio seleccionado (pide confirmación)",
+        None,
+    ),
+    (
+        None, None, "Enter (con foco en Cédula, en Recordatorios de Llamada)",
+        "Recordatorios de Llamada",
+        "Buscar esa cédula entre los clientes ya existentes y autocompletar "
+        "Nombre/Celular/Empresa si hay coincidencia (perder el foco de ese "
+        "campo hace lo mismo) — pedido explícito del usuario; nunca pisa un "
+        "campo que ya tenga algo escrito a mano",
+        None,
+    ),
+    (
+        None, None, "Enter (en la ventana de alarma de un recordatorio)",
+        "Recordatorios de Llamada",
+        "Marcar como atendida la llamada seleccionada en la ventana de alarma "
+        "que aparece sola al llegar la hora de llamar",
+        None,
+    ),
+    (
+        None, None, "Esc (en la ventana de alarma de un recordatorio)",
+        "Recordatorios de Llamada",
+        "Posponer 5 minutos: la alarma (sonido x3 + aviso por voz) vuelve a "
+        "aparecer pasado ese tiempo si para entonces todavía no se marcó "
+        "como atendida — pedido explícito del usuario",
         None,
     ),
     (

@@ -66,6 +66,14 @@ SONIDO_FILA_CASO_ESPECIAL_CUOTAS_COMPLETAS = "casoEspecialCuotasCompletas.wav"
 # usuario aclaró que siempre fue para esta pantalla, no para ese reporte.
 SONIDO_ACTUALIZACION_DISPONIBLE = "actualizacion.wav"
 
+# Fila vencida en la lista de "Recordatorios de Llamada" (ui/recordatorios_panel.py)
+# — mismo wav que SONIDO_FILA_DOCUMENTOS_PENDIENTES/SONIDO_FILA_CREDITO_VENCIDO_SANEADO,
+# constante propia a propósito (una por concepto de alerta, mismo criterio que el
+# resto de este módulo). La alarma modal real (RecordatorioAlarmaDialog) usa
+# SONIDO_ACTUALIZACION_DISPONIBLE, no esta — esta es solo para el sonido de
+# navegación al seleccionar la fila en la lista de la pestaña.
+SONIDO_FILA_RECORDATORIO_VENCIDO = "documentoPendiente.wav"
+
 
 def reproducir_sonido(nombre_archivo):
     """Reproduce un .wav de gestor_credito/assets/sonidos/ en forma asíncrona.

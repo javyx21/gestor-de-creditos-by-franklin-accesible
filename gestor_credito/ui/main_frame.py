@@ -1,6 +1,8 @@
 import wx
 
-from gestor_credito.db.database import init_db
+from gestor_credito.db.configuracion import CLAVE_EJECUTIVO_ACTUAL, obtener_valor
+from gestor_credito.db.database import get_connection, init_db
+from gestor_credito.db.recordatorios import obtener_recordatorios_vencidos
 from gestor_credito.ui.accesibilidad import anunciar_texto_estado, anunciar_voz_nvda, nombre_accesible
 from gestor_credito.ui.actualizacion_dialog import buscar_actualizaciones, mostrar_informacion_version
 from gestor_credito.ui.atajos import ATAJOS
@@ -15,7 +17,15 @@ from gestor_credito.ui.configuracion_panel import (
 )
 from gestor_credito.ui.creditos_panel import CreditosPanel
 from gestor_credito.ui.notificaciones_panel import NotificacionesPanel
+from gestor_credito.ui.recordatorio_alarma_dialog import RecordatorioAlarmaDialog
+from gestor_credito.ui.recordatorios_panel import RecordatoriosPanel
 from gestor_credito.ui.reporte_mensual_panel import ReporteMensualPanel
+
+# Cada cuánto MainFrame revisa si algún recordatorio de llamada ya se cumplió
+# (ver _on_verificar_recordatorios) — no configurable, pedido explícito del
+# usuario de que la alarma "suene en serio" sin depender de que alguien abra
+# nada a mano, a diferencia de Notificaciones (solo se calcula al refrescar).
+_INTERVALO_VERIFICAR_RECORDATORIOS_MS = 30000
 
 
 class _PanelDialog(wx.Dialog):
@@ -81,6 +91,7 @@ class MainFrame(wx.Frame):
     _INDICE_CALCULADORA = 1
     _INDICE_CREDITOS = 2
     _INDICE_CALCULADORA_SIMPLE = 3
+    _INDICE_RECORDATORIOS = 4
 
     def __init__(self, parent, title):
         super().__init__(parent, title=title, size=(900, 650))
@@ -106,9 +117,10 @@ class MainFrame(wx.Frame):
         # "Historial de Créditos" (reporte_credito, ver CreditosPanel): es
         # una función de consulta diaria, no una configuración puntual, así
         # que también es una pestaña de primer nivel. Por eso acá SÍ vuelve
-        # un wx.Notebook (ahora con CUATRO pestañas: Casos, Calculadora de
-        # Crédito, Historial de Créditos, Calculadora) — las únicas pestañas
-        # reales de la app, todo lo demás sigue siendo diálogo modal.
+        # un wx.Notebook (ahora con CINCO pestañas: Casos, Calculadora de
+        # Crédito, Historial de Créditos, Calculadora, Recordatorios de
+        # Llamada) — las únicas pestañas reales de la app, todo lo demás
+        # sigue siendo diálogo modal.
         #
         # "Calculadora" (CalculadoraSimplePanel, 2026-09-07, pedido explícito
         # del usuario) es una calculadora aritmética genérica, sin relación
@@ -116,6 +128,14 @@ class MainFrame(wx.Frame):
         # TIPO_CAMBIO_FIJO — mismo criterio de módulo de uso diario, no de
         # configuración puntual, así que también es pestaña de primer nivel
         # y no un diálogo de menú.
+        #
+        # "Recordatorios de Llamada" (RecordatoriosPanel, 2026-09-07, pedido
+        # explícito del usuario tras rechazar Notificaciones por no llamar su
+        # atención de verdad) es igual de independiente — nada de lo que
+        # guarda tiene FK a cliente/caso — pero además es la primera pantalla
+        # de la app respaldada por un wx.Timer real corriendo todo el tiempo
+        # (ver _temporizador_recordatorios más abajo), no solo datos que se
+        # recalculan al entrar a la pestaña.
         self.notebook = wx.Notebook(self)
         nombre_accesible(self.notebook, "Módulos")
 
@@ -135,6 +155,15 @@ class MainFrame(wx.Frame):
         self.notebook.AddPage(self.creditos_panel, "Historial de Créditos")
         self.calculadora_simple_panel = CalculadoraSimplePanel(self.notebook)
         self.notebook.AddPage(self.calculadora_simple_panel, "Calculadora")
+        # "Recordatorios de Llamada" (2026-09-07, pedido explícito del
+        # usuario): agendar llamadas con una alarma real (ver
+        # _temporizador_recordatorios más abajo), deliberadamente aparte de
+        # Notificaciones — mismo criterio de "función de uso diario, no
+        # configuración puntual" ya aplicado a Calculadora de Crédito/
+        # Historial de Créditos/Calculadora, así que también es pestaña de
+        # primer nivel.
+        self.recordatorios_panel = RecordatoriosPanel(self.notebook)
+        self.notebook.AddPage(self.recordatorios_panel, "Recordatorios de Llamada")
         self.notebook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, self._on_cambiar_pestana)
 
         sizer = wx.BoxSizer(wx.VERTICAL)
@@ -152,6 +181,63 @@ class MainFrame(wx.Frame):
 
         self._crear_menu()
         self._crear_atajos()
+
+        # La alarma real de Recordatorios de Llamada (pedido explícito del
+        # usuario, "que suene pero que suene en serio", ver
+        # ui/recordatorio_alarma_dialog.py): primer wx.Timer de toda la app.
+        # Guard _dialogo_recordatorio_activo: un wx.Dialog modal sigue
+        # bombeando este mismo timer mientras está abierto, así que sin este
+        # guard un segundo tick durante los ~2.5s del sonido en ráfaga
+        # apilaría un segundo modal encima del primero.
+        self._dialogo_recordatorio_activo = False
+        # Expuesto como atributo (no una referencia directa a la clase en el
+        # método) para que las pruebas puedan reemplazarlo por un doble y
+        # verificar que se invoca sin abrir un modal real — mismo criterio de
+        # "punto de swap para pruebas" que ejecutar_en_segundo_plano en
+        # accesibilidad.py.
+        self._clase_dialogo_recordatorio = RecordatorioAlarmaDialog
+        self._temporizador_recordatorios = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self._on_verificar_recordatorios, self._temporizador_recordatorios)
+        self._temporizador_recordatorios.Start(_INTERVALO_VERIFICAR_RECORDATORIOS_MS)
+        self.Bind(wx.EVT_CLOSE, self._on_cerrar)
+        # También al abrir la app, sin esperar el primer ciclo del
+        # temporizador — un recordatorio ya vencido antes de que se abriera
+        # la app debe alarmar de inmediato, no recién a los 30s.
+        wx.CallAfter(self._on_verificar_recordatorios, None)
+
+    def _on_cerrar(self, event):
+        """Detiene el temporizador de recordatorios antes de cerrar — un
+        wx.Timer no se detiene solo porque su ventana dueña se destruya."""
+        self._temporizador_recordatorios.Stop()
+        event.Skip()
+
+    def _on_verificar_recordatorios(self, event):
+        """Tick del temporizador (cada 30s) + una vez al abrir la app (ver
+        __init__). Si ya hay un modal de alarma abierto, no hace nada (ver
+        el guard más arriba). Si encuentra recordatorios vencidos, los
+        muestra TODOS juntos en un solo RecordatorioAlarmaDialog (no uno por
+        fila) — mismo criterio que el resto de la app de agrupar en una sola
+        pantalla en vez de apilar varios modales."""
+        if self._dialogo_recordatorio_activo:
+            return
+
+        conn = get_connection()
+        try:
+            ejecutivo_actual = obtener_valor(conn, CLAVE_EJECUTIVO_ACTUAL)
+            vencidos = obtener_recordatorios_vencidos(conn, ejecutivo_actual)
+        finally:
+            conn.close()
+
+        if not vencidos:
+            return
+
+        self._dialogo_recordatorio_activo = True
+        try:
+            with self._clase_dialogo_recordatorio(self, vencidos) as dialogo:
+                dialogo.ShowModal()
+        finally:
+            self._dialogo_recordatorio_activo = False
+        self.recordatorios_panel.recargar()
 
     def _on_cambiar_pestana(self, event):
         """Igual que el patrón documentado que tenía la app cuando todo era
@@ -193,6 +279,8 @@ class MainFrame(wx.Frame):
             self.creditos_panel.recargar()
         elif pagina is self.calculadora_simple_panel:
             self.calculadora_simple_panel.recargar()
+        elif pagina is self.recordatorios_panel:
+            self.recordatorios_panel.recargar()
         anunciar_voz_nvda(self.notebook.GetPageText(indice))
         event.Skip()
 
@@ -288,9 +376,10 @@ class MainFrame(wx.Frame):
         "ir_a_casos"/"ir_a_calculadora"/"ir_a_creditos" (Ctrl+1/Ctrl+2/Ctrl+3,
         agregados 2026-08-16, pedido explícito del usuario: navegación rápida
         entre pestañas sin depender de Ctrl+Tab, que solo avanza/retrocede en
-        orden) y "ir_a_calculadora_simple" (Ctrl+4, agregado 2026-09-07,
-        mismo criterio, para la nueva pestaña "Calculadora") van directo a
-        self.notebook.SetSelection(indice) — confirmado
+        orden), "ir_a_calculadora_simple" (Ctrl+4, agregado 2026-09-07, mismo
+        criterio, para la pestaña "Calculadora") e "ir_a_recordatorios"
+        (Ctrl+5, agregado el mismo día, para "Recordatorios de Llamada") van
+        directo a self.notebook.SetSelection(indice) — confirmado
         empíricamente que wx.Notebook.SetSelection() SÍ dispara
         EVT_NOTEBOOK_PAGE_CHANGED en esta app (a diferencia de ChangeSelection(),
         que a propósito no lo hace), así que _on_cambiar_pestana() se encarga
@@ -306,6 +395,7 @@ class MainFrame(wx.Frame):
             "ir_a_calculadora": self._ir_a_calculadora,
             "ir_a_creditos": self._ir_a_creditos,
             "ir_a_calculadora_simple": self._ir_a_calculadora_simple,
+            "ir_a_recordatorios": self._ir_a_recordatorios,
         }
 
         entradas = []
@@ -381,6 +471,8 @@ class MainFrame(wx.Frame):
             self.creditos_panel.limpiar_busqueda()
         elif pagina is self.calculadora_simple_panel:
             self.calculadora_simple_panel.limpiar_formulario()
+        elif pagina is self.recordatorios_panel:
+            self.recordatorios_panel.limpiar_formulario()
 
     def _ir_a_casos(self):
         """Atajo GLOBAL Ctrl+1 (pedido explícito del usuario, 2026-08-16):
@@ -404,6 +496,11 @@ class MainFrame(wx.Frame):
         """Atajo GLOBAL Ctrl+4 (pedido explícito del usuario, 2026-09-07) —
         ver _ir_a_casos()."""
         self.notebook.SetSelection(self._INDICE_CALCULADORA_SIMPLE)
+
+    def _ir_a_recordatorios(self):
+        """Atajo GLOBAL Ctrl+5 (pedido explícito del usuario, 2026-09-07) —
+        ver _ir_a_casos()."""
+        self.notebook.SetSelection(self._INDICE_RECORDATORIOS)
 
     def _on_abrir_notificaciones(self, event):
         self._abrir_dialogo("Notificaciones", NotificacionesPanel)
@@ -478,4 +575,5 @@ class MainFrame(wx.Frame):
         self.calculadora_panel.recargar()
         self.creditos_panel.recargar()
         self.calculadora_simple_panel.recargar()
+        self.recordatorios_panel.recargar()
         self.SetStatusText("Listo")

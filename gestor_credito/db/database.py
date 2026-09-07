@@ -241,6 +241,53 @@ CREATE TABLE IF NOT EXISTS reporte_credito (
 CREATE INDEX IF NOT EXISTS idx_reporte_credito_cedula ON reporte_credito(cedula);
 CREATE INDEX IF NOT EXISTS idx_reporte_credito_estado ON reporte_credito(estado_credito);
 CREATE INDEX IF NOT EXISTS idx_reporte_credito_empresa ON reporte_credito(empresa_convenio);
+
+-- "Recordatorios de Llamada" (pestaña nueva, 2026-09-07, pedido explícito del
+-- usuario): agendar "te llamo tal día a tal hora" con una alarma real
+-- (wx.Timer + modal, ver ui/recordatorio_alarma_dialog.py), DELIBERADAMENTE
+-- aparte de Notificaciones ("nunca sirvió" para llamar la atención según el
+-- usuario). Sin FK a cliente/caso a propósito, mismo criterio de
+-- independencia que convenio_tasa/calculo_credito: cedula/nombre/celular/
+-- empresa_convenio son columnas propias de este recordatorio, no un vínculo
+-- obligatorio — buscar_datos_cliente_por_cedula() en db/recordatorios.py
+-- autocompleta esos campos si la cédula YA existe como cliente, pero si no
+-- existe el oficial los llena a mano sin fricción.
+CREATE TABLE IF NOT EXISTS recordatorio_llamada (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre TEXT NOT NULL,
+    cedula TEXT,
+    celular TEXT,
+    empresa_convenio TEXT,
+
+    -- Cita en HORA LOCAL puesta por el oficial (no un sello UTC del sistema
+    -- como el resto de las fechas de auditoría de la app) — fecha_llamar en
+    -- ISO 'AAAA-MM-DD', hora_llamar 'HH:MM' 24h. Ver db/recordatorios.py:
+    -- toda la lógica de "¿ya se cumplió?" se hace en Python con
+    -- datetime.now() local, nunca con datetime('now') de SQLite (UTC), para
+    -- no mezclar husos horarios con un dato que el usuario piensa en hora de
+    -- pared.
+    fecha_llamar TEXT NOT NULL,
+    hora_llamar TEXT NOT NULL,
+
+    -- ejecutivo_actual al crearlo (mismo patrón de scoping que caso.ejecutivo,
+    -- ver CLAUDE.md); NULL queda visible para todos los agentes (recordatorio
+    -- legado sin agente configurado en ese momento).
+    ejecutivo TEXT,
+
+    atendido INTEGER NOT NULL DEFAULT 0,
+    fecha_atendido TEXT,
+
+    -- Datetime local ISO 'AAAA-MM-DD HH:MM:SS', NULL = no pospuesto. Lo pisa
+    -- posponer_recordatorio() cuando el oficial presiona Escape/"Posponer" en
+    -- la ventana de alarma — mientras esta fecha siga en el futuro, el
+    -- recordatorio no se considera vencido aunque fecha_llamar/hora_llamar ya
+    -- hayan pasado.
+    pospuesto_hasta TEXT,
+
+    fecha_creacion TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_recordatorio_pendientes
+    ON recordatorio_llamada(atendido, fecha_llamar, hora_llamar);
 """
 
 # Tasas reales extraídas de la hoja "Convenios" del Excel de referencia
