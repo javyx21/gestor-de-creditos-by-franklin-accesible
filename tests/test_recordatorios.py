@@ -224,3 +224,13 @@ def test_buscar_datos_credito_por_cedula_usa_el_credito_mas_reciente(conn):
     datos = buscar_datos_credito_por_cedula(conn, "001-2222222-2")
 
     assert datos["empresa_convenio"] == "NICAES"
+
+
+def test_buscar_datos_credito_por_cedula_es_insensible_a_mayusculas(conn):
+    # Pedido explícito del usuario: la letra final de una cédula (p. ej.
+    # "...010Q") tiene que encontrarse sin importar si se busca en mayúscula
+    # o minúscula, nunca quedar sin resultado por eso.
+    _crear_credito(conn, "C-1", "2011307810010Q", "Cliente Con Letra", "MIDESA", "2026-01-01")
+
+    assert buscar_datos_credito_por_cedula(conn, "2011307810010q") is not None
+    assert buscar_datos_credito_por_cedula(conn, "2011307810010Q") is not None

@@ -8,6 +8,7 @@ import wx
 import pytest
 
 from gestor_credito.db import database
+from gestor_credito.db.recordatorios import listar_recordatorios
 from gestor_credito.ui.recordatorios_panel import RecordatoriosPanel, parsear_hora_ui
 
 
@@ -240,6 +241,29 @@ def test_autocompletar_por_cedula_sin_coincidencia_no_hace_nada(panel):
     panel._autocompletar_por_cedula()  # no debe lanzar
 
     assert panel.nombre_texto.GetValue() == ""
+
+
+def test_autocompletar_por_cedula_minuscula_encuentra_y_normaliza_a_mayuscula(panel, conn):
+    # Pedido explícito del usuario: minúscula/mayúscula debe ser indiferente
+    # (nunca un error), y el cuadro debe quedar en MAYÚSCULA después.
+    _crear_credito(conn, "2011307810010Q", "Cliente Con Letra", "MIDESA")
+    panel.cedula_texto.SetValue("2011307810010q")
+
+    panel._autocompletar_por_cedula()
+
+    assert panel.cedula_texto.GetValue() == "2011307810010Q"
+    assert panel.nombre_texto.GetValue() == "Cliente Con Letra"
+
+
+def test_guardar_normaliza_cedula_a_mayuscula_aunque_no_se_haya_buscado(panel, conn):
+    # Defensa extra: aunque por algún motivo _on_guardar se dispare sin
+    # pasar por _autocompletar_por_cedula, la cédula guardada nunca debe
+    # quedar en minúscula.
+    _llenar_formulario(panel, cedula="001-0000001-1q")
+
+    panel._on_guardar(None)
+
+    assert listar_recordatorios(conn)[0]["cedula"] == "001-0000001-1Q"
 
 
 def test_autocompletar_por_cedula_encontrado_avisa_por_voz(panel, conn, monkeypatch):

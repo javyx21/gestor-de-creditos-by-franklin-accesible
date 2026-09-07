@@ -198,10 +198,17 @@ class RecordatoriosPanel(wx.Panel):
            db.recordatorios.buscar_datos_credito_por_cedula. Esa tabla no
            tiene columna de teléfono, así que Celular nunca se autocompleta
            desde acá — el oficial siempre lo llena a mano.
+        4. La letra final de una cédula (p. ej. "...010Q") en minúscula no
+           encontraba nada — pedido explícito del usuario: tiene que ser
+           indiferente, nunca un error. Se normaliza a MAYÚSCULA acá mismo
+           (se reescribe el cuadro con .upper(), ver más abajo) antes de
+           buscar y de guardar, para que el dato quede siempre consistente
+           sin importar cómo se haya tecleado.
         """
-        cedula = self.cedula_texto.GetValue().strip()
+        cedula = self.cedula_texto.GetValue().strip().upper()
         if not cedula:
             return
+        self.cedula_texto.ChangeValue(cedula)
 
         # Si NADA se había cargado todavía (_cedula_cargada es None: primera
         # vez que se busca en este formulario), no hay nada de qué
@@ -247,7 +254,11 @@ class RecordatoriosPanel(wx.Panel):
 
     def _on_guardar(self, event):
         nombre = self.nombre_texto.GetValue().strip()
-        cedula = self.cedula_texto.GetValue().strip() or None
+        # .upper(): misma normalización que _autocompletar_por_cedula — por
+        # si "Guardar" se dispara sin haber pasado por ahí (defensa extra,
+        # no debería pasar en el flujo normal ya que salir del cuadro
+        # Cédula con Tab dispara EVT_KILL_FOCUS antes del clic del botón).
+        cedula = self.cedula_texto.GetValue().strip().upper() or None
         celular = self.celular_texto.GetValue().strip() or None
         empresa = self.empresa_texto.GetValue().strip() or None
         fecha_iso = parsear_fecha_ui(self.fecha_texto.GetValue())

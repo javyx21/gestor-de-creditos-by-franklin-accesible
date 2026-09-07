@@ -152,12 +152,22 @@ def buscar_datos_credito_por_cedula(conn, cedula):
     cédula (por fecha_desembolso). `reporte_credito` no tiene columna de
     teléfono — ese campo del formulario de Recordatorios de Llamada nunca se
     autocompleta desde acá, el oficial lo llena a mano. None si no hay ningún
-    crédito con esa cédula (el oficial llena todo a mano, tal como pidió)."""
+    crédito con esa cédula (el oficial llena todo a mano, tal como pidió).
+
+    UPPER() en ambos lados: pedido explícito del usuario — una cédula con la
+    letra final en minúscula (p. ej. "...010q") tiene que encontrar lo mismo
+    que "...010Q", nunca quedarse sin resultado por la diferencia de
+    mayúscula/minúscula. `recordatorios_panel.py` ya normaliza lo que
+    escribe el oficial a MAYÚSCULA antes de llamar acá y antes de guardar,
+    pero esto cubre además datos ya existentes en reporte_credito con otra
+    capitalización. Seguro con SQLite's UPPER() (a diferencia del caso ya
+    documentado en CLAUDE.md para nombres con ñ/acentos, que si falla): una
+    cédula solo trae dígitos y, como mucho, una letra A-Z sin tilde."""
     fila = conn.execute(
         """
         SELECT nombre_cliente, empresa_convenio
         FROM reporte_credito
-        WHERE cedula = ?
+        WHERE UPPER(cedula) = UPPER(?)
         ORDER BY fecha_desembolso DESC
         LIMIT 1
         """,
