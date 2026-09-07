@@ -6,7 +6,7 @@ from gestor_credito.db.configuracion import CLAVE_EJECUTIVO_ACTUAL, obtener_valo
 from gestor_credito.db.database import get_connection
 from gestor_credito.db.recordatorios import (
     actualizar_recordatorio,
-    buscar_datos_cliente_por_cedula,
+    buscar_datos_credito_por_cedula,
     crear_recordatorio,
     eliminar_recordatorio,
     esta_vencido,
@@ -177,7 +177,7 @@ class RecordatoriosPanel(wx.Panel):
         """Pedido explícito del usuario: "si coloco añadir cédula el mismo
         jale nombre del cliente empresa... si no existe pues lo añado yo".
 
-        Dos bugs reales corregidos acá (reporte del usuario, 2026-09-07):
+        Tres bugs reales corregidos acá (reportes del usuario, 2026-09-07):
         1. Rellenar Nombre/Celular/Empresa con SetValue() no avisaba NADA por
            voz — el foco se queda en Cédula, así que NVDA nunca anunciaba el
            cambio en esos otros campos (SetValue() no dispara ningún anuncio
@@ -191,6 +191,13 @@ class RecordatoriosPanel(wx.Panel):
            un cambio de Cédula respecto a lo ya cargado desengancha la fila
            seleccionada y limpia los campos que pertenecían a esa persona
            anterior, antes de buscar la nueva.
+        3. Buscaba en Casos (cliente/caso) — el usuario aclaró que tiene que
+           buscar en Historial de Créditos (reporte_credito, pestaña Ctrl+3)
+           en su lugar: "no me sale la persona... es en el histórico que
+           tienes que buscar, no en casos". Ver
+           db.recordatorios.buscar_datos_credito_por_cedula. Esa tabla no
+           tiene columna de teléfono, así que Celular nunca se autocompleta
+           desde acá — el oficial siempre lo llena a mano.
         """
         cedula = self.cedula_texto.GetValue().strip()
         if not cedula:
@@ -208,14 +215,17 @@ class RecordatoriosPanel(wx.Panel):
 
         conn = get_connection()
         try:
-            datos = buscar_datos_cliente_por_cedula(conn, cedula)
+            datos = buscar_datos_credito_por_cedula(conn, cedula)
         finally:
             conn.close()
 
         self._cedula_cargada = cedula
 
         if datos is None:
-            mensaje = f"No se encontró ningún cliente con la cédula {cedula}. Completá los datos a mano."
+            mensaje = (
+                f"No se encontró ningún crédito con la cédula {cedula} en Historial de "
+                "Créditos. Completá los datos a mano."
+            )
             self.mensaje_texto.SetLabel(mensaje)
             self.GetTopLevelParent().SetStatusText(mensaje)
             anunciar_voz_nvda(mensaje)

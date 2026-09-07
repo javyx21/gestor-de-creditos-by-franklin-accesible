@@ -198,41 +198,40 @@ def test_limpiar_formulario_reproduce_sonido_y_limpia_campos(panel, monkeypatch)
 
 
 # --- Autocompletado por cédula --------------------------------------------------
+# Busca en Historial de Créditos (reporte_credito), NO en Casos — corregido
+# 2026-09-07 tras un reporte real del usuario ("es en el histórico que
+# tienes que buscar, no en casos"). reporte_credito no tiene columna de
+# teléfono, así que Celular nunca se autocompleta desde acá.
 
-def _crear_cliente_con_caso(conn, cedula, nombre, telefono, empresa):
-    cur = conn.execute(
-        "INSERT INTO cliente (cedula, nombre, telefono) VALUES (?, ?, ?)",
-        (cedula, nombre, telefono),
-    )
-    cliente_id = cur.lastrowid
+def _crear_credito(conn, cedula, nombre_cliente, empresa, no_credito="C-1"):
     conn.execute(
-        "INSERT INTO caso (cliente_id, clave_caso, empresa_convenio, fecha_registro) "
-        "VALUES (?, 'P-1', ?, '2026-01-01')",
-        (cliente_id, empresa),
+        "INSERT INTO reporte_credito (no_credito, cedula, nombre_cliente, empresa_convenio, "
+        "fecha_desembolso) VALUES (?, ?, ?, ?, '2026-01-01')",
+        (no_credito, cedula, nombre_cliente, empresa),
     )
     conn.commit()
 
 
 def test_autocompletar_por_cedula_rellena_campos_vacios(panel, conn):
-    _crear_cliente_con_caso(conn, "001-9999999-9", "Cliente Existente", "8098887777", "NICAES")
+    _crear_credito(conn, "001-9999999-9", "Cliente Existente", "NICAES")
     panel.cedula_texto.SetValue("001-9999999-9")
 
     panel._autocompletar_por_cedula()
 
     assert panel.nombre_texto.GetValue() == "Cliente Existente"
-    assert panel.celular_texto.GetValue() == "8098887777"
+    assert panel.celular_texto.GetValue() == ""  # reporte_credito no tiene teléfono
     assert panel.empresa_texto.GetValue() == "NICAES"
 
 
 def test_autocompletar_por_cedula_no_pisa_campo_ya_escrito(panel, conn):
-    _crear_cliente_con_caso(conn, "001-9999999-9", "Cliente Existente", "8098887777", "NICAES")
+    _crear_credito(conn, "001-9999999-9", "Cliente Existente", "NICAES")
     panel.cedula_texto.SetValue("001-9999999-9")
     panel.nombre_texto.SetValue("Nombre Escrito A Mano")
 
     panel._autocompletar_por_cedula()
 
     assert panel.nombre_texto.GetValue() == "Nombre Escrito A Mano"
-    assert panel.celular_texto.GetValue() == "8098887777"
+    assert panel.empresa_texto.GetValue() == "NICAES"
 
 
 def test_autocompletar_por_cedula_sin_coincidencia_no_hace_nada(panel):
@@ -251,7 +250,7 @@ def test_autocompletar_por_cedula_encontrado_avisa_por_voz(panel, conn, monkeypa
     monkeypatch.setattr(
         "gestor_credito.ui.recordatorios_panel.anunciar_voz_nvda", lambda texto: voces.append(texto)
     )
-    _crear_cliente_con_caso(conn, "001-9999999-9", "Cliente Existente", "8098887777", "NICAES")
+    _crear_credito(conn, "001-9999999-9", "Cliente Existente", "NICAES")
     panel.cedula_texto.SetValue("001-9999999-9")
 
     panel._autocompletar_por_cedula()

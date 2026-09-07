@@ -1,11 +1,13 @@
 """Capa de datos de "Recordatorios de Llamada" — pestaña deliberadamente
 aparte de Notificaciones (ver CLAUDE.md: el usuario la rechazó por no llamar
 su atención de verdad). Un recordatorio es solo nombre/cédula/celular/empresa
-más fecha y hora a llamar, sin FK a cliente/caso — mismo criterio de
-independencia que convenio_tasa/calculo_credito. buscar_datos_cliente_por_cedula
-es un asistente de autocompletado opcional (ver recordatorios_panel.py), nunca
-un vínculo obligatorio: si la cédula no existe todavía como cliente, el
-oficial llena los datos a mano.
+más fecha y hora a llamar, sin FK a cliente/caso/reporte_credito — mismo
+criterio de independencia que convenio_tasa/calculo_credito.
+buscar_datos_credito_por_cedula es un asistente de autocompletado opcional
+(ver recordatorios_panel.py), nunca un vínculo obligatorio: busca en
+Historial de Créditos (reporte_credito), NO en Casos (corregido 2026-09-07,
+reporte real del usuario) — si la cédula no tiene ningún crédito reportado
+ahí, el oficial llena los datos a mano.
 
 fecha_llamar/hora_llamar son una cita en HORA LOCAL puesta por el oficial, a
 diferencia de las columnas de alertas.py (documentos_completos_fecha,
@@ -137,23 +139,30 @@ def obtener_recordatorios_vencidos(conn, ejecutivo_actual=None, ahora=None):
     return vencidos
 
 
-def buscar_datos_cliente_por_cedula(conn, cedula):
-    """Autocompletado pedido explícitamente por el usuario: si `cedula` ya
-    existe como cliente, trae su nombre/teléfono y la empresa convenio de su
-    caso más reciente (por fecha_registro) — cédula es la clave natural
-    durable del dominio (ver CLAUDE.md). None si no hay ningún cliente con esa
-    cédula (el oficial la llena a mano, tal como pidió)."""
+def buscar_datos_credito_por_cedula(conn, cedula):
+    """Autocompletado pedido explícitamente por el usuario: busca en
+    Historial de Créditos (`reporte_credito`, pestaña Ctrl+3), NO en Casos
+    (`cliente`/`caso`) — corregido 2026-09-07 tras un reporte real del
+    usuario ("estás buscando en los clientes de Casos... es en el histórico
+    que tienes que buscar"): la persona a la que hay que llamar puede no
+    existir en Casos, pero si ya tiene un crédito reportado en Historial de
+    Créditos, es de ahí de donde tiene que salir el nombre/empresa.
+
+    Trae nombre_cliente/empresa_convenio del crédito más reciente de esa
+    cédula (por fecha_desembolso). `reporte_credito` no tiene columna de
+    teléfono — ese campo del formulario de Recordatorios de Llamada nunca se
+    autocompleta desde acá, el oficial lo llena a mano. None si no hay ningún
+    crédito con esa cédula (el oficial llena todo a mano, tal como pidió)."""
     fila = conn.execute(
         """
-        SELECT cliente.nombre, cliente.telefono, caso.empresa_convenio
-        FROM cliente
-        LEFT JOIN caso ON caso.cliente_id = cliente.id
-        WHERE cliente.cedula = ?
-        ORDER BY caso.fecha_registro DESC
+        SELECT nombre_cliente, empresa_convenio
+        FROM reporte_credito
+        WHERE cedula = ?
+        ORDER BY fecha_desembolso DESC
         LIMIT 1
         """,
         (cedula,),
     ).fetchone()
     if fila is None:
         return None
-    return {"nombre": fila[0], "telefono": fila[1], "empresa_convenio": fila[2]}
+    return {"nombre": fila[0], "telefono": None, "empresa_convenio": fila[1]}

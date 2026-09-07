@@ -5,7 +5,7 @@ import pytest
 from gestor_credito.db import database
 from gestor_credito.db.recordatorios import (
     actualizar_recordatorio,
-    buscar_datos_cliente_por_cedula,
+    buscar_datos_credito_por_cedula,
     crear_recordatorio,
     eliminar_recordatorio,
     esta_vencido,
@@ -186,45 +186,41 @@ def test_posponer_recordatorio_lo_saca_de_vencidos_hasta_que_pase_el_plazo(conn)
     assert obtener_recordatorios_vencidos(conn, ahora=ahora + timedelta(minutes=6)) != []
 
 
-# --- buscar_datos_cliente_por_cedula -----------------------------------------
+# --- buscar_datos_credito_por_cedula -----------------------------------------
+# Busca en Historial de Créditos (reporte_credito), NO en Casos — corregido
+# 2026-09-07 tras un reporte real del usuario ("estás buscando en los
+# clientes de Casos... es en el histórico que tienes que buscar").
 
-def _crear_cliente(conn, cedula, nombre, telefono="8091234567"):
-    cur = conn.execute(
-        "INSERT INTO cliente (cedula, nombre, telefono) VALUES (?, ?, ?)",
-        (cedula, nombre, telefono),
-    )
-    conn.commit()
-    return cur.lastrowid
-
-
-def _crear_caso(conn, cliente_id, empresa_convenio, fecha_registro, clave_caso):
+def _crear_credito(conn, no_credito, cedula, nombre_cliente, empresa_convenio, fecha_desembolso):
     conn.execute(
         """
-        INSERT INTO caso (cliente_id, clave_caso, empresa_convenio, fecha_registro)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO reporte_credito
+            (no_credito, cedula, nombre_cliente, empresa_convenio, fecha_desembolso)
+        VALUES (?, ?, ?, ?, ?)
         """,
-        (cliente_id, clave_caso, empresa_convenio, fecha_registro),
+        (no_credito, cedula, nombre_cliente, empresa_convenio, fecha_desembolso),
     )
     conn.commit()
 
 
-def test_buscar_datos_cliente_por_cedula_sin_coincidencia(conn):
-    assert buscar_datos_cliente_por_cedula(conn, "000-0000000-0") is None
+def test_buscar_datos_credito_por_cedula_sin_coincidencia(conn):
+    assert buscar_datos_credito_por_cedula(conn, "000-0000000-0") is None
 
 
-def test_buscar_datos_cliente_por_cedula_sin_ningun_caso(conn):
-    _crear_cliente(conn, "001-1111111-1", "Cliente Sin Caso")
+def test_buscar_datos_credito_por_cedula_no_autocompleta_telefono(conn):
+    # reporte_credito no tiene columna de teléfono — el campo Celular del
+    # formulario de Recordatorios de Llamada siempre queda para llenar a mano.
+    _crear_credito(conn, "C-1", "001-1111111-1", "Cliente Con Credito", "MIDESA", "2026-01-01")
 
-    datos = buscar_datos_cliente_por_cedula(conn, "001-1111111-1")
+    datos = buscar_datos_credito_por_cedula(conn, "001-1111111-1")
 
-    assert datos == {"nombre": "Cliente Sin Caso", "telefono": "8091234567", "empresa_convenio": None}
+    assert datos == {"nombre": "Cliente Con Credito", "telefono": None, "empresa_convenio": "MIDESA"}
 
 
-def test_buscar_datos_cliente_por_cedula_usa_el_caso_mas_reciente(conn):
-    cliente_id = _crear_cliente(conn, "001-2222222-2", "Cliente Con Casos")
-    _crear_caso(conn, cliente_id, "MIDESA", "2025-01-01", "P-1")
-    _crear_caso(conn, cliente_id, "NICAES", "2026-01-01", "P-2")
+def test_buscar_datos_credito_por_cedula_usa_el_credito_mas_reciente(conn):
+    _crear_credito(conn, "C-1", "001-2222222-2", "Cliente Con Creditos", "MIDESA", "2025-01-01")
+    _crear_credito(conn, "C-2", "001-2222222-2", "Cliente Con Creditos", "NICAES", "2026-01-01")
 
-    datos = buscar_datos_cliente_por_cedula(conn, "001-2222222-2")
+    datos = buscar_datos_credito_por_cedula(conn, "001-2222222-2")
 
     assert datos["empresa_convenio"] == "NICAES"
