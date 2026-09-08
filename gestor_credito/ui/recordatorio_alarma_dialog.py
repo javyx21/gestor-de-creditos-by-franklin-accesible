@@ -15,6 +15,17 @@ MINUTOS_POSPONER = 5
 _REPETICIONES_SONIDO = 3
 _INTERVALO_SONIDO_MS = 800
 
+# Pedido explícito del usuario, corregido 2026-09-08 tras un reporte real:
+# "se queda esperando que le dé escape y no vuelve a sonar" — este diálogo
+# tiene que repetirse SOLO cada 5 minutos mientras siga abierto sin
+# resolverse, sin importar si el oficial lo ignoró del todo, se fue a otra
+# ventana, o no interactuó para nada — no puede depender de que alguien
+# presione Escape/Posponer para "reactivarlo". Mismos 5 minutos que
+# MINUTOS_POSPONER, a propósito: el mismo período rige tanto si el diálogo
+# se cerró (MainFrame lo reabre pasado ese tiempo, ver posponer_recordatorio)
+# como si se quedó abierto sin tocar (este mismo diálogo se repite solo).
+_INTERVALO_REPETICION_MS = MINUTOS_POSPONER * 60 * 1000
+
 COLUMNAS = ["Fecha", "Hora", "Nombre", "Cédula", "Celular", "Empresa", "Comentarios"]
 
 
@@ -26,12 +37,22 @@ class RecordatorioAlarmaDialog(wx.Dialog):
 
     Al mostrarse suena 3 veces SONIDO_ACTUALIZACION_DISPONIBLE (mismo sonido
     de "hay actualización disponible", pedido explícito) y anuncia por voz a
-    quién hay que llamar. "&Marcar como atendida" apaga la alarma para
-    siempre para la fila seleccionada; "&Posponer 5 minutos" (id=wx.ID_CANCEL,
-    así Escape lo dispara gratis vía el manejo nativo de wx.Dialog, sin
-    EVT_CHAR_HOOK a mano) pospone TODO lo que siga listado acá — el
-    temporizador de MainFrame vuelve a mostrar este mismo ciclo (sonido x3 +
-    voz + modal) pasado ese tiempo si para entonces sigue sin atenderse."""
+    quién hay que llamar — y ESTE MISMO diálogo se repite solo cada 5 minutos
+    (sonido x3 + voz otra vez, sin cerrarse) mientras siga abierto sin
+    resolverse (ver _temporizador_repeticion), sin depender de ninguna
+    interacción: pedido explícito del usuario tras un reporte real ("se queda
+    esperando que le dé escape y no vuelve a sonar... a menos que haga algo
+    diferente siempre sí o sí suena cada cinco minutos").
+
+    "&Marcar como atendida" apaga la alarma para siempre para la fila
+    seleccionada; "&Posponer 5 minutos" (id=wx.ID_CANCEL, así Escape lo
+    dispara gratis vía el manejo nativo de wx.Dialog, sin EVT_CHAR_HOOK a
+    mano — y SetDefault(), ver más abajo, así también es lo que activa un
+    Enter dado con el foco en cualquier otro control) pospone TODO lo que
+    siga listado acá y CIERRA esta ventana — el temporizador de MainFrame
+    vuelve a abrir un diálogo nuevo pasado ese tiempo si para entonces sigue
+    sin atenderse, mismo resultado final (vuelve a sonar en 5 minutos) que
+    dejarlo abierto sin tocar."""
 
     def __init__(self, parent, recordatorios):
         super().__init__(
@@ -66,6 +87,17 @@ class RecordatorioAlarmaDialog(wx.Dialog):
         )
         self.Bind(wx.EVT_BUTTON, self._on_posponer, self.posponer_btn)
         activar_con_enter(self.posponer_btn)
+        # SetDefault(): un wx.Dialog activa un "botón por defecto" con Enter
+        # sin importar qué control tenga el foco (p. ej. la lista) — sin fijar
+        # esto explícitamente, wx elige el primer botón creado
+        # ("&Marcar como atendida"), lo que podía marcar por accidente una
+        # llamada como atendida con solo un Enter mal dado (bug real
+        # reportado por el usuario: la alarma dejó de sonar sin haber tocado
+        # "Marcar como atendida" a propósito). El default tiene que ser
+        # siempre la acción SEGURA — pedido explícito del usuario: "tiene que
+        # seguir sonando mientras no le diga... ya lo hice" — nunca la que
+        # apaga el recordatorio para siempre.
+        self.posponer_btn.SetDefault()
         fila_botones.Add(self.posponer_btn, 0)
 
         sizer.Add(fila_botones, 0, wx.ALL, 8)
@@ -84,10 +116,29 @@ class RecordatorioAlarmaDialog(wx.Dialog):
         self._sonidos_reproducidos = 0
         self._temporizador_sonido = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self._on_tick_sonido, self._temporizador_sonido)
+
+        # Repite el aviso completo (ráfaga + voz) cada 5 minutos EL SOLO,
+        # mientras este diálogo siga abierto — ver docstring de la clase y
+        # _on_repetir_alarma. Independiente del temporizador de 30s de
+        # MainFrame (que solo actúa cuando este diálogo ya se cerró).
+        self._temporizador_repeticion = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self._on_repetir_alarma, self._temporizador_repeticion)
+        self._temporizador_repeticion.Start(_INTERVALO_REPETICION_MS)
+
+        self._sonar_y_anunciar()
+
+    def _sonar_y_anunciar(self):
+        """Un ciclo completo de alarma: ráfaga de 3 sonidos + anuncio por
+        voz. Se llama al mostrarse el diálogo por primera vez Y desde
+        _on_repetir_alarma cada 5 minutos — mismo aviso, sin cerrar ni volver
+        a construir la ventana."""
+        self._sonidos_reproducidos = 0
         self._on_tick_sonido(None)
         self._temporizador_sonido.Start(_INTERVALO_SONIDO_MS)
-
         anunciar_voz_nvda(self._resumen_hablado())
+
+    def _on_repetir_alarma(self, event):
+        self._sonar_y_anunciar()
 
     def _resumen_hablado(self):
         primero = self._recordatorios[0]
@@ -141,6 +192,7 @@ class RecordatorioAlarmaDialog(wx.Dialog):
 
         if not self._recordatorios:
             self._temporizador_sonido.Stop()
+            self._temporizador_repeticion.Stop()
             self.EndModal(wx.ID_OK)
             return
 
@@ -163,4 +215,5 @@ class RecordatorioAlarmaDialog(wx.Dialog):
             conn.close()
 
         self._temporizador_sonido.Stop()
+        self._temporizador_repeticion.Stop()
         event.Skip()

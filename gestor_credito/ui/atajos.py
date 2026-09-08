@@ -414,9 +414,32 @@ ATAJOS = [
         None,
     ),
     (
+        None, None, "Ctrl+Shift+A (en Recordatorios de Llamada)", "Recordatorios de Llamada",
+        "Revela el bloque de campos (Cédula...Comentarios) si estaba oculto y "
+        "deja el foco en Cédula — pedido explícito del usuario, 2026-09-07: "
+        "\"mientras no vayamos a añadir a alguien estos campos deben de estar "
+        "ocultos\". Atajo LOCAL de esta pestaña (no pasa por el acelerador "
+        "global de MainFrame), mismo mecanismo EVT_CHAR_HOOK a nivel de panel "
+        "que usa Calculadora para sus propios Ctrl+Shift+<letra>",
+        None,
+    ),
+    (
         None, None, "Alt+G (en Recordatorios de Llamada)", "Recordatorios de Llamada",
-        "Agregar un recordatorio nuevo, o guardar los cambios del ya "
-        "seleccionado (el mismo botón cambia de etiqueta según el caso)",
+        "El único botón visible por defecto: si el bloque de campos está "
+        "oculto, lo revela (igual que Ctrl+Shift+A); si ya está visible, "
+        "agrega el recordatorio nuevo o guarda los cambios del ya "
+        "seleccionado (el mismo botón cambia de etiqueta según el caso) — "
+        "pedido explícito del usuario: un solo botón, no uno aparte solo "
+        "para revelar el formulario",
+        None,
+    ),
+    (
+        None, None, "Ctrl+Enter (con foco en Comentarios, en Recordatorios de Llamada)",
+        "Recordatorios de Llamada",
+        "Guardar de una vez, como si se hiciera Tab hasta el botón y se lo "
+        "presionara — pedido explícito del usuario. Enter SOLO (sin Ctrl) "
+        "sigue haciendo un salto de línea normal en ese cuadro, sin guardar "
+        "nada",
         None,
     ),
     (

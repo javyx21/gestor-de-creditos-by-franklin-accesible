@@ -93,8 +93,49 @@ class RecordatoriosPanel(wx.Panel):
         self.SetSizer(sizer)
         self._cargar_recordatorios()
 
+        # Ctrl+Shift+A (pedido explícito del usuario, 2026-09-07): revela el
+        # bloque de alta/edición y deja el foco en Cédula, sin importar qué
+        # control de esta pestaña tenga el foco en ese momento — mismo
+        # mecanismo EVT_CHAR_HOOK a nivel de panel que ya usa
+        # CalculadoraSimplePanel para sus propios atajos Ctrl+Shift+<letra>,
+        # sin chequeo de FindFocus() a propósito.
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_atajo)
+
+    def _on_atajo(self, event):
+        if (
+            event.ControlDown() and event.ShiftDown() and not event.AltDown()
+            and event.GetKeyCode() == ord("A")
+        ):
+            self._mostrar_formulario()
+            return
+        event.Skip()
+
     def _crear_formulario(self):
-        box = wx.StaticBoxSizer(wx.VERTICAL, self, "Agregar / editar recordatorio")
+        """Devuelve un sizer con DOS piezas, pedido explícito del usuario
+        (2026-09-07): mientras no se esté agendando a nadie, los campos
+        (Cédula...Comentarios, Marcar atendida, Eliminar) tienen que estar
+        OCULTOS — no solo deshabilitados, fuera de la vista y del orden de
+        Tab — y el botón que agrega/guarda ("A&gregar recordatorio"/"&Guardar
+        cambios") tiene que quedar SIEMPRE visible fuera de ese bloque (antes
+        vivía adentro, lo cual lo dejaba oculto también — sin forma de
+        activarlo — corregido tras el reporte del usuario). Ese mismo botón
+        hace doble función (ver _on_click_guardar): si el bloque está
+        oculto, lo revela y deja el foco en Cédula; si ya está visible,
+        guarda de verdad.
+
+        self._panel_formulario envuelve el wx.StaticBoxSizer completo en un
+        wx.Panel propio — Show()/Hide() sobre ESE panel oculta/revela el
+        StaticBox y todos sus campos de un solo golpe (un wx.StaticBoxSizer
+        por sí solo no tiene una única ventana para esconder)."""
+        externo = wx.BoxSizer(wx.VERTICAL)
+
+        self.guardar_btn = wx.Button(self, label="A&gregar recordatorio")
+        self.guardar_btn.Bind(wx.EVT_BUTTON, self._on_click_guardar)
+        activar_con_enter(self.guardar_btn)
+        externo.Add(self.guardar_btn, 0, wx.BOTTOM, 8)
+
+        self._panel_formulario = wx.Panel(self)
+        box = wx.StaticBoxSizer(wx.VERTICAL, self._panel_formulario, "Agendar recordatorio")
         contenedor = box.GetStaticBox()
 
         fila1 = wx.BoxSizer(wx.HORIZONTAL)
@@ -151,20 +192,16 @@ class RecordatoriosPanel(wx.Panel):
         comentarios_label = wx.StaticText(contenedor, label="Comentarios (contexto de la llamada):")
         self.comentarios_texto = wx.TextCtrl(contenedor, style=wx.TE_MULTILINE, size=(-1, 60))
         nombre_accesible(self.comentarios_texto, "Comentarios")
+        # Enter solo: salto de línea normal (comportamiento nativo de un
+        # TextCtrl multilínea, no se toca). Ctrl+Enter: guarda de una vez,
+        # como si se hiciera Tab hasta el botón y se lo presionara — pedido
+        # explícito del usuario, 2026-09-07.
+        self.comentarios_texto.Bind(wx.EVT_KEY_DOWN, self._on_tecla_comentarios)
         fila4.Add(comentarios_label, 0, wx.BOTTOM, 4)
         fila4.Add(self.comentarios_texto, 0, wx.EXPAND)
         box.Add(fila4, 0, wx.EXPAND | wx.BOTTOM, 8)
 
         fila_botones = wx.BoxSizer(wx.HORIZONTAL)
-
-        # El mismo botón alterna etiqueta ("A&gregar recordatorio" / "&Guardar
-        # cambios") según si hay una fila seleccionada — mnemónico "g" en
-        # ambos casos, mismo criterio "Alt+G para guardar" ya documentado en
-        # otros módulos (Casos, Configuración).
-        self.guardar_btn = wx.Button(contenedor, label="A&gregar recordatorio")
-        self.guardar_btn.Bind(wx.EVT_BUTTON, self._on_guardar)
-        activar_con_enter(self.guardar_btn)
-        fila_botones.Add(self.guardar_btn, 0, wx.RIGHT, 8)
 
         self.marcar_atendido_btn = wx.Button(contenedor, label="&Marcar como atendida")
         self.marcar_atendido_btn.Bind(wx.EVT_BUTTON, self._on_marcar_atendido)
@@ -180,7 +217,11 @@ class RecordatoriosPanel(wx.Panel):
 
         box.Add(fila_botones, 0)
 
-        return box
+        self._panel_formulario.SetSizer(box)
+        self._panel_formulario.Hide()
+        externo.Add(self._panel_formulario, 0, wx.EXPAND)
+
+        return externo
 
     # ---- Autocompletado por cédula -----------------------------------------
 
@@ -265,9 +306,58 @@ class RecordatoriosPanel(wx.Panel):
         self.GetTopLevelParent().SetStatusText(mensaje)
         anunciar_voz_nvda(mensaje)
 
+    # ---- Mostrar/ocultar el bloque de alta/edición ---------------------------
+
+    def _mostrar_formulario(self):
+        """Revela Cédula...Comentarios/Marcar atendida/Eliminar y deja el
+        foco en Cédula — vía Ctrl+Shift+A, o al presionar "Agregar
+        recordatorio" mientras el bloque está oculto (ver
+        _on_click_guardar). No limpia nada: si ya había algo tecleado, se
+        respeta (solo importa cuando el bloque YA estaba oculto, y el
+        bloque solo queda oculto con los campos ya vacíos, ver
+        _ocultar_formulario)."""
+        self._panel_formulario.Show()
+        self.Layout()
+        self.cedula_texto.SetFocus()
+
+    def _ocultar_formulario(self):
+        """Vuelve al estado por defecto pedido explícitamente por el
+        usuario: "mientras no vayamos a añadir a alguien estos campos deben
+        de estar ocultos". Se llama después de completar cualquier acción
+        sobre un recordatorio (guardar, marcar atendida, eliminar) y desde
+        Ctrl+D — nunca a medias con datos sin guardar todavía en pantalla."""
+        self._panel_formulario.Hide()
+        self.Layout()
+
     # ---- Alta / edición -----------------------------------------------------
 
-    def _on_guardar(self, event):
+    def _on_click_guardar(self, event):
+        """El único botón visible por defecto hace doble función (pedido
+        explícito del usuario tras señalar que tener un botón aparte solo
+        para revelar el formulario era redundante): si el bloque de campos
+        todavía está oculto, este clic lo revela (equivalente a Ctrl+Shift+A)
+        en vez de intentar guardar nada; si ya está visible, sí guarda de
+        verdad."""
+        if not self._panel_formulario.IsShown():
+            self._mostrar_formulario()
+            return
+        self._guardar()
+
+    def _on_tecla_comentarios(self, event):
+        """Ctrl+Enter en el cuadro Comentarios guarda de una vez (como si se
+        hiciera Tab hasta el botón y se lo presionara) — pedido explícito
+        del usuario. Enter SOLO (sin Ctrl) se deja pasar sin tocar
+        (event.Skip()) para que el TextCtrl multilínea inserte su salto de
+        línea normal, comportamiento nativo que no hay que romper."""
+        if (
+            event.GetKeyCode() in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER)
+            and event.ControlDown()
+        ):
+            self._guardar()
+            return
+        event.Skip()
+
+    def _guardar(self):
         nombre = self.nombre_texto.GetValue().strip()
         # .upper(): misma normalización que _autocompletar_por_cedula — por
         # si "Guardar" se dispara sin haber pasado por ahí (defensa extra,
@@ -309,6 +399,7 @@ class RecordatoriosPanel(wx.Panel):
             conn.close()
 
         self._limpiar_formulario_interno()
+        self._ocultar_formulario()
         self._cargar_recordatorios()
         self.mensaje_texto.SetLabel(mensaje)
 
@@ -323,6 +414,7 @@ class RecordatoriosPanel(wx.Panel):
             conn.close()
 
         self._limpiar_formulario_interno()
+        self._ocultar_formulario()
         self._cargar_recordatorios()
         self.mensaje_texto.SetLabel("Recordatorio marcado como atendido.")
 
@@ -346,6 +438,7 @@ class RecordatoriosPanel(wx.Panel):
 
         reproducir_sonido(SONIDO_BORRAR)
         self._limpiar_formulario_interno()
+        self._ocultar_formulario()
         self._cargar_recordatorios()
         self.mensaje_texto.SetLabel(f"Recordatorio de {nombre} eliminado.")
 
@@ -360,8 +453,11 @@ class RecordatoriosPanel(wx.Panel):
     def limpiar_formulario(self):
         """Atajo GLOBAL Ctrl+D cuando esta es la pestaña activa (ver
         MainFrame._limpiar_segun_pestana_activa) — mismo criterio del resto
-        de la app."""
+        de la app. También vuelve a ocultar el bloque de campos: Ctrl+D es
+        "cancelar/empezar de cero", así que si estaba abierto por Ctrl+Shift+A
+        o por haber seleccionado una fila, se cierra de nuevo."""
         self._limpiar_formulario_interno()
+        self._ocultar_formulario()
         reproducir_sonido(SONIDO_BORRAR)
 
     def enfocar_resultados(self):
@@ -455,6 +551,15 @@ class RecordatoriosPanel(wx.Panel):
     def _on_seleccionar(self, event):
         indice = event.GetIndex()
         fila = self._filas[indice]
+
+        # Revela el bloque de campos para poder editar la fila (sin mover el
+        # foco: EVT_LIST_ITEM_SELECTED dispara en cada flecha mientras se
+        # navega la lista, así que robarle el foco a la lista en cada tecla
+        # sería un desastre — el foco se queda donde estaba, normalmente en
+        # la propia lista).
+        if not self._panel_formulario.IsShown():
+            self._panel_formulario.Show()
+            self.Layout()
 
         self._recordatorio_seleccionado_id = fila["id"]
         self._cedula_cargada = fila["cedula"] or ""

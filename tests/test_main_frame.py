@@ -150,8 +150,11 @@ def test_enfocar_resultados_en_recordatorios_llama_su_propio_metodo(frame, monke
     # en la lista, ese lo dejaremos como comando universal en las listas de
     # clientes menos en las calculadoras".
     llamadas = []
-    monkeypatch.setattr(frame.recordatorios_panel, "enfocar_resultados", lambda: llamadas.append(1))
     _ir_a_pestana(frame, frame.recordatorios_panel)
+    # Entrar a la pestaña YA llama enfocar_resultados() sola (ver
+    # test_ir_a_recordatorios_tambien_enfoca_la_lista) — el monkeypatch se
+    # aplica DESPUÉS de entrar para no contar esa llamada acá.
+    monkeypatch.setattr(frame.recordatorios_panel, "enfocar_resultados", lambda: llamadas.append(1))
 
     frame._enfocar_resultados_segun_pestana_activa()
 
@@ -229,6 +232,20 @@ def test_ir_a_recordatorios_recarga_datos_y_anuncia_por_voz(frame, monkeypatch):
 
     assert llamadas_recargar == [1]
     assert llamadas_voz == ["Recordatorios de Llamada"]
+
+
+def test_ir_a_recordatorios_tambien_enfoca_la_lista(frame, monkeypatch):
+    # Pedido explícito del usuario, 2026-09-07: "si entro en el apartado me
+    # tiene que mandar de una a la lista... cada vez que entre ahí me tiene
+    # que dejar" — a diferencia de Casos/Historial de Créditos, que solo
+    # recargan al entrar sin mover el foco.
+    llamadas = []
+    monkeypatch.setattr(frame.recordatorios_panel, "enfocar_resultados", lambda: llamadas.append(1))
+    _ir_a_pestana(frame, frame.casos_panel)
+
+    frame._ir_a_recordatorios()
+
+    assert llamadas == [1]
 
 
 # ---- Alarma real de Recordatorios de Llamada (wx.Timer, 2026-09-07) --------

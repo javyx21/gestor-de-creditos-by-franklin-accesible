@@ -281,6 +281,14 @@ class MainFrame(wx.Frame):
             self.calculadora_simple_panel.recargar()
         elif pagina is self.recordatorios_panel:
             self.recordatorios_panel.recargar()
+            # Pedido explícito del usuario, 2026-09-07: "si entro en el
+            # apartado me tiene que mandar de una [vez] a la lista... cada
+            # vez que entre ahí me tiene que dejar [en la lista]" — a
+            # diferencia de Casos/Historial de Créditos (que no mueven el
+            # foco solos al entrar, solo recargan), acá el foco cae directo
+            # en la lista de recordatorios cada vez que se llega a esta
+            # pestaña (Ctrl+5, Ctrl+Tab o clic), sin depender de Ctrl+R.
+            self.recordatorios_panel.enfocar_resultados()
         anunciar_voz_nvda(self.notebook.GetPageText(indice))
         event.Skip()
 

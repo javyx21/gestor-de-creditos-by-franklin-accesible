@@ -82,6 +82,59 @@ def test_suena_tres_veces_en_total(app, conn, monkeypatch):
         d.Destroy()
 
 
+def test_repetir_alarma_vuelve_a_sonar_y_anunciar_sin_cerrar(app, conn, monkeypatch):
+    # Bug real reportado por el usuario: "se queda esperando que le dé
+    # escape y no vuelve a sonar... a menos que haga algo diferente siempre
+    # sí o sí suena cada cinco minutos" — el diálogo tiene que repetirse
+    # SOLO, sin que nadie lo toque. En las pruebas no hay MainLoop real, así
+    # que se invoca _on_repetir_alarma() directo en vez de esperar los 5
+    # minutos reales del temporizador (mismo criterio que el resto de esta
+    # suite con wx.Timer).
+    sonidos = []
+    voces = []
+    monkeypatch.setattr(
+        "gestor_credito.ui.recordatorio_alarma_dialog.anunciar_voz_nvda", lambda texto: voces.append(texto)
+    )
+    monkeypatch.setattr(
+        "gestor_credito.ui.recordatorio_alarma_dialog.reproducir_sonido", lambda nombre: sonidos.append(nombre)
+    )
+    filas = [_crear_fila_vencida(conn)]
+    d = RecordatorioAlarmaDialog(None, filas)
+    try:
+        sonidos.clear()
+        voces.clear()
+
+        d._on_repetir_alarma(None)
+        d._on_tick_sonido(None)
+        d._on_tick_sonido(None)
+
+        assert len(sonidos) == 3  # ráfaga completa otra vez
+        assert len(voces) == 1  # se volvió a anunciar por voz
+    finally:
+        d.Destroy()
+
+
+def test_marcar_atendida_detiene_la_repeticion(dialogo, monkeypatch):
+    llamadas = []
+    monkeypatch.setattr(dialogo._temporizador_repeticion, "Stop", lambda: llamadas.append(1))
+    estado = wx.LIST_STATE_SELECTED | wx.LIST_STATE_FOCUSED
+    dialogo.lista.SetItemState(0, estado, estado)
+    monkeypatch.setattr(dialogo, "EndModal", lambda codigo: None)
+
+    dialogo._on_marcar_atendida(None)
+
+    assert llamadas == [1]
+
+
+def test_posponer_detiene_la_repeticion(dialogo, monkeypatch):
+    llamadas = []
+    monkeypatch.setattr(dialogo._temporizador_repeticion, "Stop", lambda: llamadas.append(1))
+
+    dialogo._on_posponer(_EventoFalso())
+
+    assert llamadas == [1]
+
+
 def test_anuncia_por_voz_al_mostrarse(app, conn, monkeypatch):
     voces = []
     monkeypatch.setattr(
@@ -159,3 +212,13 @@ def test_posponer_pospone_en_bd_y_deja_que_el_cierre_nativo_continue(dialogo, co
 
 def test_posponer_btn_usa_id_cancel_para_que_escape_lo_dispare_gratis(dialogo):
     assert dialogo.posponer_btn.GetId() == wx.ID_CANCEL
+
+
+def test_posponer_es_el_boton_por_defecto_no_marcar_atendida(dialogo):
+    # Bug real reportado por el usuario: la alarma dejó de sonar sola sin
+    # haber marcado nada como atendido — causa probable, un wx.Dialog activa
+    # con Enter (sin importar qué control tenga el foco) el botón por
+    # defecto, y sin fijarlo a mano wx elige el primer botón creado
+    # ("Marcar como atendida"). El default siempre tiene que ser la acción
+    # SEGURA (posponer), nunca la que apaga el recordatorio para siempre.
+    assert dialogo.GetDefaultItem() is dialogo.posponer_btn
